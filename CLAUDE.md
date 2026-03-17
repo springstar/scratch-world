@@ -4,9 +4,148 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is an empty scratch workspace. No project structure, build system, or dependencies have been established yet.
+Chat-driven AI agent application. Users send natural language messages via messaging channels (Telegram MVP, later WeChat/Discord/WhatsApp). The agent interprets intent, calls tools to create and evolve persistent 3D scenes via a pluggable 3D provider (WorldLabs Marble as MVP), and responds with scene links and narrative text.
 
-When a project is initialized here, update this file with:
-- Build, lint, and test commands
-- Architecture and key file locations
-- Any project-specific conventions
+Architecture documentation: `doc/architecture.md`
+
+## Commands
+
+After code changes (not documentation changes): `npm run check`. Get full output, no tail. Fix all errors, warnings, and infos before considering work complete.
+
+```bash
+npm install          # Install all dependencies
+npm run build        # Compile TypeScript
+npm run check        # Lint, format, and type check (biome)
+npm run dev          # Start the bot (requires .env)
+npm test             # Run all tests
+```
+
+Run specific tests from the package root:
+```bash
+npx tsx ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts
+```
+
+Never commit unless the user asks.
+
+## Project Structure
+
+```
+src/
+├── channels/
+│   ├── types.ts              # ChannelAdapter interface, ChatMessage, OutboundMedia
+│   ├── gateway.ts            # ChannelGateway — starts adapters, routes messages
+│   └── telegram/
+│       └── adapter.ts        # TelegramAdapter
+├── session/
+│   └── session-manager.ts    # Load/persist Session, dispatch to Agent
+├── agent/
+│   ├── agent-factory.ts      # Wire Agent with tools + system prompt
+│   └── tools/
+│       ├── create-scene.ts
+│       ├── update-scene.ts
+│       ├── get-scene.ts
+│       ├── list-scenes.ts
+│       ├── navigate-to.ts
+│       └── interact-with-object.ts
+├── scene/
+│   ├── scene-manager.ts      # Orchestrate provider calls, versioning, storage
+│   └── types.ts              # Scene, SceneData, SceneObject, Viewpoint, ProviderRef
+├── providers/
+│   ├── types.ts              # ThreeDProvider interface, ProviderResult
+│   ├── marble/
+│   │   └── provider.ts       # MarbleProvider — WorldLabs Marble API
+│   └── stub/
+│       └── provider.ts       # StubProvider — static fixtures, no API key needed
+├── storage/
+│   ├── types.ts              # SceneRepository, SessionRepository interfaces
+│   ├── scene-repo.ts
+│   └── session-repo.ts
+└── index.ts                  # Entrypoint: wire everything, start gateway
+```
+
+## Code Quality
+
+- No `any` types unless absolutely necessary. Check `node_modules` for external API types before guessing.
+- Never use inline/dynamic imports. Always use standard top-level imports.
+- Never remove or downgrade code to fix type errors from outdated dependencies; upgrade the dependency instead.
+- Always ask before removing functionality that appears intentional.
+- Immutability: always return new objects, never mutate existing ones.
+- Functions under 50 lines, files under 800 lines. Extract when exceeded.
+
+## Style
+
+- No emojis in commits, comments, or code.
+- No fluff or cheerful filler text in responses.
+- Technical prose only. Direct and concise.
+- Error messages must be user-facing friendly but server logs must include full context.
+
+## Environment Variables
+
+Required in `.env`:
+
+```
+# Channel adapters
+TELEGRAM_BOT_TOKEN=
+
+# 3D provider
+MARBLE_API_KEY=
+MARBLE_API_URL=
+
+# Storage
+DATABASE_URL=           # PostgreSQL connection string, or "sqlite:./dev.db"
+
+# LLM (pi-ai)
+ANTHROPIC_API_KEY=
+```
+
+Never commit `.env` or any file containing secrets.
+
+## Adding a New Channel Adapter
+
+1. `src/channels/<name>/adapter.ts` — implement `ChannelAdapter` interface:
+   - `channelId: string`
+   - `start()`, `stop()`
+   - `onMessage(handler)`
+   - `sendText(userId, text)`, `sendMedia(userId, media)`
+2. Register the adapter in `src/index.ts` by passing it to `ChannelGateway`.
+3. Add `<NAME>_BOT_TOKEN` (or equivalent credential) to `.env` and document above.
+4. Add adapter to the supported channels table in `doc/architecture.md`.
+
+## Adding a New 3D Provider
+
+1. `src/providers/<name>/provider.ts` — implement `ThreeDProvider` interface:
+   - `name: string`
+   - `generate(prompt, options?)` → `ProviderResult`
+   - `edit(ref, instruction, options?)` → `ProviderResult`
+   - `describe(ref)` → `ProviderDescription`
+2. Add provider credential(s) to `.env` section above.
+3. Register provider in `src/index.ts` and select via env var `PROVIDER=marble|stub|...`.
+4. Update provider comparison table in `doc/architecture.md`.
+
+## Scene Versioning
+
+Every call to `SceneManager.updateScene()` must:
+1. Increment `scene.version`.
+2. Write a snapshot row to `scene_versions` before applying the update.
+3. Return the updated `Scene`.
+
+Never overwrite `scene_versions` rows. They are immutable once written.
+
+## Testing
+
+- Unit tests for all tools in `src/agent/tools/`.
+- Integration tests for `SceneManager` using `StubProvider`.
+- Do not call live Marble API or Telegram API in tests. Use stubs/mocks.
+- 80% coverage minimum.
+
+## Git Rules
+
+- Only commit files you changed in this session.
+- Never use `git add -A` or `git add .`. Always `git add <specific-files>`.
+- Never `--no-verify`, never `git reset --hard`, never force push.
+- Commit format: `<type>: <description>` (feat / fix / refactor / docs / test / chore).
+
+## CRITICAL Tool Usage Rules
+
+- Never use sed/cat to read files. Always use the Read tool (offset + limit for range reads).
+- Read every file in full before editing it.
