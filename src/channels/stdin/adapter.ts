@@ -20,7 +20,7 @@ export class StdinAdapter implements ChannelAdapter {
 	async start(): Promise<void> {
 		this.rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-		console.log('\n[stdin] Ready. Type a message and press Enter. Ctrl+C to exit.\n');
+		console.log("\n[stdin] Ready. Type a message and press Enter. Ctrl+C to exit.\n");
 
 		this.rl.on("line", async (line) => {
 			const text = line.trim();
