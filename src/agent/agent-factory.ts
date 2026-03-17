@@ -26,10 +26,17 @@ When sharing a scene link, format it as: [View scene](url)
 
 export function createAgent(sceneManager: SceneManager, userId: string): Agent {
 	const ownerId = () => userId;
+	const model = getModel("anthropic", "claude-sonnet-4-20250514");
+
+	// Allow overriding the API base URL via env var (e.g. for ofox proxy)
+	if (process.env.ANTHROPIC_BASE_URL) {
+		model.baseUrl = process.env.ANTHROPIC_BASE_URL;
+	}
+
 	return new Agent({
 		initialState: {
 			systemPrompt: SYSTEM_PROMPT,
-			model: getModel("anthropic", "claude-sonnet-4-20250514"),
+			model,
 			tools: [
 				createSceneTool(sceneManager, ownerId),
 				updateSceneTool(sceneManager),
