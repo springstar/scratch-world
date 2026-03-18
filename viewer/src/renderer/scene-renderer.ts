@@ -21,6 +21,187 @@ function makeMat(color: number, rough = 0.8, metal = 0.1): THREE.MeshStandardMat
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
 }
 
+function inferShape(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("blackboard") || n.includes("chalkboard")) return "blackboard";
+  if (n.includes("desk") || n.includes("table")) return "desk";
+  if (n.includes("chair") || n.includes("stool") || n.includes("seat")) return "chair";
+  if (n.includes("window")) return "window";
+  if (n.includes("door")) return "door";
+  if (n.includes("wall")) return "wall";
+  if (n.includes("floor") || n.includes("ceiling")) return "floor";
+  if (n.includes("shelf") || n.includes("bookcase")) return "shelf";
+  if (n.includes("pillar") || n.includes("column")) return "pillar";
+  return "box";
+}
+
+function buildObjectByShape(
+  obj: SceneObject,
+  x: number,
+  y: number,
+  z: number,
+): THREE.Object3D {
+  const shape = (obj.metadata.shape as string | undefined) ?? inferShape(obj.name);
+  const state = obj.metadata.state as string | undefined;
+
+  switch (shape) {
+    case "blackboard":
+    case "chalkboard": {
+      const group = new THREE.Group();
+      const board = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 2.5, 0.1),
+        makeMat(0x1a3a2a, 0.9, 0),
+      );
+      board.position.y = 1.5;
+      board.castShadow = true;
+      board.receiveShadow = true;
+      group.add(board);
+      // Chalk writing — thin plane on the front face, hidden when erased
+      if (state !== "erased" && state !== "clean") {
+        const chalk = new THREE.Mesh(
+          new THREE.PlaneGeometry(3.4, 2.0),
+          new THREE.MeshStandardMaterial({ color: 0xddeedd, roughness: 1, metalness: 0, opacity: 0.55, transparent: true }),
+        );
+        chalk.position.set(0, 1.5, 0.056);
+        group.add(chalk);
+      }
+      group.position.set(x, y, z);
+      return group;
+    }
+
+    case "desk":
+    case "table": {
+      const group = new THREE.Group();
+      const top = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 0.06, 0.7),
+        makeMat(0xc8a46e, 0.7, 0),
+      );
+      top.position.y = 0.76;
+      top.castShadow = true;
+      top.receiveShadow = true;
+      group.add(top);
+      for (const [lx, lz] of [[-0.55, -0.3], [0.55, -0.3], [-0.55, 0.3], [0.55, 0.3]] as [number, number][]) {
+        const leg = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.03, 0.03, 0.76, 6),
+          makeMat(0xb08050, 0.8, 0),
+        );
+        leg.position.set(lx, 0.38, lz);
+        group.add(leg);
+      }
+      group.position.set(x, y, z);
+      return group;
+    }
+
+    case "chair":
+    case "stool": {
+      const group = new THREE.Group();
+      const seat = new THREE.Mesh(
+        new THREE.BoxGeometry(0.45, 0.05, 0.45),
+        makeMat(0xb08050, 0.8, 0),
+      );
+      seat.position.y = 0.45;
+      group.add(seat);
+      const back = new THREE.Mesh(
+        new THREE.BoxGeometry(0.45, 0.5, 0.04),
+        makeMat(0xb08050, 0.8, 0),
+      );
+      back.position.set(0, 0.73, -0.22);
+      group.add(back);
+      for (const [lx, lz] of [[-0.19, -0.19], [0.19, -0.19], [-0.19, 0.19], [0.19, 0.19]] as [number, number][]) {
+        const leg = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.025, 0.025, 0.45, 6),
+          makeMat(0x8b6040, 0.9, 0),
+        );
+        leg.position.set(lx, 0.225, lz);
+        group.add(leg);
+      }
+      group.position.set(x, y, z);
+      return group;
+    }
+
+    case "window": {
+      const group = new THREE.Group();
+      const frame = new THREE.Mesh(
+        new THREE.BoxGeometry(1.6, 2.0, 0.1),
+        makeMat(0xd4c5a0, 0.8, 0),
+      );
+      frame.position.y = 1.4;
+      group.add(frame);
+      const glass = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 1.8, 0.04),
+        new THREE.MeshStandardMaterial({ color: 0xadd8e6, roughness: 0.05, metalness: 0.1, opacity: 0.45, transparent: true, emissive: 0x88aacc, emissiveIntensity: 0.3 }),
+      );
+      glass.position.y = 1.4;
+      group.add(glass);
+      group.position.set(x, y, z);
+      return group;
+    }
+
+    case "door": {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.9, 2.1, 0.08),
+        makeMat(0x8b6040, 0.8, 0),
+      );
+      mesh.position.set(x, y + 1.05, z);
+      return mesh;
+    }
+
+    case "wall": {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(8, 3, 0.2),
+        makeMat(0xe8e0d0, 0.95, 0),
+      );
+      mesh.position.set(x, y + 1.5, z);
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    case "floor":
+    case "ceiling": {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(20, 0.15, 20),
+        makeMat(shape === "ceiling" ? 0xf5f0e8 : 0xc8b89a, 1, 0),
+      );
+      mesh.position.set(x, shape === "ceiling" ? y + 3 : y + 0.075, z);
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    case "shelf":
+    case "bookcase": {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 2.0, 0.35),
+        makeMat(0xc8a46e, 0.8, 0),
+      );
+      body.position.y = 1.0;
+      group.add(body);
+      group.position.set(x, y, z);
+      return group;
+    }
+
+    case "pillar":
+    case "column": {
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 3, 8),
+        makeMat(0xd4ccc0, 0.9, 0),
+      );
+      mesh.position.set(x, y + 1.5, z);
+      return mesh;
+    }
+
+    default: {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.8, 0.8, 0.8),
+        makeMat(colorFor("object")),
+      );
+      mesh.position.set(x, y + 0.4, z);
+      mesh.castShadow = true;
+      return mesh;
+    }
+  }
+}
+
 function applyUserData(obj: THREE.Object3D, objectId: string, interactable: boolean): void {
   obj.userData = { objectId, interactable };
   obj.traverse((child) => {
@@ -110,13 +291,44 @@ function buildObject(obj: SceneObject): THREE.Object3D {
     }
 
     case "terrain": {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(8, 0.5, 8),
-        makeMat(colorFor("terrain"), 1, 0),
-      );
-      mesh.position.set(x, y + 0.25, z);
-      mesh.receiveShadow = true;
-      root = mesh;
+      const shape = obj.metadata.shape as string | undefined;
+      if (shape === "wall") {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(8, 3, 0.2),
+          makeMat(0xe8e0d0, 0.95, 0),
+        );
+        mesh.position.set(x, y + 1.5, z);
+        mesh.receiveShadow = true;
+        root = mesh;
+      } else if (shape === "ceiling") {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(20, 0.15, 20),
+          makeMat(0xf5f0e8, 1, 0),
+        );
+        mesh.position.set(x, y + 3.075, z);
+        root = mesh;
+      } else if (shape === "floor") {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(20, 0.15, 20),
+          makeMat(0xc8b89a, 1, 0),
+        );
+        mesh.position.set(x, y + 0.075, z);
+        mesh.receiveShadow = true;
+        root = mesh;
+      } else {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(8, 0.5, 8),
+          makeMat(colorFor("terrain"), 1, 0),
+        );
+        mesh.position.set(x, y + 0.25, z);
+        mesh.receiveShadow = true;
+        root = mesh;
+      }
+      break;
+    }
+
+    case "object": {
+      root = buildObjectByShape(obj, x, y, z);
       break;
     }
 
@@ -134,12 +346,12 @@ function buildObject(obj: SceneObject): THREE.Object3D {
 
   applyUserData(root, objectId, interactable);
 
-  // Random Y rotation for organic look (skip terrain and npcs)
-  if (type !== "terrain" && type !== "npc") {
+  // Random Y rotation for organic look (skip terrain, npcs, and indoor objects)
+  if (type !== "terrain" && type !== "npc" && type !== "object") {
     root.rotation.y = Math.random() * Math.PI * 2;
   }
-  // Scale jitter ±15% for trees and generic objects
-  if (type === "tree" || type === "object") {
+  // Scale jitter ±15% for trees only
+  if (type === "tree") {
     const s = 0.85 + Math.random() * 0.3;
     root.scale.set(s, s, s);
   }

@@ -28,7 +28,7 @@ export function interactWithObjectTool(sceneManager: SceneManager): AgentTool<ty
 						}),
 					},
 				],
-				details: { sceneId: params.sceneId, objectId: params.objectId },
+				details: { sceneId: params.sceneId, objectId: params.objectId, sceneChanged: result.sceneChanged },
 			};
 		},
 	};

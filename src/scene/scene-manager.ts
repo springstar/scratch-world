@@ -96,16 +96,60 @@ export class SceneManager {
 				sceneChanged: false,
 			};
 		}
-		// Ask the LLM to narrate the interaction if narrateFn is available
-		let outcome = `You ${action} the ${obj.name}. ${obj.description}`;
+
+		// ── State transition ─────────────────────────────────────────────────
+		// If the object declares metadata.transitions, check whether the action
+		// maps to a new state. e.g. transitions: {"erase": "erased", "write": "written"}
+		const transitions = obj.metadata.transitions as Record<string, string> | undefined;
+		let sceneChanged = false;
+		let updatedScene = scene;
+
+		if (transitions) {
+			const normalizedAction = action.toLowerCase().trim();
+			const nextState =
+				transitions[normalizedAction] ??
+				Object.entries(transitions).find(([k]) => normalizedAction.includes(k))?.[1];
+
+			const currentState = obj.metadata.state as string | undefined;
+			if (nextState !== undefined && nextState !== currentState) {
+				const updatedObjects = scene.sceneData.objects.map((o) =>
+					o.objectId === objectId ? { ...o, metadata: { ...o.metadata, state: nextState } } : o,
+				);
+				const updatedSceneData = { ...scene.sceneData, objects: updatedObjects };
+				const now = Date.now();
+				updatedScene = {
+					...scene,
+					sceneData: updatedSceneData,
+					version: scene.version + 1,
+					updatedAt: now,
+				};
+				await this.repo.saveVersion({
+					sceneId: updatedScene.sceneId,
+					version: updatedScene.version,
+					sceneData: updatedSceneData,
+					providerRef: updatedScene.providerRef,
+					createdAt: now,
+				});
+				await this.repo.save(updatedScene);
+				sceneChanged = true;
+			}
+		}
+
+		// ── Narrate ──────────────────────────────────────────────────────────
+		const targetObj = updatedScene.sceneData.objects.find((o) => o.objectId === objectId) ?? obj;
+		let outcome = `You ${action} the ${targetObj.name}. ${targetObj.description}`;
 		if (this.narrateFn) {
 			try {
-				const nearby = this.describeObjectsNearby(scene, obj.position);
+				const nearby = this.describeObjectsNearby(scene, targetObj.position);
+				const stateNote = sceneChanged
+					? `The object's state changed to: ${(targetObj.metadata.state as string) ?? "unknown"}.`
+					: "";
 				const prompt = `You are narrating a 3D world interaction.
-Object: "${obj.name}" (type: ${obj.type})
-Description: ${obj.description}
-${obj.interactionHint ? `Hint: ${obj.interactionHint}` : ""}
+Object: "${targetObj.name}" (type: ${targetObj.type})
+Description: ${targetObj.description}
+${targetObj.interactionHint ? `Hint: ${targetObj.interactionHint}` : ""}
 User action: ${action}
+${stateNote}
 ${nearby ? `Nearby: ${nearby}` : ""}
 
 Write 2-3 vivid sentences narrating what happens when the user performs this action. Be immersive and specific.`;
@@ -115,13 +159,7 @@ Write 2-3 vivid sentences narrating what happens when the user performs this act
 			}
 		}
 
-		return {
-			sceneId,
-			objectId,
-			action,
-			outcome,
-			sceneChanged: false,
-		};
+		return { sceneId, objectId, action, outcome, sceneChanged };
 	}
 
 	// ── Private helpers ──────────────────────────────────────────────────────

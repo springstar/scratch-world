@@ -117,17 +117,29 @@ export class SessionManager {
 
 		// Stream text deltas to viewer via WebSocket
 		let fullText = "";
+		let sceneChangedId: string | null = null;
 		const unsub = agent.subscribe((event) => {
 			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 				const delta = event.assistantMessageEvent.delta;
 				fullText += delta;
 				bus.publish(sessionId, { type: "text_delta", delta });
+			} else if (event.type === "tool_execution_end" && !event.isError) {
+				const details = event.result?.details as { sceneId?: string; sceneChanged?: boolean } | undefined;
+				if (details?.sceneChanged && details.sceneId) {
+					sceneChangedId = details.sceneId;
+				}
 			}
 		});
 
 		try {
 			await agent.prompt(text);
 			bus.publish(sessionId, { type: "text_done", text: fullText });
+			if (sceneChangedId) {
+				const updated = await this.sceneManager.getScene(sceneChangedId);
+				if (updated) {
+					bus.publish(sessionId, { type: "scene_updated", sceneId: sceneChangedId, version: updated.version });
+				}
+			}
 		} finally {
 			unsub();
 		}
