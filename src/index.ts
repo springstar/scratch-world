@@ -5,6 +5,7 @@ import { ChannelGateway } from "./channels/gateway.js";
 import { StdinAdapter } from "./channels/stdin/adapter.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
 import { LlmProvider } from "./providers/llm/provider.js";
+import { MarbleProvider } from "./providers/marble/provider.js";
 import { StubProvider } from "./providers/stub/provider.js";
 import { SceneManager } from "./scene/scene-manager.js";
 import { SessionManager } from "./session/session-manager.js";
@@ -24,7 +25,12 @@ async function main() {
 
 	// ── 3D Provider ────────────────────────────────────────────────────────
 	const apiKey = process.env.ANTHROPIC_API_KEY;
-	const provider = apiKey ? new LlmProvider() : new StubProvider();
+	const marbleKey = process.env.MARBLE_API_KEY;
+	const provider = (() => {
+		if (marbleKey) return new MarbleProvider(marbleKey);
+		if (apiKey) return new LlmProvider();
+		return new StubProvider();
+	})();
 	console.log(`Using 3D provider: ${provider.name}`);
 
 	// ── Narrate function (LLM-powered interaction narratives) ──────────────
