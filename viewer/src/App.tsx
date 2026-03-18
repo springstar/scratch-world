@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ViewerCanvas } from "./components/ViewerCanvas.js";
+import { MarbleViewer } from "./components/MarbleViewer.js";
 import { NarrativeOverlay } from "./components/NarrativeOverlay.js";
 import { ViewpointBar } from "./components/ViewpointBar.js";
 import { InteractionPrompt } from "./components/InteractionPrompt.js";
@@ -27,6 +28,7 @@ export function App() {
   const [narrativeLines, setNarrativeLines] = useState<string[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selected, setSelected] = useState<SelectedObject | null>(null);
+  const [activeViewpoint, setActiveViewpoint] = useState<Viewpoint | null>(null);
   const streamingBuffer = useRef("");
 
   // Load scene on mount
@@ -63,7 +65,7 @@ export function App() {
       }
     });
     return disconnect;
-  }, [sessionId, scene]);
+  }, [sessionId]);
 
   const handleObjectClick = useCallback(
     (objectId: string, name: string, interactable: boolean) => {
@@ -90,9 +92,7 @@ export function App() {
   );
 
   const handleViewpointSelect = useCallback((vp: Viewpoint) => {
-    // ViewerCanvas handles navigation via goToViewpoint internally via the renderer ref,
-    // but we need to trigger it from here. We update URL hash so ViewerCanvas effect fires.
-    location.hash = vp.viewpointId;
+    setActiveViewpoint(vp);
   }, []);
 
   if (error) {
@@ -113,7 +113,11 @@ export function App() {
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <ViewerCanvas sceneData={scene.sceneData} onObjectClick={handleObjectClick} />
+      {scene.providerRef.provider === "marble" && scene.providerRef.viewUrl ? (
+        <MarbleViewer marbleUrl={scene.providerRef.viewUrl} sceneData={scene.sceneData} />
+      ) : (
+        <ViewerCanvas sceneData={scene.sceneData} onObjectClick={handleObjectClick} activeViewpoint={activeViewpoint} />
+      )}
       <ViewpointBar viewpoints={scene.sceneData.viewpoints} onSelect={handleViewpointSelect} />
       <NarrativeOverlay lines={narrativeLines} isStreaming={isStreaming} />
       {selected && (

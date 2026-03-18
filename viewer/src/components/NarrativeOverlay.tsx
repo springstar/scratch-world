@@ -24,6 +24,7 @@ export function NarrativeOverlay({ lines, isStreaming }: Props) {
         backdropFilter: "blur(4px)",
         boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
         pointerEvents: "none",
+        zIndex: 10,
       }}
     >
       {lines.map((line, i) => (

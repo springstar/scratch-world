@@ -20,6 +20,7 @@ export function ViewpointBar({ viewpoints, onSelect }: Props) {
         flexWrap: "wrap",
         justifyContent: "center",
         pointerEvents: "auto",
+        zIndex: 10,
       }}
     >
       {viewpoints.map((vp) => (
