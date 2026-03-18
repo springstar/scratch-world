@@ -158,7 +158,7 @@ export class SessionManager {
 		}
 
 		const record = await this.sessionRepo.findById(msg.sessionId);
-		const agent = createAgent(this.sceneManager, msg.userId);
+		const agent = createAgent(this.sceneManager, msg.userId, this.viewerBaseUrl, msg.sessionId);
 
 		if (record?.agentMessages) {
 			try {

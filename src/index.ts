@@ -26,9 +26,13 @@ async function main() {
 	// ── 3D Provider ────────────────────────────────────────────────────────
 	const apiKey = process.env.ANTHROPIC_API_KEY;
 	const marbleKey = process.env.MARBLE_API_KEY;
+	const providerName = process.env.PROVIDER ?? (apiKey ? "llm" : "stub");
 	const provider = (() => {
-		if (marbleKey) return new MarbleProvider(marbleKey);
-		if (apiKey) return new LlmProvider();
+		if (providerName === "marble") {
+			if (!marbleKey) throw new Error("PROVIDER=marble but MARBLE_API_KEY is not set");
+			return new MarbleProvider(marbleKey);
+		}
+		if (providerName === "llm") return new LlmProvider();
 		return new StubProvider();
 	})();
 	console.log(`Using 3D provider: ${provider.name}`);

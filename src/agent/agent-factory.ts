@@ -24,8 +24,14 @@ After each tool call, respond naturally in character — describe what the user 
 When sharing a scene link, format it as: [View scene](url)
 `.trim();
 
-export function createAgent(sceneManager: SceneManager, userId: string): Agent {
+export function createAgent(
+	sceneManager: SceneManager,
+	userId: string,
+	viewerBaseUrl: string,
+	sessionId: string,
+): Agent {
 	const ownerId = () => userId;
+	const viewerUrl = (sceneId: string) => `${viewerBaseUrl}/scene/${sceneId}?session=${sessionId}`;
 	const model = getModel("anthropic", "claude-sonnet-4-6");
 
 	// Allow overriding the API base URL via env var (e.g. for ofox proxy)
@@ -38,8 +44,8 @@ export function createAgent(sceneManager: SceneManager, userId: string): Agent {
 			systemPrompt: SYSTEM_PROMPT,
 			model,
 			tools: [
-				createSceneTool(sceneManager, ownerId),
-				updateSceneTool(sceneManager),
+				createSceneTool(sceneManager, ownerId, viewerUrl),
+				updateSceneTool(sceneManager, viewerUrl),
 				getSceneTool(sceneManager),
 				listScenesTool(sceneManager, ownerId),
 				navigateToTool(sceneManager),

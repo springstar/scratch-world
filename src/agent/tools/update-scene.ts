@@ -8,7 +8,10 @@ const parameters = Type.Object({
 	instruction: Type.String({ description: "What to change in the scene" }),
 });
 
-export function updateSceneTool(sceneManager: SceneManager): AgentTool<typeof parameters> {
+export function updateSceneTool(
+	sceneManager: SceneManager,
+	viewerUrl: (sceneId: string) => string,
+): AgentTool<typeof parameters> {
 	return {
 		name: "update_scene",
 		label: "Update 3D scene",
@@ -25,7 +28,7 @@ export function updateSceneTool(sceneManager: SceneManager): AgentTool<typeof pa
 							sceneId: scene.sceneId,
 							title: scene.title,
 							version: scene.version,
-							viewUrl: scene.providerRef.viewUrl,
+							viewUrl: viewerUrl(scene.sceneId),
 							objects: scene.sceneData.objects.map((o) => ({ id: o.objectId, name: o.name, type: o.type })),
 						}),
 					},

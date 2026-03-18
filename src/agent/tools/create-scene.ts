@@ -8,7 +8,11 @@ const parameters = Type.Object({
 	title: Type.Optional(Type.String({ description: "Short title for the scene (max 60 chars)" })),
 });
 
-export function createSceneTool(sceneManager: SceneManager, ownerId: () => string): AgentTool<typeof parameters> {
+export function createSceneTool(
+	sceneManager: SceneManager,
+	ownerId: () => string,
+	viewerUrl: (sceneId: string) => string,
+): AgentTool<typeof parameters> {
 	return {
 		name: "create_scene",
 		label: "Create 3D scene",
@@ -24,7 +28,7 @@ export function createSceneTool(sceneManager: SceneManager, ownerId: () => strin
 						text: JSON.stringify({
 							sceneId: scene.sceneId,
 							title: scene.title,
-							viewUrl: scene.providerRef.viewUrl,
+							viewUrl: viewerUrl(scene.sceneId),
 							objects: scene.sceneData.objects.map((o) => ({ id: o.objectId, name: o.name, type: o.type })),
 							viewpoints: scene.sceneData.viewpoints.map((v) => v.name),
 						}),
