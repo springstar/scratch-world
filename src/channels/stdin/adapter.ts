@@ -22,7 +22,9 @@ export class StdinAdapter implements ChannelAdapter {
 
 		console.log("\n[stdin] Ready. Type a message and press Enter. Ctrl+C to exit.\n");
 
-		this.rl.on("line", async (line) => {
+		let pending: Promise<void> = Promise.resolve();
+
+		this.rl.on("line", (line) => {
 			const text = line.trim();
 			if (!text || !this.handler) return;
 
@@ -34,14 +36,12 @@ export class StdinAdapter implements ChannelAdapter {
 				timestamp: Date.now(),
 			};
 
-			try {
-				await this.handler(msg);
-			} catch (err) {
-				console.error("[stdin] handler error:", err);
-			}
+			pending = pending.then(() => this.handler!(msg)).catch((err) => console.error("[stdin] handler error:", err));
 		});
 
-		this.rl.on("close", () => process.exit(0));
+		this.rl.on("close", () => {
+			pending.finally(() => process.exit(0));
+		});
 	}
 
 	async stop(): Promise<void> {
