@@ -46,9 +46,9 @@ export function createAgent(
 			tools: [
 				createSceneTool(sceneManager, ownerId, viewerUrl),
 				updateSceneTool(sceneManager, viewerUrl),
-				getSceneTool(sceneManager),
+				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager, ownerId),
-				navigateToTool(sceneManager),
+				navigateToTool(sceneManager, viewerUrl),
 				interactWithObjectTool(sceneManager),
 			],
 		},

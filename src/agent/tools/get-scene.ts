@@ -7,7 +7,10 @@ const parameters = Type.Object({
 	sceneId: Type.String({ description: "ID of the scene to retrieve" }),
 });
 
-export function getSceneTool(sceneManager: SceneManager): AgentTool<typeof parameters> {
+export function getSceneTool(
+	sceneManager: SceneManager,
+	viewerUrl: (sceneId: string) => string,
+): AgentTool<typeof parameters> {
 	return {
 		name: "get_scene",
 		label: "Get scene details",
@@ -25,7 +28,7 @@ export function getSceneTool(sceneManager: SceneManager): AgentTool<typeof param
 							title: scene.title,
 							description: scene.description,
 							version: scene.version,
-							viewUrl: scene.providerRef.viewUrl,
+							viewUrl: viewerUrl(scene.sceneId),
 							objects: scene.sceneData.objects.map((o) => ({
 								id: o.objectId,
 								name: o.name,

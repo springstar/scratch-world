@@ -8,7 +8,10 @@ const parameters = Type.Object({
 	viewpoint: Type.String({ description: "Name of the viewpoint, e.g. 'entrance', 'throne room'" }),
 });
 
-export function navigateToTool(sceneManager: SceneManager): AgentTool<typeof parameters> {
+export function navigateToTool(
+	sceneManager: SceneManager,
+	viewerUrl: (sceneId: string) => string,
+): AgentTool<typeof parameters> {
 	return {
 		name: "navigate_to",
 		label: "Navigate to viewpoint",
@@ -17,13 +20,14 @@ export function navigateToTool(sceneManager: SceneManager): AgentTool<typeof par
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			const result = await sceneManager.navigateTo(params.sceneId, params.viewpoint);
+			const url = `${viewerUrl(params.sceneId)}#${result.viewpoint.viewpointId}`;
 			return {
 				content: [
 					{
 						type: "text",
 						text: JSON.stringify({
 							viewpoint: result.viewpoint.name,
-							viewUrl: result.viewUrl,
+							viewUrl: url,
 							description: result.description,
 						}),
 					},
