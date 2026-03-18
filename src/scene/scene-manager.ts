@@ -7,6 +7,7 @@ export class SceneManager {
 	constructor(
 		private provider: ThreeDProvider,
 		private repo: SceneRepository,
+		private narrateFn: ((prompt: string) => Promise<string>) | null = null,
 	) {}
 
 	async createScene(ownerId: string, prompt: string, title?: string): Promise<Scene> {
@@ -95,13 +96,30 @@ export class SceneManager {
 				sceneChanged: false,
 			};
 		}
-		// Delegate to provider to resolve the interaction narrative
-		// For now, return a stub outcome; the LLM can narrate based on object metadata
+		// Ask the LLM to narrate the interaction if narrateFn is available
+		let outcome = `You ${action} the ${obj.name}. ${obj.description}`;
+		if (this.narrateFn) {
+			try {
+				const nearby = this.describeObjectsNearby(scene, obj.position);
+				const prompt = `You are narrating a 3D world interaction.
+Object: "${obj.name}" (type: ${obj.type})
+Description: ${obj.description}
+${obj.interactionHint ? `Hint: ${obj.interactionHint}` : ""}
+User action: ${action}
+${nearby ? `Nearby: ${nearby}` : ""}
+
+Write 2-3 vivid sentences narrating what happens when the user performs this action. Be immersive and specific.`;
+				outcome = await this.narrateFn(prompt);
+			} catch {
+				// fall through to default outcome already set above
+			}
+		}
+
 		return {
 			sceneId,
 			objectId,
 			action,
-			outcome: `You ${action} the ${obj.name}. ${obj.description}`,
+			outcome,
 			sceneChanged: false,
 		};
 	}

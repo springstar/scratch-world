@@ -1,0 +1,146 @@
+import { randomUUID } from "crypto";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import type { ProviderRef, SceneData } from "../../scene/types.js";
+import { StubProvider } from "../stub/provider.js";
+import type { EditOptions, GenerateOptions, ProviderDescription, ProviderResult, ThreeDProvider } from "../types.js";
+
+const SCENE_SYSTEM_PROMPT = `\
+You are a scene data generator for a 3D world engine. Return ONLY a valid JSON object with NO extra text, markdown, or code fences.
+
+The JSON must have this exact structure:
+{
+  "environment": { "skybox": "clear_day|sunset|night|overcast", "timeOfDay": "dawn|noon|dusk|night", "ambientLight": "warm|cool|neutral", "weather": "clear|foggy|rainy" },
+  "viewpoints": [
+    { "viewpointId": "vp_1", "name": "descriptive name", "position": {"x": 0, "y": 1.7, "z": -15}, "lookAt": {"x": 0, "y": 1, "z": 0} }
+  ],
+  "objects": [
+    {
+      "objectId": "obj_1",
+      "name": "vivid specific name",
+      "type": "tree|building|npc|item|terrain|object",
+      "position": {"x": <-20 to 20>, "y": 0, "z": <-20 to 20>},
+      "description": "vivid description",
+      "interactable": true,
+      "interactionHint": "try 'examine the ...'",
+      "metadata": {}
+    }
+  ]
+}
+
+Rules:
+- Generate 8-16 objects spread naturally across a 40x40 unit area (x and z from -20 to 20)
+- Include exactly 2-3 viewpoints
+- Include at least one terrain object
+- Make names and descriptions vivid and specific to the theme
+- Mix types naturally (trees, buildings, npcs, items, objects)
+- interactable should be true for npcs, items, and objects; false for terrain
+- Vary positions so objects are not all clustered
+`.trim();
+
+const EDIT_SYSTEM_PROMPT = `\
+You are a scene data editor for a 3D world engine. You will receive the current scene JSON and an edit instruction.
+Return ONLY a valid JSON object (the complete updated scene) with NO extra text, markdown, or code fences.
+Apply the edit instruction to the scene, preserving existing objects unless the instruction removes them.
+Add new objects with unique objectIds (use obj_<short-uuid> format).
+Keep positions within the -20 to 20 range on x and z axes.
+`.trim();
+
+function extractJson(text: string): string {
+	// Try to find a JSON object in the response
+	const match = text.match(/\{[\s\S]*\}/);
+	if (!match) throw new Error("No JSON object found in LLM response");
+	return match[0];
+}
+
+function buildModel() {
+	const model = getModel("anthropic", "claude-haiku-4-5-20251001");
+	if (process.env.ANTHROPIC_BASE_URL) {
+		model.baseUrl = process.env.ANTHROPIC_BASE_URL;
+	}
+	return model;
+}
+
+export class LlmProvider implements ThreeDProvider {
+	readonly name = "llm";
+
+	// In-memory store of sceneData by assetId for describe()
+	private scenes = new Map<string, SceneData>();
+	private stub = new StubProvider();
+
+	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {
+		const assetId = randomUUID();
+		const model = buildModel();
+
+		let sceneData: SceneData;
+		try {
+			const response = await completeSimple(model, {
+				systemPrompt: SCENE_SYSTEM_PROMPT,
+				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+			});
+
+			const text = response.content
+				.filter((c) => c.type === "text")
+				.map((c) => (c as { type: "text"; text: string }).text)
+				.join("");
+
+			const json = extractJson(text);
+			sceneData = JSON.parse(json) as SceneData;
+		} catch (err) {
+			console.warn("[LlmProvider] generate failed, falling back to stub:", err);
+			const fallback = await this.stub.generate(prompt, _options);
+			return fallback;
+		}
+
+		const ref: ProviderRef = {
+			provider: "llm",
+			assetId,
+			viewUrl: `llm://scenes/${assetId}`,
+			editToken: `edit_${assetId}`,
+		};
+
+		this.scenes.set(assetId, sceneData);
+
+		return { ref, viewUrl: ref.viewUrl!, sceneData };
+	}
+
+	async edit(ref: ProviderRef, instruction: string, _options?: EditOptions): Promise<ProviderResult> {
+		const existing = this.scenes.get(ref.assetId);
+		const model = buildModel();
+
+		let sceneData: SceneData;
+		try {
+			const contextJson = existing ? JSON.stringify(existing, null, 2) : "{}";
+			const userMsg = `Current scene:\n${contextJson}\n\nEdit instruction: ${instruction}`;
+
+			const response = await completeSimple(model, {
+				systemPrompt: EDIT_SYSTEM_PROMPT,
+				messages: [{ role: "user", content: userMsg, timestamp: Date.now() }],
+			});
+
+			const text = response.content
+				.filter((c) => c.type === "text")
+				.map((c) => (c as { type: "text"; text: string }).text)
+				.join("");
+
+			const json = extractJson(text);
+			sceneData = JSON.parse(json) as SceneData;
+		} catch (err) {
+			console.warn("[LlmProvider] edit failed, falling back to stub edit:", err);
+			const fallback = await this.stub.edit(ref, instruction, _options);
+			return fallback;
+		}
+
+		const updatedRef: ProviderRef = { ...ref, viewUrl: `${ref.viewUrl}?v=${Date.now()}` };
+		this.scenes.set(ref.assetId, sceneData);
+
+		return { ref: updatedRef, viewUrl: updatedRef.viewUrl!, sceneData };
+	}
+
+	async describe(ref: ProviderRef): Promise<ProviderDescription> {
+		const sceneData = this.scenes.get(ref.assetId);
+		if (!sceneData) {
+			return this.stub.describe(ref);
+		}
+		return { ref, sceneData };
+	}
+}

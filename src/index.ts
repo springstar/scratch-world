@@ -1,8 +1,10 @@
 import "dotenv/config";
 import Database from "better-sqlite3";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { ChannelGateway } from "./channels/gateway.js";
 import { StdinAdapter } from "./channels/stdin/adapter.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
+import { LlmProvider } from "./providers/llm/provider.js";
 import { StubProvider } from "./providers/stub/provider.js";
 import { SceneManager } from "./scene/scene-manager.js";
 import { SessionManager } from "./session/session-manager.js";
@@ -21,16 +23,29 @@ async function main() {
 	const sessionRepo = new SqliteSessionRepo(db);
 
 	// ── 3D Provider ────────────────────────────────────────────────────────
-	const providerName = process.env.PROVIDER ?? "stub";
-	const provider = (() => {
-		if (providerName === "stub") return new StubProvider();
-		throw new Error(`Unknown provider: ${providerName}. Supported: stub`);
-	})();
-
+	const apiKey = process.env.ANTHROPIC_API_KEY;
+	const provider = apiKey ? new LlmProvider() : new StubProvider();
 	console.log(`Using 3D provider: ${provider.name}`);
 
+	// ── Narrate function (LLM-powered interaction narratives) ──────────────
+	let narrateFn: ((prompt: string) => Promise<string>) | null = null;
+	if (apiKey) {
+		narrateFn = async (prompt: string): Promise<string> => {
+			const model = getModel("anthropic", "claude-haiku-4-5-20251001");
+			if (process.env.ANTHROPIC_BASE_URL) model.baseUrl = process.env.ANTHROPIC_BASE_URL;
+			const response = await completeSimple(model, {
+				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+			});
+			const text = response.content
+				.filter((c) => c.type === "text")
+				.map((c) => (c as { type: "text"; text: string }).text)
+				.join("");
+			return text.trim() || "Nothing remarkable happens.";
+		};
+	}
+
 	// ── Scene + Session managers ───────────────────────────────────────────
-	const sceneManager = new SceneManager(provider, sceneRepo);
+	const sceneManager = new SceneManager(provider, sceneRepo, narrateFn);
 
 	// ── Channels ───────────────────────────────────────────────────────────
 	const gateway = new ChannelGateway();

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
 
 // Colour palette keyed by object type
@@ -16,25 +17,196 @@ function colorFor(type: string): number {
   return TYPE_COLORS[type] ?? FALLBACK_COLOR;
 }
 
-function buildObject(obj: SceneObject): THREE.Mesh {
-  const isLarge = obj.type === "building" || obj.type === "terrain";
-  const geometry = isLarge
-    ? new THREE.BoxGeometry(4, 4, 4)
-    : new THREE.BoxGeometry(1.5, 1.5, 1.5);
-
-  const material = new THREE.MeshStandardMaterial({
-    color: colorFor(obj.type),
-    roughness: 0.8,
-    metalness: 0.1,
-  });
-
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(obj.position.x, obj.position.y + (isLarge ? 2 : 0.75), obj.position.z);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.userData = { objectId: obj.objectId, interactable: obj.interactable };
-  return mesh;
+function makeMat(color: number, rough = 0.8, metal = 0.1): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
 }
+
+function applyUserData(obj: THREE.Object3D, objectId: string, interactable: boolean): void {
+  obj.userData = { objectId, interactable };
+  obj.traverse((child) => {
+    child.userData = { objectId, interactable };
+  });
+}
+
+function buildObject(obj: SceneObject): THREE.Object3D {
+  const { objectId, type, position, interactable } = obj;
+  const x = position.x;
+  const y = position.y;
+  const z = position.z;
+
+  let root: THREE.Object3D;
+
+  switch (type) {
+    case "tree": {
+      const group = new THREE.Group();
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.3, 0.4, 2, 8),
+        makeMat(0x5c3d1e),
+      );
+      trunk.position.y = 1;
+      trunk.castShadow = true;
+      group.add(trunk);
+
+      const foliage = new THREE.Mesh(
+        new THREE.ConeGeometry(1.2, 2.5, 8),
+        makeMat(colorFor("tree")),
+      );
+      foliage.position.y = 3.25;
+      foliage.castShadow = true;
+      group.add(foliage);
+
+      group.position.set(x, y, z);
+      root = group;
+      break;
+    }
+
+    case "building": {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(5, 4, 5),
+        makeMat(colorFor("building")),
+      );
+      body.position.y = 2;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+
+      const roof = new THREE.Mesh(
+        new THREE.ConeGeometry(4, 2, 4),
+        makeMat(0x6b3a2a),
+      );
+      roof.position.y = 5;
+      roof.rotation.y = Math.PI / 4;
+      roof.castShadow = true;
+      group.add(roof);
+
+      group.position.set(x, y, z);
+      root = group;
+      break;
+    }
+
+    case "npc": {
+      // CapsuleGeometry(radius, length, capSegments, radialSegments)
+      const mesh = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.4, 0.8, 4, 8),
+        makeMat(colorFor("npc")),
+      );
+      // capsule total height = length + 2*radius = 0.8 + 0.8 = 1.6; center it at y=0.8
+      mesh.position.set(x, y + 0.8, z);
+      mesh.castShadow = true;
+      root = mesh;
+      break;
+    }
+
+    case "item": {
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.3, 0.5, 1.2, 6),
+        makeMat(colorFor("item"), 0.6, 0.3),
+      );
+      mesh.position.set(x, y + 0.6, z);
+      mesh.castShadow = true;
+      root = mesh;
+      break;
+    }
+
+    case "terrain": {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(8, 0.5, 8),
+        makeMat(colorFor("terrain"), 1, 0),
+      );
+      mesh.position.set(x, y + 0.25, z);
+      mesh.receiveShadow = true;
+      root = mesh;
+      break;
+    }
+
+    default: {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.8, 12, 8),
+        makeMat(FALLBACK_COLOR),
+      );
+      mesh.position.set(x, y + 0.8, z);
+      mesh.castShadow = true;
+      root = mesh;
+      break;
+    }
+  }
+
+  applyUserData(root, objectId, interactable);
+
+  // Random Y rotation for organic look (skip terrain and npcs)
+  if (type !== "terrain" && type !== "npc") {
+    root.rotation.y = Math.random() * Math.PI * 2;
+  }
+  // Scale jitter ±15% for trees and generic objects
+  if (type === "tree" || type === "object") {
+    const s = 0.85 + Math.random() * 0.3;
+    root.scale.set(s, s, s);
+  }
+
+  return root;
+}
+
+// ── Environment presets ──────────────────────────────────────────────────────
+
+interface EnvPreset {
+  skyColor: number;
+  groundColor: number;
+  fogColor: number;
+  sunColor: number;
+  sunIntensity: number;
+  sunPosition: [number, number, number];
+  ambientIntensity: number;
+}
+
+function resolveEnvPreset(skybox?: string, timeOfDay?: string): EnvPreset {
+  let skyColor: number;
+  switch (skybox) {
+    case "sunset":     skyColor = 0xff7043; break;
+    case "night":      skyColor = 0x0a0a1a; break;
+    case "overcast":   skyColor = 0x7b8b9e; break;
+    default:           skyColor = 0x87ceeb; break; // clear_day / default
+  }
+
+  let sunColor: number;
+  let sunIntensity: number;
+  let sunPosition: [number, number, number];
+  let ambientIntensity: number;
+
+  const tod = timeOfDay ?? skybox; // fall back to skybox key if no separate timeOfDay
+  switch (tod) {
+    case "dawn":
+    case "dusk":
+    case "sunset":
+      sunColor = 0xff8c42;
+      sunIntensity = 0.8;
+      sunPosition = [10, 5, 30];
+      ambientIntensity = 0.35;
+      break;
+    case "night":
+      sunColor = 0x2244aa;
+      sunIntensity = 0.05;
+      sunPosition = [0, 20, 0];
+      ambientIntensity = 0.15;
+      break;
+    case "noon":
+      sunColor = 0xffffff;
+      sunIntensity = 1.4;
+      sunPosition = [5, 60, 10];
+      ambientIntensity = 0.55;
+      break;
+    default:
+      sunColor = 0xfff4e0;
+      sunIntensity = 1.2;
+      sunPosition = [30, 50, 20];
+      ambientIntensity = 0.5;
+      break;
+  }
+
+  return { skyColor, groundColor: 0x4a7c59, fogColor: skyColor, sunColor, sunIntensity, sunPosition, ambientIntensity };
+}
+
+// ── PickResult ───────────────────────────────────────────────────────────────
 
 export interface PickResult {
   objectId: string;
@@ -43,26 +215,35 @@ export interface PickResult {
   interactionHint?: string;
 }
 
+// ── SceneRenderer ────────────────────────────────────────────────────────────
+
+const TRANSITION_DURATION = 800; // ms
+
 export class SceneRenderer {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
-  private meshes = new Map<string, THREE.Mesh>(); // objectId → mesh
+  private controls: OrbitControls;
+  private hemi: THREE.HemisphereLight;
+  private sun: THREE.DirectionalLight;
+
+  private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
   private animFrame = 0;
   private raycaster = new THREE.Raycaster();
+
+  // Smooth transition state
+  private transitionStart = 0;
+  private transitionFrom = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+  private transitionTo   = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+  private transitioning  = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87ceeb);
     this.scene.fog = new THREE.Fog(0x87ceeb, 40, 120);
 
-    this.camera = new THREE.PerspectiveCamera(
-      60,
-      canvas.clientWidth / canvas.clientHeight,
-      0.1,
-      500,
-    );
+    this.camera = new THREE.PerspectiveCamera(60, canvas.clientWidth / canvas.clientHeight, 0.1, 500);
     this.camera.position.set(0, 8, 20);
     this.camera.lookAt(0, 0, 0);
 
@@ -71,46 +252,80 @@ export class SceneRenderer {
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     this.renderer.shadowMap.enabled = true;
 
-    this.setupLights();
+    // OrbitControls for free camera exploration
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.05;
+    this.controls.minDistance = 2;
+    this.controls.maxDistance = 200;
+
+    // Lights — will be overridden by loadScene() env settings
+    this.hemi = new THREE.HemisphereLight(0x87ceeb, 0x4a7c59, 0.6);
+    this.scene.add(this.hemi);
+
+    this.sun = new THREE.DirectionalLight(0xfff4e0, 1.2);
+    this.sun.position.set(30, 50, 20);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.scene.add(this.sun);
+
     this.setupGround();
     this.setupResizeObserver(canvas);
     this.startLoop();
   }
 
   loadScene(data: SceneData): void {
-    // Remove existing object meshes
-    for (const mesh of this.meshes.values()) {
-      this.scene.remove(mesh);
+    // Remove existing object nodes
+    for (const obj of this.objects.values()) {
+      this.scene.remove(obj);
     }
-    this.meshes.clear();
+    this.objects.clear();
     this.objectMeta.clear();
 
     for (const obj of data.objects) {
-      const mesh = buildObject(obj);
-      this.scene.add(mesh);
-      this.meshes.set(obj.objectId, mesh);
+      const node = buildObject(obj);
+      this.scene.add(node);
+      this.objects.set(obj.objectId, node);
       this.objectMeta.set(obj.objectId, obj);
     }
+
+    // Apply environment settings
+    const env = data.environment ?? {};
+    const preset = resolveEnvPreset(env.skybox, env.timeOfDay);
+
+    (this.scene.background as THREE.Color).set(preset.skyColor);
+    (this.scene.fog as THREE.Fog).color.set(preset.fogColor);
+
+    this.hemi.color.set(preset.skyColor);
+    this.hemi.groundColor.set(preset.groundColor);
+    this.hemi.intensity = preset.ambientIntensity;
+
+    this.sun.color.set(preset.sunColor);
+    this.sun.intensity = preset.sunIntensity;
+    this.sun.position.set(...preset.sunPosition);
   }
 
   goToViewpoint(viewpoint: Viewpoint): void {
-    this.camera.position.set(
-      viewpoint.position.x,
-      viewpoint.position.y,
-      viewpoint.position.z,
-    );
-    this.camera.lookAt(
-      viewpoint.lookAt.x,
-      viewpoint.lookAt.y,
-      viewpoint.lookAt.z,
-    );
+    this.transitionFrom.pos.copy(this.camera.position);
+    this.transitionFrom.target.copy(this.controls.target);
+
+    this.transitionTo.pos.set(viewpoint.position.x, viewpoint.position.y, viewpoint.position.z);
+    this.transitionTo.target.set(viewpoint.lookAt.x, viewpoint.lookAt.y, viewpoint.lookAt.z);
+
+    this.transitionStart = performance.now();
+    this.transitioning = true;
   }
 
   // Returns the first interactable object under the pointer, or null
   pick(ndcX: number, ndcY: number): PickResult | null {
     this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
-    const meshList = [...this.meshes.values()];
-    const hits = this.raycaster.intersectObjects(meshList);
+    const allMeshes: THREE.Object3D[] = [];
+    for (const root of this.objects.values()) {
+      root.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) allMeshes.push(child);
+      });
+    }
+    const hits = this.raycaster.intersectObjects(allMeshes);
     if (!hits.length) return null;
 
     const objectId = hits[0].object.userData.objectId as string | undefined;
@@ -128,29 +343,22 @@ export class SceneRenderer {
   }
 
   highlightObject(objectId: string | null): void {
-    for (const [id, mesh] of this.meshes) {
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissive.set(id === objectId && objectId !== null ? 0x444400 : 0x000000);
+    for (const [id, root] of this.objects) {
+      const emissive = id === objectId && objectId !== null ? 0x444400 : 0x000000;
+      root.traverse((child) => {
+        const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+        if (mat?.emissive) mat.emissive.set(emissive);
+      });
     }
   }
 
   dispose(): void {
     cancelAnimationFrame(this.animFrame);
+    this.controls.dispose();
     this.renderer.dispose();
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
-
-  private setupLights(): void {
-    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
-    this.scene.add(ambient);
-
-    const sun = new THREE.DirectionalLight(0xfff4e0, 1.2);
-    sun.position.set(30, 50, 20);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    this.scene.add(sun);
-  }
 
   private setupGround(): void {
     const geo = new THREE.PlaneGeometry(200, 200);
@@ -175,6 +383,21 @@ export class SceneRenderer {
   private startLoop(): void {
     const loop = () => {
       this.animFrame = requestAnimationFrame(loop);
+
+      // Smooth camera transition
+      if (this.transitioning) {
+        const elapsed = performance.now() - this.transitionStart;
+        const t = Math.min(elapsed / TRANSITION_DURATION, 1);
+        // Ease out cubic
+        const eased = 1 - Math.pow(1 - t, 3);
+
+        this.camera.position.lerpVectors(this.transitionFrom.pos, this.transitionTo.pos, eased);
+        this.controls.target.lerpVectors(this.transitionFrom.target, this.transitionTo.target, eased);
+
+        if (t >= 1) this.transitioning = false;
+      }
+
+      this.controls.update();
       this.renderer.render(this.scene, this.camera);
     };
     loop();
