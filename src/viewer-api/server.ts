@@ -2,9 +2,13 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import type { IncomingMessage } from "http";
 import { WebSocketServer } from "ws";
+import type { NarratorRegistry } from "../narrators/narrator-registry.js";
+import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { SessionManager } from "../session/session-manager.js";
+import type { SkillLoader } from "../skills/skill-loader.js";
 import { RealtimeBus } from "./realtime.js";
+import { generatorsRoute } from "./routes/generators.js";
 import { interactRoute } from "./routes/interact.js";
 import { scenesRoute } from "./routes/scenes.js";
 
@@ -12,6 +16,10 @@ export interface ViewerApiOptions {
 	port: number;
 	sceneManager: SceneManager;
 	sessionManager: SessionManager;
+	skillLoader: SkillLoader;
+	providerRegistryRef: { current: SceneProviderRegistry };
+	narratorRegistryRef: { current: NarratorRegistry };
+	projectRoot: string;
 }
 
 export interface ViewerApiServer {
@@ -20,7 +28,7 @@ export interface ViewerApiServer {
 }
 
 export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
-	const { port, sceneManager, sessionManager } = opts;
+	const { port, sceneManager, sessionManager, skillLoader, providerRegistryRef, narratorRegistryRef } = opts;
 	const bus = new RealtimeBus();
 
 	const app = new Hono();
@@ -37,6 +45,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 
 	app.route("/scenes", scenesRoute(sceneManager));
 	app.route("/interact", interactRoute(sessionManager, bus));
+	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));
 

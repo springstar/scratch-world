@@ -9,7 +9,7 @@ import { listScenesTool } from "./tools/list-scenes.js";
 import { navigateToTool } from "./tools/navigate-to.js";
 import { updateSceneTool } from "./tools/update-scene.js";
 
-const SYSTEM_PROMPT = `\
+const BASE_SYSTEM_PROMPT = `\
 You are a world-building companion. You help users create, explore, and evolve persistent 3D worlds through conversation.
 
 When a user describes a place, scene, or environment they want to create, call create_scene.
@@ -29,6 +29,7 @@ export function createAgent(
 	userId: string,
 	viewerBaseUrl: string,
 	sessionId: string,
+	skillPrompt: string | null = null,
 ): Agent {
 	const ownerId = () => userId;
 	const viewerUrl = (sceneId: string) => `${viewerBaseUrl}/scene/${sceneId}?session=${sessionId}`;
@@ -39,9 +40,13 @@ export function createAgent(
 		model.baseUrl = process.env.ANTHROPIC_BASE_URL;
 	}
 
+	const systemPrompt = skillPrompt
+		? `${BASE_SYSTEM_PROMPT}\n\n## Scene Generation\n\n${skillPrompt}`
+		: BASE_SYSTEM_PROMPT;
+
 	return new Agent({
 		initialState: {
-			systemPrompt: SYSTEM_PROMPT,
+			systemPrompt,
 			model,
 			tools: [
 				createSceneTool(sceneManager, ownerId, viewerUrl),

@@ -1,14 +1,18 @@
 import "dotenv/config";
 import Database from "better-sqlite3";
-import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { ChannelGateway } from "./channels/gateway.js";
 import { StdinAdapter } from "./channels/stdin/adapter.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
+import { narrateWithHaiku } from "./narrators/built-in/haiku.js";
+import { NarratorRegistry } from "./narrators/narrator-registry.js";
 import { LlmProvider } from "./providers/llm/provider.js";
 import { MarbleProvider } from "./providers/marble/provider.js";
+import { SceneProviderRegistry } from "./providers/scene-provider-registry.js";
 import { StubProvider } from "./providers/stub/provider.js";
+import type { SceneRenderProvider } from "./providers/types.js";
 import { SceneManager } from "./scene/scene-manager.js";
 import { SessionManager } from "./session/session-manager.js";
+import { SkillLoader } from "./skills/skill-loader.js";
 import { SqliteSceneRepo } from "./storage/sqlite/scene-repo.js";
 import { SqliteSessionRepo } from "./storage/sqlite/session-repo.js";
 import { startViewerApi } from "./viewer-api/server.js";
@@ -23,39 +27,36 @@ async function main() {
 	const sceneRepo = new SqliteSceneRepo(db);
 	const sessionRepo = new SqliteSessionRepo(db);
 
-	// ── 3D Provider ────────────────────────────────────────────────────────
+	// ── Project root ───────────────────────────────────────────────────────
+	const projectRoot = process.cwd();
+
+	// ── Skills ─────────────────────────────────────────────────────────────
+	const skillLoader = new SkillLoader(projectRoot);
+
+	// ── Scene Providers ────────────────────────────────────────────────────
 	const apiKey = process.env.ANTHROPIC_API_KEY;
 	const marbleKey = process.env.MARBLE_API_KEY;
-	const providerName = process.env.PROVIDER ?? (apiKey ? "llm" : "stub");
-	const provider = (() => {
-		if (providerName === "marble") {
-			if (!marbleKey) throw new Error("PROVIDER=marble but MARBLE_API_KEY is not set");
-			return new MarbleProvider(marbleKey);
-		}
-		if (providerName === "llm") return new LlmProvider();
-		return new StubProvider();
-	})();
-	console.log(`Using 3D provider: ${provider.name}`);
 
-	// ── Narrate function (LLM-powered interaction narratives) ──────────────
-	let narrateFn: ((prompt: string) => Promise<string>) | null = null;
-	if (apiKey) {
-		narrateFn = async (prompt: string): Promise<string> => {
-			const model = getModel("anthropic", "claude-haiku-4-5-20251001");
-			if (process.env.ANTHROPIC_BASE_URL) model.baseUrl = process.env.ANTHROPIC_BASE_URL;
-			const response = await completeSimple(model, {
-				messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-			});
-			const text = response.content
-				.filter((c) => c.type === "text")
-				.map((c) => (c as { type: "text"; text: string }).text)
-				.join("");
-			return text.trim() || "Nothing remarkable happens.";
-		};
-	}
+	const allProviders: SceneRenderProvider[] = [new StubProvider(), new LlmProvider()];
+	if (marbleKey) allProviders.push(new MarbleProvider(marbleKey));
+
+	const defaultProvider = process.env.SCENE_PROVIDER ?? "stub";
+	const providerRegistryRef = {
+		current: new SceneProviderRegistry(allProviders, defaultProvider),
+	};
+	console.log(`Using scene provider: ${defaultProvider}`);
+
+	// ── Narrators ──────────────────────────────────────────────────────────
+	const narratorEntries = apiKey
+		? [{ manifest: { name: "haiku", description: "Claude Haiku narration" }, fn: narrateWithHaiku }]
+		: [];
+	const defaultNarrator = apiKey ? "haiku" : "none";
+	const narratorRegistryRef = {
+		current: new NarratorRegistry(narratorEntries, defaultNarrator),
+	};
 
 	// ── Scene + Session managers ───────────────────────────────────────────
-	const sceneManager = new SceneManager(provider, sceneRepo, narrateFn);
+	const sceneManager = new SceneManager(providerRegistryRef, narratorRegistryRef, sceneRepo);
 
 	// ── Channels ───────────────────────────────────────────────────────────
 	const gateway = new ChannelGateway();
@@ -74,12 +75,20 @@ async function main() {
 	const viewerBaseUrl = process.env.VIEWER_BASE_URL ?? `http://localhost:${viewerPort}`;
 
 	// ── Session manager ────────────────────────────────────────────────────
-	const sessionManager = new SessionManager(gateway, sceneManager, sessionRepo, viewerBaseUrl);
+	const sessionManager = new SessionManager(gateway, sceneManager, sessionRepo, viewerBaseUrl, skillLoader);
 	gateway.onMessage(async (msg) => {
 		await sessionManager.dispatch(msg);
 	});
 
-	startViewerApi({ port: viewerPort, sceneManager, sessionManager });
+	startViewerApi({
+		port: viewerPort,
+		sceneManager,
+		sessionManager,
+		skillLoader,
+		providerRegistryRef,
+		narratorRegistryRef,
+		projectRoot,
+	});
 
 	// ── Start ──────────────────────────────────────────────────────────────
 	console.log("Starting scratch-world...");

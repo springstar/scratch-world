@@ -1,29 +1,50 @@
 import { randomUUID } from "crypto";
-import type { ThreeDProvider } from "../providers/types.js";
+import type { NarratorRegistry } from "../narrators/narrator-registry.js";
+import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
 import type { SceneRepository } from "../storage/types.js";
-import type { InteractionResult, NavigationResult, Scene } from "./types.js";
+import type { InteractionResult, NavigationResult, Scene, SceneData } from "./types.js";
 
 export class SceneManager {
 	constructor(
-		private provider: ThreeDProvider,
+		private providerRegistryRef: { current: SceneProviderRegistry },
+		private narratorRegistryRef: { current: NarratorRegistry },
 		private repo: SceneRepository,
-		private narrateFn: ((prompt: string) => Promise<string>) | null = null,
 	) {}
 
-	async createScene(ownerId: string, prompt: string, title?: string): Promise<Scene> {
-		const result = await this.provider.generate(prompt);
+	async createScene(ownerId: string, prompt: string, title?: string, sceneData?: SceneData): Promise<Scene> {
 		const now = Date.now();
-		const scene: Scene = {
-			sceneId: randomUUID(),
-			ownerId,
-			title: title ?? prompt.slice(0, 60),
-			description: prompt,
-			sceneData: result.sceneData,
-			providerRef: result.ref,
-			version: 1,
-			createdAt: now,
-			updatedAt: now,
-		};
+		let scene: Scene;
+
+		if (sceneData) {
+			// Skill path: Claude provided sceneData directly
+			const assetId = randomUUID();
+			scene = {
+				sceneId: randomUUID(),
+				ownerId,
+				title: title ?? prompt.slice(0, 60),
+				description: prompt,
+				sceneData,
+				providerRef: { provider: "claude", assetId },
+				version: 1,
+				createdAt: now,
+				updatedAt: now,
+			};
+		} else {
+			// Provider path
+			const result = await this.providerRegistryRef.current.getActiveProvider().generate(prompt);
+			scene = {
+				sceneId: randomUUID(),
+				ownerId,
+				title: title ?? prompt.slice(0, 60),
+				description: prompt,
+				sceneData: result.sceneData,
+				providerRef: result.ref,
+				version: 1,
+				createdAt: now,
+				updatedAt: now,
+			};
+		}
+
 		await this.repo.save(scene);
 		// Save initial version snapshot
 		await this.repo.saveVersion({
@@ -36,17 +57,39 @@ export class SceneManager {
 		return scene;
 	}
 
-	async updateScene(sceneId: string, instruction: string): Promise<Scene> {
+	async updateScene(sceneId: string, instruction: string, sceneData?: SceneData): Promise<Scene> {
 		const scene = await this.requireScene(sceneId);
-		const result = await this.provider.edit(scene.providerRef, instruction);
 		const now = Date.now();
-		const updated: Scene = {
-			...scene,
-			sceneData: result.sceneData,
-			providerRef: result.ref,
-			version: scene.version + 1,
-			updatedAt: now,
-		};
+		let updated: Scene;
+
+		if (sceneData) {
+			// Skill path: Claude provided sceneData directly
+			updated = {
+				...scene,
+				sceneData,
+				version: scene.version + 1,
+				updatedAt: now,
+			};
+		} else {
+			// Provider path: use the scene's own provider (not active provider)
+			const provider = this.providerRegistryRef.current.getProvider(scene.providerRef.provider);
+			if (!provider) {
+				throw new Error(
+					`Provider "${scene.providerRef.provider}" not in registry. ` +
+						`This scene was created with a Skill (generator-claude). ` +
+						`Provide sceneData to update it.`,
+				);
+			}
+			const result = await provider.edit(scene.providerRef, instruction);
+			updated = {
+				...scene,
+				sceneData: result.sceneData,
+				providerRef: result.ref,
+				version: scene.version + 1,
+				updatedAt: now,
+			};
+		}
+
 		// Snapshot before overwriting — versions are immutable once written
 		await this.repo.saveVersion({
 			sceneId: updated.sceneId,
@@ -98,8 +141,6 @@ export class SceneManager {
 		}
 
 		// ── State transition ─────────────────────────────────────────────────
-		// If the object declares metadata.transitions, check whether the action
-		// maps to a new state. e.g. transitions: {"erase": "erased", "write": "written"}
 		const transitions = obj.metadata.transitions as Record<string, string> | undefined;
 		let sceneChanged = false;
 		let updatedScene = scene;
@@ -136,9 +177,10 @@ export class SceneManager {
 		}
 
 		// ── Narrate ──────────────────────────────────────────────────────────
+		const narrateFn = this.narratorRegistryRef.current.getActiveNarrator();
 		const targetObj = updatedScene.sceneData.objects.find((o) => o.objectId === objectId) ?? obj;
 		let outcome = `You ${action} the ${targetObj.name}. ${targetObj.description}`;
-		if (this.narrateFn) {
+		if (narrateFn) {
 			try {
 				const nearby = this.describeObjectsNearby(scene, targetObj.position);
 				const stateNote = sceneChanged
@@ -153,7 +195,7 @@ ${stateNote}
 ${nearby ? `Nearby: ${nearby}` : ""}
 
 Write 2-3 vivid sentences narrating what happens when the user performs this action. Be immersive and specific.`;
-				outcome = await this.narrateFn(prompt);
+				outcome = await narrateFn(prompt);
 			} catch {
 				// fall through to default outcome already set above
 			}

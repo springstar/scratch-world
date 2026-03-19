@@ -2,10 +2,12 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import type { SceneManager } from "../../scene/scene-manager.js";
+import { SceneDataSchema } from "../../scene/schema.js";
 
 const parameters = Type.Object({
 	prompt: Type.String({ description: "Detailed description of the scene to generate" }),
 	title: Type.Optional(Type.String({ description: "Short title for the scene (max 60 chars)" })),
+	sceneData: Type.Optional(SceneDataSchema),
 });
 
 export function createSceneTool(
@@ -20,7 +22,7 @@ export function createSceneTool(
 			"Generate a new 3D scene from a text prompt. Use this when the user wants to create a new world, environment, or location.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
-			const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title);
+			const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, params.sceneData);
 			return {
 				content: [
 					{

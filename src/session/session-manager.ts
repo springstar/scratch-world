@@ -3,6 +3,7 @@ import { createAgent } from "../agent/agent-factory.js";
 import type { ChannelGateway } from "../channels/gateway.js";
 import type { ChatMessage } from "../channels/types.js";
 import type { SceneManager } from "../scene/scene-manager.js";
+import type { SkillLoader } from "../skills/skill-loader.js";
 import type { SessionRepository } from "../storage/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
 
@@ -25,6 +26,7 @@ export class SessionManager {
 		private sceneManager: SceneManager,
 		private sessionRepo: SessionRepository,
 		private viewerBaseUrl: string,
+		private skillLoader: SkillLoader,
 		private agentTtlMs: number = DEFAULT_AGENT_TTL_MS,
 	) {}
 
@@ -53,6 +55,7 @@ export class SessionManager {
 	private async _dispatch(msg: ChatMessage): Promise<void> {
 		const agent = await this.getOrCreateAgent(msg);
 		await this.hydrateActiveScene(agent, msg.sessionId);
+		this.hydrateActiveSkills(agent);
 
 		// Seed activeSceneId from persisted record so it survives turns where no scene tool runs
 		const record = await this.sessionRepo.findById(msg.sessionId);
@@ -114,6 +117,7 @@ export class SessionManager {
 
 		const agent = await this.getOrCreateAgent(msg);
 		await this.hydrateActiveScene(agent, sessionId);
+		this.hydrateActiveSkills(agent);
 
 		// Stream text deltas to viewer via WebSocket
 		let fullText = "";
@@ -191,6 +195,13 @@ export class SessionManager {
 		if (!scene) return;
 		const base = agent.state.systemPrompt.split("\n\nActive scene:")[0];
 		agent.setSystemPrompt(`${base}\n\nActive scene: ${scene.sceneId} ("${scene.title}")`);
+	}
+
+	private hydrateActiveSkills(agent: Agent): void {
+		const md = this.skillLoader.getActivePromptMarkdown("generator");
+		if (!md) return;
+		const base = agent.state.systemPrompt.split("\n\n## Scene Generation")[0];
+		agent.setSystemPrompt(`${base}\n\n## Scene Generation\n\n${md}`);
 	}
 
 	private async saveSession(msg: ChatMessage, agent: Agent, activeSceneId: string | null): Promise<void> {

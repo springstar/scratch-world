@@ -1,8 +1,14 @@
-import { randomUUID } from "crypto";
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import { randomUUID } from "crypto";
 import type { ProviderRef, SceneData } from "../../scene/types.js";
 import { StubProvider } from "../stub/provider.js";
-import type { EditOptions, GenerateOptions, ProviderDescription, ProviderResult, ThreeDProvider } from "../types.js";
+import type {
+	EditOptions,
+	GenerateOptions,
+	ProviderDescription,
+	ProviderResult,
+	SceneRenderProvider,
+} from "../types.js";
 
 const SCENE_SYSTEM_PROMPT = `\
 You are a scene data generator for a 3D world engine. Return ONLY a valid JSON object with NO extra text, markdown, or code fences.
@@ -71,7 +77,7 @@ function buildModel() {
 	return model;
 }
 
-export class LlmProvider implements ThreeDProvider {
+export class LlmProvider implements SceneRenderProvider {
 	readonly name = "llm";
 
 	// In-memory store of sceneData by assetId for describe()

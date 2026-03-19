@@ -2,10 +2,12 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import type { SceneManager } from "../../scene/scene-manager.js";
+import { SceneDataSchema } from "../../scene/schema.js";
 
 const parameters = Type.Object({
 	sceneId: Type.String({ description: "ID of the scene to update" }),
 	instruction: Type.String({ description: "What to change in the scene" }),
+	sceneData: Type.Optional(SceneDataSchema),
 });
 
 export function updateSceneTool(
@@ -19,7 +21,7 @@ export function updateSceneTool(
 			"Modify an existing scene based on a natural language instruction. Use this when the user wants to add, remove, or change something in a scene.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
-			const scene = await sceneManager.updateScene(params.sceneId, params.instruction);
+			const scene = await sceneManager.updateScene(params.sceneId, params.instruction, params.sceneData);
 			return {
 				content: [
 					{

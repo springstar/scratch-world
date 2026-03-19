@@ -1,6 +1,12 @@
 import { randomUUID } from "crypto";
 import type { ProviderRef, SceneData } from "../../scene/types.js";
-import type { EditOptions, GenerateOptions, ProviderDescription, ProviderResult, ThreeDProvider } from "../types.js";
+import type {
+	EditOptions,
+	GenerateOptions,
+	ProviderDescription,
+	ProviderResult,
+	SceneRenderProvider,
+} from "../types.js";
 
 function makeSceneData(prompt: string, extra?: Partial<SceneData>): SceneData {
 	return {
@@ -49,7 +55,7 @@ function makeSceneData(prompt: string, extra?: Partial<SceneData>): SceneData {
 	};
 }
 
-export class StubProvider implements ThreeDProvider {
+export class StubProvider implements SceneRenderProvider {
 	readonly name = "stub";
 
 	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {

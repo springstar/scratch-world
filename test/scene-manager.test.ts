@@ -2,14 +2,17 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { SceneManager } from "../src/scene/scene-manager.js";
 import { StubProvider } from "../src/providers/stub/provider.js";
+import { SceneProviderRegistry } from "../src/providers/scene-provider-registry.js";
+import { NarratorRegistry } from "../src/narrators/narrator-registry.js";
 import { SqliteSceneRepo } from "../src/storage/sqlite/scene-repo.js";
 
 function makeManager() {
 	const db = new Database(":memory:");
 	db.pragma("journal_mode = WAL");
 	const repo = new SqliteSceneRepo(db);
-	const provider = new StubProvider();
-	return new SceneManager(provider, repo);
+	const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
+	const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
+	return new SceneManager(providerRegistryRef, narratorRegistryRef, repo);
 }
 
 describe("SceneManager", () => {
@@ -52,11 +55,34 @@ describe("SceneManager", () => {
 			const db = new Database(":memory:");
 			db.pragma("journal_mode = WAL");
 			const repo = new SqliteSceneRepo(db);
-			const m = new SceneManager(new StubProvider(), repo);
+			const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
+			const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
+			const m = new SceneManager(providerRegistryRef, narratorRegistryRef, repo);
 			const scene = await m.createScene("user-1", "a temple");
 			const versions = await repo.findVersions(scene.sceneId);
 			expect(versions).toHaveLength(1);
 			expect(versions[0].version).toBe(1);
+		});
+
+		it("uses provided sceneData directly (skill path)", async () => {
+			const sceneData = {
+				objects: [
+					{
+						objectId: "obj_test",
+						name: "test object",
+						type: "object",
+						position: { x: 0, y: 0, z: 0 },
+						description: "a test",
+						interactable: false,
+						metadata: {},
+					},
+				],
+				environment: { skybox: "clear_day" },
+				viewpoints: [],
+			};
+			const scene = await manager.createScene("user-1", "a test scene", undefined, sceneData);
+			expect(scene.sceneData.objects[0].objectId).toBe("obj_test");
+			expect(scene.providerRef.provider).toBe("claude");
 		});
 	});
 
@@ -84,12 +110,45 @@ describe("SceneManager", () => {
 			const db = new Database(":memory:");
 			db.pragma("journal_mode = WAL");
 			const repo = new SqliteSceneRepo(db);
-			const m = new SceneManager(new StubProvider(), repo);
+			const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
+			const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
+			const m = new SceneManager(providerRegistryRef, narratorRegistryRef, repo);
 			const scene = await m.createScene("user-1", "a fortress");
 			await m.updateScene(scene.sceneId, "add walls");
 			await m.updateScene(scene.sceneId, "add towers");
 			const versions = await repo.findVersions(scene.sceneId);
 			expect(versions).toHaveLength(3); // v1 + v2 + v3
+		});
+
+		it("updates using provided sceneData directly (skill path)", async () => {
+			const scene = await manager.createScene("user-1", "a castle");
+			const newSceneData = {
+				objects: [
+					{
+						objectId: "obj_new",
+						name: "new object",
+						type: "object",
+						position: { x: 0, y: 0, z: 0 },
+						description: "newly placed",
+						interactable: false,
+						metadata: {},
+					},
+				],
+				environment: {},
+				viewpoints: [],
+			};
+			const updated = await manager.updateScene(scene.sceneId, "replace scene", newSceneData);
+			expect(updated.sceneData.objects[0].objectId).toBe("obj_new");
+		});
+
+		it("throws when updating claude-created scene without sceneData", async () => {
+			const sceneData = {
+				objects: [],
+				environment: {},
+				viewpoints: [],
+			};
+			const scene = await manager.createScene("user-1", "a claude scene", undefined, sceneData);
+			await expect(manager.updateScene(scene.sceneId, "add something")).rejects.toThrow("not in registry");
 		});
 	});
 

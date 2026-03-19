@@ -22,8 +22,8 @@ export interface ProviderDescription {
 	sceneData: SceneData;
 }
 
-// Core abstraction — all 3D providers implement this
-export interface ThreeDProvider {
+// Core abstraction — all scene render providers implement this
+export interface SceneRenderProvider {
 	readonly name: string;
 
 	// Generate a new scene from a text prompt

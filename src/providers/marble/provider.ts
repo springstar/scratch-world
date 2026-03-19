@@ -1,6 +1,11 @@
-import { randomUUID } from "crypto";
 import type { ProviderRef, SceneData } from "../../scene/types.js";
-import type { EditOptions, GenerateOptions, ProviderDescription, ProviderResult, ThreeDProvider } from "../types.js";
+import type {
+	EditOptions,
+	GenerateOptions,
+	ProviderDescription,
+	ProviderResult,
+	SceneRenderProvider,
+} from "../types.js";
 
 // ── Marble API base URL and auth ─────────────────────────────────────────────
 
@@ -36,12 +41,7 @@ interface MarbleOperation {
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
-async function marbleRequest<T>(
-	apiKey: string,
-	method: string,
-	path: string,
-	body?: unknown,
-): Promise<T> {
+async function marbleRequest<T>(apiKey: string, method: string, path: string, body?: unknown): Promise<T> {
 	const url = `${MARBLE_BASE_URL}${path}`;
 	const init: RequestInit = {
 		method,
@@ -70,11 +70,7 @@ async function pollOperation(apiKey: string, operationId: string): Promise<Marbl
 	const deadline = Date.now() + POLL_TIMEOUT_MS;
 
 	while (Date.now() < deadline) {
-		const op = await marbleRequest<MarbleOperation>(
-			apiKey,
-			"GET",
-			`/marble/v1/operations/${operationId}`,
-		);
+		const op = await marbleRequest<MarbleOperation>(apiKey, "GET", `/marble/v1/operations/${operationId}`);
 
 		if (op.done) {
 			if (op.error) {
@@ -140,7 +136,7 @@ function worldToSceneData(world: MarbleWorld, prompt: string): SceneData {
 
 // ── MarbleProvider ────────────────────────────────────────────────────────────
 
-export class MarbleProvider implements ThreeDProvider {
+export class MarbleProvider implements SceneRenderProvider {
 	readonly name = "marble";
 
 	private readonly apiKey: string;
@@ -149,7 +145,7 @@ export class MarbleProvider implements ThreeDProvider {
 		this.apiKey = apiKey;
 	}
 
-	async generate(prompt: string, options?: GenerateOptions): Promise<ProviderResult> {
+	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {
 		console.log(`[MarbleProvider] generating world: "${prompt}"`);
 
 		const requestBody = {
@@ -189,7 +185,7 @@ export class MarbleProvider implements ThreeDProvider {
 		};
 	}
 
-	async edit(ref: ProviderRef, instruction: string, _options?: EditOptions): Promise<ProviderResult> {
+	async edit(_ref: ProviderRef, instruction: string, _options?: EditOptions): Promise<ProviderResult> {
 		// Marble does not currently support incremental edits to existing worlds.
 		// Generate a new world from the combined prompt and treat it as a new version.
 		console.log(`[MarbleProvider] edit requested — generating new world for: "${instruction}"`);
@@ -197,11 +193,7 @@ export class MarbleProvider implements ThreeDProvider {
 	}
 
 	async describe(ref: ProviderRef): Promise<ProviderDescription> {
-		const world = await marbleRequest<MarbleWorld>(
-			this.apiKey,
-			"GET",
-			`/marble/v1/worlds/${ref.assetId}`,
-		);
+		const world = await marbleRequest<MarbleWorld>(this.apiKey, "GET", `/marble/v1/worlds/${ref.assetId}`);
 
 		return {
 			ref: {

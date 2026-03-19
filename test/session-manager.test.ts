@@ -95,6 +95,15 @@ function makeSessionRepo(record: SessionRecord | null = null): SessionRepository
 	};
 }
 
+function makeSkillLoader() {
+	return {
+		getActivePromptMarkdown: vi.fn().mockReturnValue(null),
+		getActiveSkill: vi.fn().mockReturnValue(null),
+		listSkills: vi.fn().mockReturnValue([]),
+		activate: vi.fn(),
+	};
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("SessionManager", () => {
@@ -118,7 +127,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -137,7 +146,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -156,7 +165,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -175,7 +184,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -194,7 +203,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -207,7 +216,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo(existing);
 			vi.mocked(sceneManager.getScene).mockResolvedValue(null); // skip hydration
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -233,7 +242,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -254,7 +263,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -278,7 +287,7 @@ describe("SessionManager", () => {
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatch(makeMsg());
 
@@ -293,7 +302,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo(record);
 			const bus = { publish: vi.fn(), subscribe: vi.fn(), hasSubscribers: vi.fn() } as never;
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			await sm.dispatchViewerInteraction("telegram:user-1", "scene-viewer", "examine this", bus);
 
@@ -314,7 +323,7 @@ describe("SessionManager", () => {
 			const agent = makeFakeAgent();
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", 5 * 60 * 1000);
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never, 5 * 60 * 1000);
 
 			await sm.dispatch(makeMsg());
 			await sm.dispatch(makeMsg());
@@ -328,7 +337,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
 			const TTL = 5 * 60 * 1000;
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", TTL);
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never, TTL);
 
 			await sm.dispatch(makeMsg());
 
@@ -346,7 +355,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValue(agent as never);
 			const repo = makeSessionRepo();
 			const TTL = 5 * 60 * 1000;
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", TTL);
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never, TTL);
 
 			await sm.dispatch(makeMsg());
 
@@ -368,7 +377,7 @@ describe("SessionManager", () => {
 
 			const repo = makeSessionRepo();
 			const TTL = 5 * 60 * 1000;
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", TTL);
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never, TTL);
 
 			const msgA = makeMsg(); // session telegram:user-1
 			const msgB = { ...makeMsg(), userId: "user-2", sessionId: "telegram:user-2" };
@@ -406,7 +415,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValue(agent as never);
 
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			const p1 = sm.dispatch(makeMsg());
 			const p2 = sm.dispatch(makeMsg());
@@ -440,7 +449,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValueOnce(agentA as never).mockReturnValueOnce(agentB as never);
 
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			const msgA = makeMsg();
 			const msgB = { ...makeMsg(), userId: "user-2", sessionId: "telegram:user-2" };
@@ -469,7 +478,7 @@ describe("SessionManager", () => {
 			mockCreateAgent.mockReturnValue(agent as never);
 
 			const repo = makeSessionRepo();
-			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001");
+			const sm = new SessionManager(gateway, sceneManager, repo, "http://localhost:3001", makeSkillLoader() as never);
 
 			const p1 = sm.dispatch(makeMsg());
 			const p2 = sm.dispatch(makeMsg());
