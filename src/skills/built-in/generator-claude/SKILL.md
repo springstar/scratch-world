@@ -32,7 +32,7 @@ The `sceneData` field must be a JSON object with this exact structure:
       "interactable": true,
       "interactionHint": "try 'examine the ...'",
       "metadata": {
-        "shape": "desk | chair | blackboard | window | door | wall | floor | shelf | box | pillar",
+        "shape": "desk | chair | blackboard | window | door | wall | floor | shelf | box | pillar | hoop | court",
         "state": "current state string if stateful",
         "transitions": { "action verb": "next state" }
       }
@@ -55,6 +55,11 @@ The `sceneData` field must be a JSON object with this exact structure:
   - Sports courts and open-air venues are always OUTDOOR — **never add walls or ceiling**.
 - **INDOOR arena** (gymnasium, sports hall — only when the prompt explicitly says "indoor" or "gymnasium/体育馆"):
   - Treat as INDOOR and may include walls/ceiling.
+- **Sports courts and fields** (basketball court, tennis court, etc.):
+  - Use **one** `terrain` object with `shape: "court"` at position `{x:0, y:0, z:0}` for the court floor + line markings.
+  - Use **two** `object` items with `shape: "hoop"` at opposite ends (e.g. `x: -13` and `x: 13`, `z: 0`) for basketball hoops.
+  - Add surrounding elements freely: `npc` for players, `item` for balls, `object` (shape `box`) for benches/scoreboards, `tree` or `building` for surroundings.
+  - Do **NOT** add walls, ceiling, or indoor floor terrain.
 - **Stateful objects**: set `metadata.state` (e.g. `"written"`, `"open"`, `"closed"`, `"on"`, `"off"`) and `metadata.transitions` (e.g. `{"erase": "erased", "write": "written"}` for a blackboard).
 - **Object positions**: spread across a 40×40 unit area (x and z from −20 to 20), y=0 unless elevated.
 - Include **exactly 2–3 viewpoints** suited to the scene.

@@ -29,9 +29,11 @@ function inferShape(name: string): string {
   if (n.includes("window")) return "window";
   if (n.includes("door")) return "door";
   if (n.includes("wall")) return "wall";
+  if (n.includes("court") || n.includes("hardwood")) return "court";
   if (n.includes("floor") || n.includes("ceiling")) return "floor";
   if (n.includes("shelf") || n.includes("bookcase")) return "shelf";
   if (n.includes("pillar") || n.includes("column")) return "pillar";
+  if (n.includes("hoop") || n.includes("basket") || n.includes("rim")) return "hoop";
   return "box";
 }
 
@@ -190,6 +192,64 @@ function buildObjectByShape(
       return mesh;
     }
 
+    case "hoop": {
+      const group = new THREE.Group();
+      // Support pole
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 3.5, 8),
+        makeMat(0x888888, 0.6, 0.4),
+      );
+      pole.position.y = 1.75;
+      group.add(pole);
+      // Horizontal arm from pole to backboard
+      const arm = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 0.06, 0.06),
+        makeMat(0x888888, 0.6, 0.4),
+      );
+      arm.position.set(0.6, 3.2, 0);
+      group.add(arm);
+      // Backboard
+      const board = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 1.08, 1.84),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.1, opacity: 0.7, transparent: true }),
+      );
+      board.position.set(1.2, 3.2, 0);
+      group.add(board);
+      // Orange border on backboard
+      const border = new THREE.Mesh(
+        new THREE.BoxGeometry(0.02, 1.1, 1.86),
+        makeMat(0xff6600, 0.5, 0.2),
+      );
+      border.position.set(1.19, 3.2, 0);
+      group.add(border);
+      // Inner box on backboard
+      const innerBox = new THREE.Mesh(
+        new THREE.BoxGeometry(0.02, 0.45, 0.59),
+        makeMat(0xff6600, 0.5, 0.2),
+      );
+      innerBox.position.set(1.18, 3.15, 0);
+      group.add(innerBox);
+      // Rim (torus lying horizontally)
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.225, 0.017, 8, 24),
+        makeMat(0xff6600, 0.5, 0.3),
+      );
+      rim.rotation.x = Math.PI / 2;
+      rim.position.set(0.9, 3.05, 0);
+      group.add(rim);
+      // Net (simplified as thin cylinder)
+      const net = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.225, 0.12, 0.45, 12, 1, true),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, opacity: 0.4, transparent: true, side: THREE.DoubleSide }),
+      );
+      net.position.set(0.9, 2.82, 0);
+      group.add(net);
+      // Mirror for right-side hoop (positive x)
+      if (x > 0) group.rotation.y = Math.PI;
+      group.position.set(x, y, z);
+      return group;
+    }
+
     default: {
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(0.8, 0.8, 0.8),
@@ -307,6 +367,63 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         );
         mesh.position.set(x, y + 3.075, z);
         root = mesh;
+      } else if (shape === "court") {
+        const group = new THREE.Group();
+        // Hardwood floor — NBA standard 28m × 15m
+        const floor = new THREE.Mesh(
+          new THREE.BoxGeometry(28, 0.1, 15),
+          makeMat(0xc8822a, 0.85, 0.05),
+        );
+        floor.position.y = 0.05;
+        floor.receiveShadow = true;
+        group.add(floor);
+        const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
+        // Center line
+        const centerLine = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 15), lineMat);
+        centerLine.position.y = 0.11;
+        group.add(centerLine);
+        // Center circle
+        const centerCircle = new THREE.Mesh(
+          new THREE.TorusGeometry(1.8, 0.05, 8, 48),
+          lineMat,
+        );
+        centerCircle.rotation.x = Math.PI / 2;
+        centerCircle.position.y = 0.11;
+        group.add(centerCircle);
+        // Key areas (paint) — one each end
+        for (const side of [-1, 1]) {
+          const paint = new THREE.Mesh(
+            new THREE.BoxGeometry(5.8, 0.02, 4.9),
+            makeMat(0xb06020, 0.9, 0),
+          );
+          paint.position.set(side * 11.1, 0.11, 0);
+          group.add(paint);
+          // Free-throw line
+          const ftLine = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 4.9), lineMat);
+          ftLine.position.set(side * 8.2, 0.115, 0);
+          group.add(ftLine);
+          // Baseline
+          const baseline = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 15), lineMat);
+          baseline.position.set(side * 14, 0.115, 0);
+          group.add(baseline);
+          // Three-point arc (semicircle)
+          const arc = new THREE.Mesh(
+            new THREE.TorusGeometry(7.24, 0.05, 8, 48, Math.PI),
+            lineMat,
+          );
+          arc.rotation.x = Math.PI / 2;
+          arc.rotation.z = side > 0 ? 0 : Math.PI;
+          arc.position.set(side * 7.5, 0.115, 0);
+          group.add(arc);
+        }
+        // Sidelines
+        for (const side of [-1, 1]) {
+          const sideline = new THREE.Mesh(new THREE.BoxGeometry(28, 0.02, 0.05), lineMat);
+          sideline.position.set(0, 0.115, side * 7.5);
+          group.add(sideline);
+        }
+        group.position.set(x, y, z);
+        root = group;
       } else if (shape === "floor") {
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(20, 0.15, 20),
