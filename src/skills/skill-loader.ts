@@ -28,8 +28,7 @@ export class SkillLoader {
 
 	getActiveSkill(category: "generator"): SkillManifest | null {
 		const active = this.readActive();
-		const name = active[category];
-		if (!name) return null;
+		const name = active[category] ?? "generator-claude";
 		return BUILT_IN_SKILLS.find((s) => s.category === category && s.name === name) ?? null;
 	}
 

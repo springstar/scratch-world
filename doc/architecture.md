@@ -410,12 +410,84 @@ User (Telegram) ──► TelegramAdapter
 
 ---
 
-## Project Structure (Option B)
+## Skill System
+
+The Skill System allows components like scene generation and narration to be swapped at runtime without editing core code.
+
+### Skill Categories
+
+| Category | Description |
+|---|---|
+| `generator` | Handles scene creation. One active at a time — substitutional, not additive. |
+| `narrator` | Handles interaction narration. One active at a time. |
+
+### Skill Subtypes (generator)
+
+| Subtype | Files | How it works |
+|---|---|---|
+| `prompt-generator` | `SKILL.md` only | SKILL.md injected into agent system prompt; Claude fills `sceneData` directly in the tool call — no secondary model call or provider API |
+| `code-generator` | `skill.json` + `index.ts` + `SKILL.md` | `create_scene` tool delegates to `ThreeDProvider.generate()`; Claude only orchestrates |
+
+### Built-in Skills
+
+```
+src/skills/built-in/
+  generator-claude/   SKILL.md only         — prompt-generator (default)
+  generator-marble/   skill.json + index.ts — code-generator, delegates to Marble API
+  generator-stub/     skill.json + index.ts — code-generator, static fixtures for local dev
+  narrator-haiku/     skill.json + index.ts — code narrator, separate Haiku call
+  generator-test/     skill.json + index.ts — code-generator, 3 fixed objects, no API
+  narrator-test/      skill.json + index.ts — fixed string return, no API
+```
+
+### Discovery Hierarchy
+
+```
+.agents/skills/   (project-level — highest priority)
+~/.agents/skills/ (global)
+src/skills/built-in/ (built-in — lowest priority)
+```
+
+### SkillLoader
+
+`src/skills/skill-loader.ts` manages skill state:
+
+- `listSkills()` — returns all registered built-in skills
+- `getActiveSkill(category)` — reads `skills.active.json`
+- `getActivePromptMarkdown(category)` — reads `SKILL.md` for active prompt-generator skill
+- `activate(category, name)` — persists selection to `skills.active.json`
+
+Active skill selection is persisted in `skills.active.json` at the project root.
+
+### Skill Integration in Session Manager
+
+`SessionManager.hydrateActiveSkills()` is called at the start of every `dispatch()`, after `hydrateActiveScene()`. It re-reads the active generator skill and updates the agent's system prompt before each message. Skill changes take effect at the next message boundary with no server restart.
+
+```
+_dispatch(msg):
+  getOrCreateAgent()
+  hydrateActiveScene()    ← injects active scene context
+  hydrateActiveSkills()   ← injects active generator SKILL.md (if prompt-generator)
+  agent.prompt(msg.text)
+```
+
+### Skill API (Viewer API)
+
+```
+GET  /generators          → list all skills + active generator
+POST /generators/activate → { category, name } → activate a skill
+```
+
+---
+
+## Project Structure
 
 ```
 scratch-world/
 ├── doc/
-│   └── architecture.md
+│   ├── architecture.md
+│   ├── interactions.md
+│   └── debug-log.md
 ├── src/                              # Bot backend
 │   ├── channels/
 │   │   ├── types.ts                  # ChannelAdapter interface, ChatMessage
@@ -436,6 +508,16 @@ scratch-world/
 │   ├── scene/
 │   │   ├── scene-manager.ts
 │   │   └── types.ts
+│   ├── skills/                       # Skill system
+│   │   ├── types.ts                  # SkillManifest interface
+│   │   ├── skill-loader.ts           # SkillLoader — discovery, activation, prompt injection
+│   │   └── built-in/
+│   │       ├── generator-claude/     # prompt-generator (default)
+│   │       ├── generator-marble/     # code-generator → Marble API
+│   │       ├── generator-stub/       # code-generator → static fixtures
+│   │       ├── narrator-haiku/       # Haiku narrator
+│   │       ├── generator-test/       # test generator
+│   │       └── narrator-test/        # test narrator
 │   ├── providers/
 │   │   ├── types.ts                  # ThreeDProvider interface
 │   │   ├── marble/
@@ -451,7 +533,8 @@ scratch-world/
 │   │   ├── server.ts                 # HTTP + WebSocket server
 │   │   └── routes/
 │   │       ├── scenes.ts             # GET /scenes/:sceneId
-│   │       └── interact.ts           # POST /interact
+│   │       ├── interact.ts           # POST /interact
+│   │       └── generators.ts         # GET /generators, POST /generators/activate
 │   └── index.ts
 ├── viewer/                           # Viewer App (separate frontend)
 │   ├── src/
@@ -461,6 +544,7 @@ scratch-world/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.ts
+├── skills.active.json                # persisted active skill selections
 ├── test/
 ├── package.json
 ├── tsconfig.json

@@ -44,13 +44,17 @@ The `sceneData` field must be a JSON object with this exact structure:
 ## Rules
 
 - Generate **8–16 objects**. Analyse the prompt and choose the most fitting types and shapes.
-- **INDOOR scenes** (classroom, room, hall, lab, shop, etc.):
+- **INDOOR scenes** (classroom, room, hall, lab, shop, corridor, etc.):
   - Use type `"terrain"` for floor (shape `"floor"`), walls (shape `"wall"`), ceiling (shape `"floor"`).
   - Use type `"object"` for furniture with the correct shape (`desk`, `chair`, `blackboard`, `window`, `door`, `shelf`, etc.).
   - Use type `"npc"` for people. Use type `"item"` for small pickable items.
   - Do **NOT** add trees or outdoor buildings to indoor scenes.
-- **OUTDOOR scenes** (forest, city, park, etc.):
-  - Use type `"terrain"` for ground. Use types `"tree"`, `"building"`, `"npc"`, `"item"`, `"object"` freely.
+- **OUTDOOR scenes** (forest, city, park, street, beach, rooftop, **basketball court, tennis court, football field, sports field, playground**, etc.):
+  - Use type `"terrain"` for ground only. **Do NOT add walls or ceiling.**
+  - Use types `"tree"`, `"building"`, `"npc"`, `"item"`, `"object"` freely.
+  - Sports courts and open-air venues are always OUTDOOR — **never add walls or ceiling**.
+- **INDOOR arena** (gymnasium, sports hall — only when the prompt explicitly says "indoor" or "gymnasium/体育馆"):
+  - Treat as INDOOR and may include walls/ceiling.
 - **Stateful objects**: set `metadata.state` (e.g. `"written"`, `"open"`, `"closed"`, `"on"`, `"off"`) and `metadata.transitions` (e.g. `{"erase": "erased", "write": "written"}` for a blackboard).
 - **Object positions**: spread across a 40×40 unit area (x and z from −20 to 20), y=0 unless elevated.
 - Include **exactly 2–3 viewpoints** suited to the scene.
