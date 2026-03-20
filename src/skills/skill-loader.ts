@@ -13,6 +13,12 @@ const BUILT_IN_SKILLS: SkillManifest[] = [
 		description: "Claude fills sceneData directly in the tool call — no separate provider needed",
 		version: "1.0.0",
 	},
+	{
+		name: "renderer-threejs",
+		category: "renderer",
+		description: "Three.js rendering patterns: PBR materials, post-processing, performance optimization, animation",
+		version: "1.0.0",
+	},
 ];
 
 export class SkillLoader {
@@ -26,13 +32,14 @@ export class SkillLoader {
 		return [...BUILT_IN_SKILLS];
 	}
 
-	getActiveSkill(category: "generator"): SkillManifest | null {
+	getActiveSkill(category: "generator" | "renderer"): SkillManifest | null {
 		const active = this.readActive();
-		const name = active[category] ?? "generator-claude";
+		const defaults: Record<string, string> = { generator: "generator-claude", renderer: "renderer-threejs" };
+		const name = active[category] ?? defaults[category];
 		return BUILT_IN_SKILLS.find((s) => s.category === category && s.name === name) ?? null;
 	}
 
-	getActivePromptMarkdown(category: "generator"): string | null {
+	getActivePromptMarkdown(category: "generator" | "renderer"): string | null {
 		const skill = this.getActiveSkill(category);
 		if (!skill) return null;
 		const mdPath = join(BUILT_IN_DIR, skill.name, "SKILL.md");
@@ -40,7 +47,7 @@ export class SkillLoader {
 		return readFileSync(mdPath, "utf-8");
 	}
 
-	activate(category: "generator", name: string): void {
+	activate(category: "generator" | "renderer", name: string): void {
 		const exists = BUILT_IN_SKILLS.some((s) => s.category === category && s.name === name);
 		if (!exists) throw new Error(`Skill "${name}" not found in category "${category}"`);
 		const active = this.readActive();

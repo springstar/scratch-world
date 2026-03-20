@@ -1,6 +1,6 @@
 export interface SkillManifest {
 	name: string;
-	category: "generator"; // only generator category for now
+	category: "generator" | "renderer";
 	description: string;
 	version: string;
 }
