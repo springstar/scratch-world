@@ -1,0 +1,14 @@
+{
+  "generator": "generator-claude",
+  "renderer": "renderer-threejs",
+  "threejs_disabled": [
+    "threejs-animation",
+    "threejs-fundamentals",
+    "threejs-geometry",
+    "threejs-interaction",
+    "threejs-lighting",
+    "threejs-materials",
+    "threejs-shaders",
+    "threejs-textures"
+  ]
+}
