@@ -200,16 +200,17 @@ export class SessionManager {
 	private hydrateActiveSkills(agent: Agent): void {
 		let prompt = agent.state.systemPrompt
 			.split("\n\n## Scene Generation")[0]
-			.split("\n\n## Renderer Capabilities")[0];
-
-		const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
-		if (generatorMd) {
-			prompt += `\n\n## Scene Generation\n\n${generatorMd}`;
-		}
+			.split("\n\n## Renderer Capabilities")[0]
+			.split("\n\n## Three.js Reference")[0];
 
 		const rendererMd = this.skillLoader.getActivePromptMarkdown("renderer");
 		if (rendererMd) {
 			prompt += `\n\n## Renderer Capabilities\n\n${rendererMd}`;
+		}
+
+		const threejsMd = this.skillLoader.getThreejsMarkdown();
+		if (threejsMd) {
+			prompt += `\n\n## Three.js Reference\n\n${threejsMd}`;
 		}
 
 		agent.setSystemPrompt(prompt);

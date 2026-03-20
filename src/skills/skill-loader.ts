@@ -19,6 +19,66 @@ const BUILT_IN_SKILLS: SkillManifest[] = [
 		description: "Three.js rendering patterns: PBR materials, post-processing, performance optimization, animation",
 		version: "1.0.0",
 	},
+	{
+		name: "threejs-animation",
+		category: "threejs",
+		description: "Keyframe animation, skeletal animation, morph targets, animation mixing",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-fundamentals",
+		category: "threejs",
+		description: "Three.js scene setup, camera, renderer, lights, basic objects",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-geometry",
+		category: "threejs",
+		description: "Built-in geometries, custom BufferGeometry, procedural meshes",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-interaction",
+		category: "threejs",
+		description: "Raycasting, pointer events, drag controls, object picking",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-lighting",
+		category: "threejs",
+		description: "Light types, shadows, environment maps, light helpers",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-materials",
+		category: "threejs",
+		description: "MeshStandardMaterial, MeshPhysicalMaterial, shader materials",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-postprocessing",
+		category: "threejs",
+		description: "EffectComposer, bloom, SSAO, depth of field, custom passes",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-shaders",
+		category: "threejs",
+		description: "GLSL shaders, ShaderMaterial, uniforms, custom effects",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-textures",
+		category: "threejs",
+		description: "Texture loading, UV mapping, canvas textures, video textures",
+		version: "1.0.0",
+	},
+	{
+		name: "threejs-loaders",
+		category: "threejs",
+		description: "GLTFLoader, DRACOLoader, FBXLoader, asset management",
+		version: "1.0.0",
+	},
 ];
 
 export class SkillLoader {
@@ -55,7 +115,35 @@ export class SkillLoader {
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
 	}
 
-	private readActive(): Record<string, string> {
+	// Returns markdown for all enabled threejs skills, concatenated.
+	// By default all threejs skills are enabled; add name to "threejs_disabled" array in skills.active.json to disable.
+	getThreejsMarkdown(): string | null {
+		const active = this.readActive();
+		const disabled: string[] = Array.isArray(active["threejs_disabled"]) ? (active["threejs_disabled"] as string[]) : [];
+		const skills = BUILT_IN_SKILLS.filter((s) => s.category === "threejs" && !disabled.includes(s.name));
+		if (skills.length === 0) return null;
+		const parts = skills.map((s) => {
+			const mdPath = join(BUILT_IN_DIR, s.name, "SKILL.md");
+			if (!existsSync(mdPath)) return null;
+			return readFileSync(mdPath, "utf-8");
+		}).filter(Boolean);
+		return parts.length > 0 ? parts.join("\n\n---\n\n") : null;
+	}
+
+	disableThreejsSkill(name: string): void {
+		const active = this.readActive();
+		const disabled: string[] = Array.isArray(active["threejs_disabled"]) ? (active["threejs_disabled"] as string[]) : [];
+		if (!disabled.includes(name)) disabled.push(name);
+		active["threejs_disabled"] = disabled;
+		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
+	}
+
+	enableThreejsSkill(name: string): void {
+		const active = this.readActive();
+		const disabled: string[] = Array.isArray(active["threejs_disabled"]) ? (active["threejs_disabled"] as string[]) : [];
+		active["threejs_disabled"] = disabled.filter((n) => n !== name);
+		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
+	}
 		if (!existsSync(this.activeFile)) return {};
 		try {
 			return JSON.parse(readFileSync(this.activeFile, "utf-8")) as Record<string, string>;
