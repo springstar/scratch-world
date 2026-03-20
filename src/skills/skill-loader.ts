@@ -119,20 +119,26 @@ export class SkillLoader {
 	// By default all threejs skills are enabled; add name to "threejs_disabled" array in skills.active.json to disable.
 	getThreejsMarkdown(): string | null {
 		const active = this.readActive();
-		const disabled: string[] = Array.isArray(active["threejs_disabled"]) ? (active["threejs_disabled"] as string[]) : [];
+		const disabled: string[] = Array.isArray(active["threejs_disabled"])
+			? (active["threejs_disabled"] as string[])
+			: [];
 		const skills = BUILT_IN_SKILLS.filter((s) => s.category === "threejs" && !disabled.includes(s.name));
 		if (skills.length === 0) return null;
-		const parts = skills.map((s) => {
-			const mdPath = join(BUILT_IN_DIR, s.name, "SKILL.md");
-			if (!existsSync(mdPath)) return null;
-			return readFileSync(mdPath, "utf-8");
-		}).filter(Boolean);
+		const parts = skills
+			.map((s) => {
+				const mdPath = join(BUILT_IN_DIR, s.name, "SKILL.md");
+				if (!existsSync(mdPath)) return null;
+				return readFileSync(mdPath, "utf-8");
+			})
+			.filter(Boolean);
 		return parts.length > 0 ? parts.join("\n\n---\n\n") : null;
 	}
 
 	disableThreejsSkill(name: string): void {
 		const active = this.readActive();
-		const disabled: string[] = Array.isArray(active["threejs_disabled"]) ? (active["threejs_disabled"] as string[]) : [];
+		const disabled: string[] = Array.isArray(active["threejs_disabled"])
+			? (active["threejs_disabled"] as string[])
+			: [];
 		if (!disabled.includes(name)) disabled.push(name);
 		active["threejs_disabled"] = disabled;
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
@@ -140,10 +146,14 @@ export class SkillLoader {
 
 	enableThreejsSkill(name: string): void {
 		const active = this.readActive();
-		const disabled: string[] = Array.isArray(active["threejs_disabled"]) ? (active["threejs_disabled"] as string[]) : [];
+		const disabled: string[] = Array.isArray(active["threejs_disabled"])
+			? (active["threejs_disabled"] as string[])
+			: [];
 		active["threejs_disabled"] = disabled.filter((n) => n !== name);
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
 	}
+
+	private readActive(): Record<string, string> {
 		if (!existsSync(this.activeFile)) return {};
 		try {
 			return JSON.parse(readFileSync(this.activeFile, "utf-8")) as Record<string, string>;
