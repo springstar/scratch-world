@@ -590,8 +590,8 @@ export class SceneRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    // OutputPass handles tone mapping — keep renderer's own mapping neutral
+    this.renderer.toneMapping = THREE.NoToneMapping;
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
