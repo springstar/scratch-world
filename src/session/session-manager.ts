@@ -203,6 +203,11 @@ export class SessionManager {
 			.split("\n\n## Renderer Capabilities")[0]
 			.split("\n\n## Three.js Reference")[0];
 
+		const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
+		if (generatorMd) {
+			prompt += `\n\n## Scene Generation\n\n${generatorMd}`;
+		}
+
 		const rendererMd = this.skillLoader.getActivePromptMarkdown("renderer");
 		if (rendererMd) {
 			prompt += `\n\n## Renderer Capabilities\n\n${rendererMd}`;
