@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
 
 // Colour palette keyed by object type
@@ -555,11 +560,16 @@ export class SceneRenderer {
   private controls: OrbitControls;
   private hemi: THREE.HemisphereLight;
   private sun: THREE.DirectionalLight;
+  private composer: EffectComposer;
+  private bloomPass: UnrealBloomPass;
+  private gltfLoader = new GLTFLoader();
 
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
   private animFrame = 0;
   private raycaster = new THREE.Raycaster();
+  private codeAnimCb: ((delta: number) => void) | null = null;
+  private lastFrameTime = 0;
 
   // Smooth transition state
   private transitionStart = 0;
@@ -580,6 +590,8 @@ export class SceneRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     this.renderer.shadowMap.enabled = true;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -598,27 +610,33 @@ export class SceneRenderer {
     this.sun.shadow.mapSize.set(2048, 2048);
     this.scene.add(this.sun);
 
+    // Post-processing: EffectComposer + bloom
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
+      0.4,   // strength
+      0.3,   // radius
+      0.85,  // threshold
+    );
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
+
     this.setupGround();
     this.setupResizeObserver(canvas);
     this.startLoop();
   }
 
-  loadScene(data: SceneData): void {
+  async loadScene(data: SceneData): Promise<void> {
     // Remove existing object nodes
     for (const obj of this.objects.values()) {
       this.scene.remove(obj);
     }
     this.objects.clear();
     this.objectMeta.clear();
+    this.codeAnimCb = null;
 
-    for (const obj of data.objects) {
-      const node = buildObject(obj);
-      this.scene.add(node);
-      this.objects.set(obj.objectId, node);
-      this.objectMeta.set(obj.objectId, obj);
-    }
-
-    // Apply environment settings
+    // Apply environment settings first (needed for bloom boost logic)
     const env = data.environment ?? {};
     const preset = resolveEnvPreset(env.skybox, env.timeOfDay);
 
@@ -632,6 +650,112 @@ export class SceneRenderer {
     this.sun.color.set(preset.sunColor);
     this.sun.intensity = preset.sunIntensity;
     this.sun.position.set(...preset.sunPosition);
+
+    // Apply bloom settings from environment.effects
+    const bloomCfg = env.effects?.bloom;
+    const baseStrength = bloomCfg?.strength ?? 0.4;
+    // Auto-boost bloom for night scenes
+    const isNight = env.skybox === "night" || env.timeOfDay === "night";
+    this.bloomPass.strength = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
+    this.bloomPass.radius = bloomCfg?.radius ?? 0.3;
+    this.bloomPass.threshold = bloomCfg?.threshold ?? 0.85;
+
+    // Path C: execute sceneCode if present
+    if (data.sceneCode) {
+      this.executeCode(data.sceneCode);
+      return;
+    }
+
+    // Path A + default: build objects from JSON schema
+    const loadPromises: Promise<void>[] = [];
+
+    for (const obj of data.objects) {
+      const modelUrl = obj.metadata.modelUrl as string | undefined;
+
+      if (modelUrl) {
+        // Path A: load GLTF model — show placeholder while loading
+        const placeholder = buildObject(obj);
+        this.scene.add(placeholder);
+        this.objects.set(obj.objectId, placeholder);
+        this.objectMeta.set(obj.objectId, obj);
+
+        const promise = this.loadGltfModel(obj, modelUrl, placeholder);
+        loadPromises.push(promise);
+      } else {
+        const node = buildObject(obj);
+        this.scene.add(node);
+        this.objects.set(obj.objectId, node);
+        this.objectMeta.set(obj.objectId, obj);
+      }
+    }
+
+    // Wait for all GLTF loads (errors are caught inside loadGltfModel)
+    await Promise.all(loadPromises);
+  }
+
+  private async loadGltfModel(obj: SceneObject, url: string, placeholder: THREE.Object3D): Promise<void> {
+    try {
+      const gltf = await this.gltfLoader.loadAsync(url);
+      const model = gltf.scene;
+
+      // Apply position from SceneObject
+      model.position.set(obj.position.x, obj.position.y, obj.position.z);
+
+      // Apply scale from metadata (default 1)
+      const scale = (obj.metadata.scale as number | undefined) ?? 1;
+      model.scale.setScalar(scale);
+
+      // Apply vertical offset for ground alignment
+      const yOffset = (obj.metadata.yOffset as number | undefined) ?? 0;
+      model.position.y += yOffset;
+
+      // Enable shadows on all meshes
+      model.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+
+      applyUserData(model, obj.objectId, obj.interactable);
+
+      // Replace placeholder with real model
+      this.scene.remove(placeholder);
+      this.scene.add(model);
+      this.objects.set(obj.objectId, model);
+    } catch (err) {
+      console.warn(`[SceneRenderer] Failed to load GLTF from ${url}:`, err);
+      // Keep placeholder — already in scene
+    }
+  }
+
+  executeCode(code: string): void {
+    // Clear objects loaded from JSON
+    for (const obj of this.objects.values()) {
+      this.scene.remove(obj);
+    }
+    this.objects.clear();
+    this.objectMeta.clear();
+    this.codeAnimCb = null;
+
+    try {
+      // Sandbox: receives THREE, scene, camera, renderer, controls, animate
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const fn = new Function(
+        "THREE", "scene", "camera", "renderer", "controls", "animate",
+        code,
+      );
+      fn(
+        THREE,
+        this.scene,
+        this.camera,
+        this.renderer,
+        this.controls,
+        (cb: (delta: number) => void) => { this.codeAnimCb = cb; },
+      );
+    } catch (err) {
+      console.error("[SceneRenderer] sceneCode execution error:", err);
+    }
   }
 
   goToViewpoint(viewpoint: Viewpoint): void {
@@ -685,6 +809,7 @@ export class SceneRenderer {
     cancelAnimationFrame(this.animFrame);
     this.controls.dispose();
     this.renderer.dispose();
+    this.composer.dispose();
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
@@ -705,13 +830,17 @@ export class SceneRenderer {
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
+      this.composer.setSize(w, h);
     });
     observer.observe(canvas);
   }
 
   private startLoop(): void {
-    const loop = () => {
+    const loop = (now: number) => {
       this.animFrame = requestAnimationFrame(loop);
+
+      const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
+      this.lastFrameTime = now;
 
       // Smooth camera transition
       if (this.transitioning) {
@@ -726,9 +855,19 @@ export class SceneRenderer {
         if (t >= 1) this.transitioning = false;
       }
 
+      // Per-frame callback from sceneCode
+      if (this.codeAnimCb) {
+        try {
+          this.codeAnimCb(delta);
+        } catch (err) {
+          console.warn("[SceneRenderer] codeAnimCb error:", err);
+          this.codeAnimCb = null;
+        }
+      }
+
       this.controls.update();
-      this.renderer.render(this.scene, this.camera);
+      this.composer.render();
     };
-    loop();
+    loop(0);
   }
 }

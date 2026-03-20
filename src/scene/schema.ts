@@ -17,11 +17,22 @@ export const SceneObjectSchema = Type.Object({
 	metadata: Type.Record(Type.String(), Type.Unknown()),
 });
 
+export const BloomEffectSchema = Type.Object({
+	strength: Type.Optional(Type.Number()),
+	radius: Type.Optional(Type.Number()),
+	threshold: Type.Optional(Type.Number()),
+});
+
+export const EffectsSchema = Type.Object({
+	bloom: Type.Optional(BloomEffectSchema),
+});
+
 export const EnvironmentConfigSchema = Type.Object({
 	skybox: Type.Optional(Type.String()),
 	ambientLight: Type.Optional(Type.String()),
 	weather: Type.Optional(Type.String()),
 	timeOfDay: Type.Optional(Type.String()),
+	effects: Type.Optional(EffectsSchema),
 });
 
 export const ViewpointSchema = Type.Object({
@@ -35,4 +46,5 @@ export const SceneDataSchema = Type.Object({
 	objects: Type.Array(SceneObjectSchema),
 	environment: EnvironmentConfigSchema,
 	viewpoints: Type.Array(ViewpointSchema),
+	sceneCode: Type.Optional(Type.String()),
 });

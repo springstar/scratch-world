@@ -8,6 +8,12 @@ const parameters = Type.Object({
 	prompt: Type.String({ description: "Detailed description of the scene to generate" }),
 	title: Type.Optional(Type.String({ description: "Short title for the scene (max 60 chars)" })),
 	sceneData: Type.Optional(SceneDataSchema),
+	sceneCode: Type.Optional(
+		Type.String({
+			description:
+				"Optional self-contained Three.js JS code to render the scene. When provided, this overrides or supplements sceneData rendering.",
+		}),
+	),
 });
 
 export function createSceneTool(
@@ -22,7 +28,14 @@ export function createSceneTool(
 			"Generate a new 3D scene from a text prompt. Use this when the user wants to create a new world, environment, or location.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
-			const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, params.sceneData);
+			// Merge sceneCode into sceneData if provided
+			const mergedSceneData = params.sceneCode
+				? {
+						...(params.sceneData ?? { objects: [], environment: {}, viewpoints: [] }),
+						sceneCode: params.sceneCode,
+					}
+				: params.sceneData;
+			const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, mergedSceneData);
 			return {
 				content: [
 					{

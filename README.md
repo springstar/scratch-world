@@ -111,7 +111,7 @@ When a scene is created, the bot prints a viewer URL. Open it in a browser to se
 
 ## Development status
 
-**Stage: Early prototype — core pipeline working, 3D rendering not yet implemented.**
+**Stage: Prototype with core 3D rendering — message pipeline, scene tools, and viewer rendering working.**
 
 What works:
 - Full message pipeline: stdin/Telegram → agent → tool calls → reply
@@ -122,9 +122,14 @@ What works:
 - Context trimming to prevent unbounded message history growth
 - Concurrent message handling (per-session serial queue)
 - Unit tests for core components
+- Three.js renderer (viewer/src/renderer/scene-renderer.ts) with:
+  - Procedurally generated objects (terrain, buildings, trees, NPCs, items)
+  - Post-processing bloom effects (configurable per scene)
+  - GLTF/GLB model loading from URLs
+  - Code generation mode for custom Three.js animations and effects
+  - Interaction system with raycast picking
 
 What is not yet implemented:
-- Viewer App UI — the frontend exists as a Vite scaffold but does not render 3D content yet
 - Marble provider — `StubProvider` returns static fixtures; real 3D generation requires a Marble API key and a working integration
 - Telegram `presentScene()` — sends a URL but the Web App button integration is minimal
 - Scene versioning / rollback — schema is defined but `scene_versions` table is not populated

@@ -329,6 +329,78 @@ https://<viewer-host>/scene/<sceneId>?session=<sessionId>
 
 The viewer uses `sessionId` from the query string to establish the WebSocket connection and attribute interactions to the correct agent session.
 
+### 10. Three.js Scene Renderer
+
+**File:** `viewer/src/renderer/scene-renderer.ts`
+
+The renderer transforms `SceneData` into a Three.js scene. It implements three rendering modes:
+
+#### Mode A: Procedural Object Building
+
+For each `SceneObject` in `sceneData.objects`, the renderer:
+1. Infers or applies the shape hint from `metadata.shape` (desk, chair, blackboard, court, hoop, etc.)
+2. Procedurally constructs the appropriate geometry (Box, Cylinder, TorusGeometry, etc.)
+3. Applies PBR materials with colors keyed by object type
+4. Adds shadows, scale jitter (trees ±15%), and random rotations for organic look
+5. Registers the object for raycasting (interaction picking)
+
+Supported object types and shapes are documented in `src/skills/built-in/renderer-threejs/SKILL.md`.
+
+#### Mode B: Post-Processing (Bloom)
+
+An `EffectComposer` chain is set up with:
+- `RenderPass` — renders the base scene
+- `UnrealBloomPass` — applies glow to emissive surfaces (configurable strength, radius, threshold)
+- `OutputPass` — final composite to screen
+
+**Configuration via `environment.effects.bloom`:**
+```json
+{ "strength": 0.4, "radius": 0.3, "threshold": 0.85 }
+```
+
+Night scenes auto-apply bloom strength of 0.8+ for enhanced neon/glow effects.
+
+#### Mode C: GLTF Model Loading
+
+Any `SceneObject` with `metadata.modelUrl` (a GLTF or GLB URL) is loaded asynchronously:
+1. A placeholder primitive is shown initially
+2. `GLTFLoader` fetches the model from the URL (must be CORS-accessible)
+3. On success, the placeholder is replaced with the real model, scaled and positioned per metadata
+4. On error, the placeholder remains and a console warning is logged
+
+Supported metadata fields:
+- `modelUrl` — GLTF/GLB URL
+- `scale` — uniform scale (default 1)
+- `yOffset` — vertical offset for ground alignment
+
+#### Mode D: Code Generation (Custom Three.js)
+
+When `sceneData.sceneCode` is provided, the renderer:
+1. Creates a sandbox with: `THREE`, `scene`, `camera`, `renderer`, `controls`, `animate`
+2. Executes the code string in the sandbox (no network, no DOM)
+3. Allows custom particle systems, procedural geometry, and animations
+4. The `animate(cb)` function registers per-frame callbacks with delta time
+
+See `src/skills/built-in/generator-claude/SKILL.md` for examples and guidelines.
+
+#### Environment Presets
+
+The renderer supports environment configurations that automatically adjust:
+- Sky color
+- Sun color, intensity, and position
+- Ambient light intensity
+- Fog color
+
+Presets: `clear_day`, `sunset`, `night`, `overcast` (skybox) combined with `dawn`, `noon`, `dusk`, `night` (timeOfDay).
+
+#### Interaction Picking
+
+The renderer maintains a raycast-enabled object map. When the user clicks in the viewer:
+1. A raycaster is cast from the camera through the click point
+2. Intersecting objects are tested in order
+3. The first interactable object is identified by its stored `objectId` and `interactionHint`
+4. The viewer sends `POST /interact` with the action, triggering the agent loop
+
 ---
 
 ## Data Storage

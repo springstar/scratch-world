@@ -4,9 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Chat-driven AI agent application. Users send natural language messages via messaging channels (Telegram MVP, later WeChat/Discord/WhatsApp). The agent interprets intent, calls tools to create and evolve persistent 3D scenes via a pluggable 3D provider (WorldLabs Marble as MVP), and responds with scene links and narrative text.
+Chat-driven AI agent application. Users send natural language messages via messaging channels (Telegram MVP, later WeChat/Discord/WhatsApp). The agent interprets intent, calls tools to create and evolve persistent 3D scenes, and responds with scene links and narrative text.
 
-Architecture documentation: `doc/architecture.md`
+**Key features:**
+- Three.js viewer with procedurally generated and GLTF-loaded 3D objects
+- Post-processing bloom effects (configurable per scene)
+- Code generation mode for custom Three.js animations and effects
+- Pluggable 3D provider backend (WorldLabs Marble MVP, Stub for local dev)
+
+**Documentation:**
+- `doc/architecture.md` — System design
+- `doc/CODEMAP.md` — Architectural overview and module reference
+- `doc/interactions.md` — Interaction system design
+- `src/skills/built-in/renderer-threejs/SKILL.md` — Three.js rendering capabilities
+- `src/skills/built-in/generator-claude/SKILL.md` — Scene generation guidelines
 
 ## Commands
 
@@ -41,15 +52,16 @@ src/
 ├── agent/
 │   ├── agent-factory.ts      # Wire Agent with tools + system prompt
 │   └── tools/
-│       ├── create-scene.ts
-│       ├── update-scene.ts
+│       ├── create-scene.ts   # Tool: create_scene(prompt, title?, sceneData?, sceneCode?)
+│       ├── update-scene.ts   # Tool: update_scene(sceneId, instruction, sceneData?, sceneCode?)
 │       ├── get-scene.ts
 │       ├── list-scenes.ts
 │       ├── navigate-to.ts
 │       └── interact-with-object.ts
 ├── scene/
 │   ├── scene-manager.ts      # Orchestrate provider calls, versioning, storage
-│   └── types.ts              # Scene, SceneData, SceneObject, Viewpoint, ProviderRef
+│   ├── types.ts              # Scene, SceneData, SceneObject, Viewpoint, ProviderRef
+│   └── schema.ts             # Typebox schemas for validation
 ├── providers/
 │   ├── types.ts              # ThreeDProvider interface, ProviderResult
 │   ├── marble/
@@ -61,6 +73,16 @@ src/
 │   ├── scene-repo.ts
 │   └── session-repo.ts
 └── index.ts                  # Entrypoint: wire everything, start gateway
+
+viewer/
+├── src/
+│   ├── components/
+│   │   └── ViewerCanvas.tsx  # React wrapper for scene-renderer.ts (async loadScene)
+│   ├── renderer/
+│   │   └── scene-renderer.ts # Three.js: builds scene from SceneData (modes: JSON/GLTF/bloom/code)
+│   ├── types.ts              # Viewer-side types (mirrors src/scene/types.ts)
+│   └── index.tsx
+└── ...
 ```
 
 ## Code Quality
@@ -110,6 +132,69 @@ Never commit `.env` or any file containing secrets.
 2. Register the adapter in `src/index.ts` by passing it to `ChannelGateway`.
 3. Add `<NAME>_BOT_TOKEN` (or equivalent credential) to `.env` and document above.
 4. Add adapter to the supported channels table in `doc/architecture.md`.
+
+## Scene Generation and Rendering
+
+The viewer supports **three rendering paths** via `sceneData` and `sceneCode` parameters:
+
+### Path A: Procedural Object Generation (Default)
+
+`sceneData.objects` contains a JSON array of scene objects. The renderer builds Three.js meshes procedurally based on `type` and `metadata.shape`. Examples: `terrain/floor`, `object/desk`, `tree`, `npc`, `item`.
+
+Use when: Simple scenes with standard furniture, terrain, NPCs, trees, buildings.
+
+### Path B: GLTF Model Loading
+
+Any object can load a real 3D model by setting `metadata.modelUrl` to a CORS-accessible GLTF or GLB URL.
+
+Use when: You want to include specific 3D models (via free CDNs like Kenney.nl, Quaternius, or KhronosGroup glTF Sample Assets).
+
+Example metadata:
+```json
+{
+  "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
+  "scale": 0.01,
+  "yOffset": 0.5
+}
+```
+
+### Path C: Custom Code Generation
+
+When `sceneData.sceneCode` is provided, the renderer bypasses JSON parsing and executes the code in a sandbox. Full Three.js control available.
+
+Use when: Custom animations, particle systems, procedural geometry, custom shaders.
+
+Sandbox variables: `THREE`, `scene`, `camera`, `renderer`, `controls`, `animate(cb)`
+
+Example:
+```javascript
+const geometry = new THREE.SphereGeometry(5, 32, 32);
+const material = new THREE.MeshStandardMaterial({ color: 0xff00ff });
+const sphere = new THREE.Mesh(geometry, material);
+scene.add(sphere);
+
+animate((delta) => {
+  sphere.rotation.y += delta * 0.5;
+});
+```
+
+---
+
+### Path D: Post-Processing Bloom Effects
+
+All scenes support configurable bloom via `environment.effects.bloom`:
+
+```json
+{
+  "strength": 0.4,      // glow intensity
+  "radius": 0.3,        // bloom spread
+  "threshold": 0.85     // brightness threshold to trigger glow
+}
+```
+
+Night scenes auto-apply bloom strength ≥ 0.8 for enhanced mood.
+
+---
 
 ## Adding a New 3D Provider
 

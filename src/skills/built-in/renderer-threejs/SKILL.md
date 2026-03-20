@@ -143,14 +143,73 @@ Supported stateful shapes:
 
 ---
 
-## Post-Processing (available, not yet enabled)
+## Post-Processing Effects
 
-The viewer supports these effects (can be activated in `scene-renderer.ts`):
-- **Bloom** — glow on emissive surfaces
-- **SSAO** — ambient occlusion for depth
-- **Depth of Field** — bokeh blur for cinematic focus
-- **Vignette** — subtle edge darkening
+The viewer now ships with an `EffectComposer` + `UnrealBloomPass` active on every frame.
 
-When generating scenes with strong light sources (neon signs, fires, windows) or scenes that
-benefit from depth (long corridors, outdoor vistas), note this in `description` fields as hints
-for future post-processing passes.
+### Bloom (always on, configurable)
+
+Default settings: strength=0.4, radius=0.3, threshold=0.85 (subtle global glow).
+Configure per-scene via `environment.effects.bloom`:
+
+```json
+{
+  "environment": {
+    "skybox": "night",
+    "effects": {
+      "bloom": { "strength": 1.2, "radius": 0.4, "threshold": 0.7 }
+    }
+  }
+}
+```
+
+Night scenes auto-boost bloom strength to 0.8 minimum. Objects with emissive materials (neon signs, glowing windows) benefit most.
+
+---
+
+## GLTF Model Loading
+
+Any object can load a real 3D GLTF/GLB model by setting `metadata.modelUrl`. A placeholder primitive shows while loading; on success it is replaced by the real model.
+
+```json
+{
+  "objectId": "obj_helmet",
+  "name": "Damaged flight helmet",
+  "type": "item",
+  "position": { "x": 2, "y": 0, "z": 0 },
+  "metadata": {
+    "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/DamagedHelmet/glTF/DamagedHelmet.gltf",
+    "scale": 1.5,
+    "yOffset": 0.5
+  }
+}
+```
+
+Metadata fields:
+- `modelUrl` (string) — GLTF or GLB URL (must be CORS-accessible)
+- `scale` (number, default 1) — uniform scale for the loaded model
+- `yOffset` (number, default 0) — vertical offset to correct ground alignment
+
+On load error, the placeholder remains and a console warning is logged.
+
+---
+
+## Code Generation Mode (sceneCode)
+
+For scenes that need full Three.js control — particle systems, animations, procedural geometry — `SceneData.sceneCode` lets Claude supply a JS function body that runs in a sandbox:
+
+```
+Sandbox: { THREE, scene, camera, renderer, controls, animate }
+```
+
+When `sceneCode` is present, the renderer skips JSON object building and calls `executeCode()` instead. The `animate(cb)` function registers a per-frame callback receiving `delta` (seconds since last frame).
+
+---
+
+## Post-Processing (available, now enabled)
+
+The viewer ships these effects (active by default):
+- **Bloom** — glow on emissive surfaces (UnrealBloomPass, configurable per scene)
+
+Future additions can be added as new passes to `EffectComposer` in `scene-renderer.ts`.
+

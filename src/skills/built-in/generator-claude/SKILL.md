@@ -2,6 +2,8 @@
 
 When the user asks you to create or update a scene, you MUST include a `sceneData` argument in your `create_scene` or `update_scene` tool call. Do NOT omit `sceneData` — without it the system cannot render your scene.
 
+Alternatively, for scenes requiring complex animations or custom visuals, use **Code Generation Mode** (see below).
+
 ## SceneData JSON Schema
 
 The `sceneData` field must be a JSON object with this exact structure:
@@ -12,7 +14,14 @@ The `sceneData` field must be a JSON object with this exact structure:
     "skybox": "clear_day | sunset | night | overcast",
     "timeOfDay": "dawn | noon | dusk | night",
     "ambientLight": "warm | cool | neutral",
-    "weather": "clear | foggy | rainy"
+    "weather": "clear | foggy | rainy",
+    "effects": {
+      "bloom": {
+        "strength": 0.4,
+        "radius": 0.3,
+        "threshold": 0.85
+      }
+    }
   },
   "viewpoints": [
     {
@@ -34,7 +43,10 @@ The `sceneData` field must be a JSON object with this exact structure:
       "metadata": {
         "shape": "desk | chair | blackboard | window | door | wall | floor | shelf | box | pillar | hoop | court",
         "state": "current state string if stateful",
-        "transitions": { "action verb": "next state" }
+        "transitions": { "action verb": "next state" },
+        "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
+        "scale": 1.0,
+        "yOffset": 0
       }
     }
   ]
@@ -67,3 +79,110 @@ The `sceneData` field must be a JSON object with this exact structure:
 - `interactable: true` for `npc`, `item`, and interactive objects; `false` for floor/wall/ceiling terrain.
 - All `objectId` values must be unique strings (e.g. `"obj_gate"`, `"obj_fountain"`).
 - All `viewpointId` values must be unique strings (e.g. `"vp_entrance"`, `"vp_overview"`).
+
+## GLTF Model Loading (Path A)
+
+Any object can load a real 3D model by setting `metadata.modelUrl` to a GLTF/GLB URL. The viewer will show a placeholder shape while loading, then replace it with the real model.
+
+```json
+{
+  "objectId": "obj_duck",
+  "name": "Yellow rubber duck",
+  "type": "item",
+  "position": { "x": 0, "y": 0, "z": 0 },
+  "description": "A cheerful rubber duck",
+  "interactable": true,
+  "metadata": {
+    "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
+    "scale": 0.01,
+    "yOffset": 0
+  }
+}
+```
+
+**Free asset sources:**
+- **Kenney.nl** (kenney.nl/assets) — game-ready assets, CC0 license
+- **Quaternius** (quaternius.com) — animated characters and props, CC0 license
+- **KhronosGroup glTF Sample Assets** — `https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/`
+  - Duck, DamagedHelmet, Avocado, CesiumMilkTruck, FlightHelmet, etc.
+- **Three.js examples** — `https://threejs.org/examples/models/`
+
+**Metadata fields for GLTF:**
+- `modelUrl` (string) — URL to the `.gltf` or `.glb` file
+- `scale` (number, default 1) — uniform scale applied to the loaded model
+- `yOffset` (number, default 0) — vertical offset to correct ground alignment
+
+## Post-Processing Effects (Path B)
+
+Set `environment.effects.bloom` to enable glow on emissive materials:
+
+```json
+{
+  "environment": {
+    "skybox": "night",
+    "effects": {
+      "bloom": {
+        "strength": 1.2,
+        "radius": 0.4,
+        "threshold": 0.7
+      }
+    }
+  }
+}
+```
+
+**When to use bloom:**
+- Night scenes with neon lights, glowing windows, streetlamps
+- Sci-fi scenes with emissive panels, energy beams
+- Sunset scenes with strong light halos
+- Default bloom is always active (subtle: strength=0.4, threshold=0.85)
+- Night skybox auto-boosts bloom strength to 0.8 minimum
+
+## Code Generation Mode (Path C)
+
+For scenes requiring complex animations, custom shaders, or visual effects beyond the JSON schema, pass `sceneCode` instead of (or alongside) `sceneData`.
+
+The `sceneCode` is a JavaScript function body that receives the full rendering context:
+
+```
+Sandbox variables available:
+  - THREE      — the Three.js library (all classes, constants, etc.)
+  - scene      — THREE.Scene (add your objects here)
+  - camera     — THREE.PerspectiveCamera
+  - renderer   — THREE.WebGLRenderer
+  - controls   — OrbitControls
+  - animate    — function(cb: (delta: number) => void) — register a per-frame callback
+```
+
+**Example: Animated particle system**
+
+Pass `sceneCode` in your tool call (alongside a minimal `sceneData` with viewpoints):
+
+```javascript
+// Sci-fi particle vortex
+const geometry = new THREE.BufferGeometry();
+const count = 3000;
+const positions = new Float32Array(count * 3);
+for (let i = 0; i < count; i++) {
+  const r = 5 + Math.random() * 10;
+  const theta = Math.random() * Math.PI * 2;
+  const phi = (Math.random() - 0.5) * Math.PI;
+  positions[i * 3]     = r * Math.cos(theta) * Math.cos(phi);
+  positions[i * 3 + 1] = r * Math.sin(phi) * 3;
+  positions[i * 3 + 2] = r * Math.sin(theta) * Math.cos(phi);
+}
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+const material = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.08, transparent: true, opacity: 0.8 });
+const particles = new THREE.Points(geometry, material);
+scene.add(particles);
+
+animate((delta) => {
+  particles.rotation.y += delta * 0.3;
+  particles.rotation.x += delta * 0.05;
+});
+```
+
+**When to use Code Mode vs JSON Mode:**
+- **JSON Mode** (default): simple scenes, furniture, buildings, NPCs, nature — use `sceneData`
+- **Code Mode**: particle systems, procedural animations, custom shaders, morphing geometry, physics — use `sceneCode`
+- Code mode is sandboxed — no network calls, no DOM manipulation, only Three.js API

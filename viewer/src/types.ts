@@ -30,12 +30,16 @@ export interface EnvironmentConfig {
   ambientLight?: string;
   weather?: string;
   timeOfDay?: string;
+  effects?: {
+    bloom?: { strength?: number; radius?: number; threshold?: number };
+  };
 }
 
 export interface SceneData {
   objects: SceneObject[];
   environment: EnvironmentConfig;
   viewpoints: Viewpoint[];
+  sceneCode?: string;
 }
 
 export interface SceneResponse {

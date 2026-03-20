@@ -8,6 +8,12 @@ const parameters = Type.Object({
 	sceneId: Type.String({ description: "ID of the scene to update" }),
 	instruction: Type.String({ description: "What to change in the scene" }),
 	sceneData: Type.Optional(SceneDataSchema),
+	sceneCode: Type.Optional(
+		Type.String({
+			description:
+				"Optional self-contained Three.js JS code to render the scene. When provided, this overrides or supplements sceneData rendering.",
+		}),
+	),
 });
 
 export function updateSceneTool(
@@ -21,7 +27,13 @@ export function updateSceneTool(
 			"Modify an existing scene based on a natural language instruction. Use this when the user wants to add, remove, or change something in a scene.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
-			const scene = await sceneManager.updateScene(params.sceneId, params.instruction, params.sceneData);
+			const mergedSceneData = params.sceneCode
+				? {
+						...(params.sceneData ?? { objects: [], environment: {}, viewpoints: [] }),
+						sceneCode: params.sceneCode,
+					}
+				: params.sceneData;
+			const scene = await sceneManager.updateScene(params.sceneId, params.instruction, mergedSceneData);
 			return {
 				content: [
 					{

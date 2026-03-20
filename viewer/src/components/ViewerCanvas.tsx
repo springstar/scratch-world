@@ -29,7 +29,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
 
   // Reload scene when data changes
   useEffect(() => {
-    rendererRef.current?.loadScene(sceneData);
+    rendererRef.current?.loadScene(sceneData).catch(console.error);
   }, [sceneData]);
 
   // Navigate to viewpoint when it changes
