@@ -235,14 +235,14 @@ function buildObjectByShape(
         makeMat(0xff6600, 0.5, 0.3),
       );
       rim.rotation.x = Math.PI / 2;
-      rim.position.set(0.9, 3.05, 0);
+      rim.position.set(1.37, 3.05, 0);
       group.add(rim);
       // Net (simplified as thin cylinder)
       const net = new THREE.Mesh(
         new THREE.CylinderGeometry(0.225, 0.12, 0.45, 12, 1, true),
         new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, opacity: 0.4, transparent: true, side: THREE.DoubleSide }),
       );
-      net.position.set(0.9, 2.82, 0);
+      net.position.set(1.37, 2.82, 0);
       group.add(net);
       // Mirror for right-side hoop (positive x)
       if (x > 0) group.rotation.y = Math.PI;
