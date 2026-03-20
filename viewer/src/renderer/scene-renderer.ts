@@ -1,9 +1,5 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
 
@@ -560,10 +556,7 @@ export class SceneRenderer {
   private controls: OrbitControls;
   private hemi: THREE.HemisphereLight;
   private sun: THREE.DirectionalLight;
-  private composer: EffectComposer;
-  private bloomPass: UnrealBloomPass;
   private gltfLoader = new GLTFLoader();
-
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
   private animFrame = 0;
@@ -590,8 +583,6 @@ export class SceneRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     this.renderer.shadowMap.enabled = true;
-    // OutputPass handles tone mapping — keep renderer's own mapping neutral
-    this.renderer.toneMapping = THREE.NoToneMapping;
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -609,18 +600,6 @@ export class SceneRenderer {
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.scene.add(this.sun);
-
-    // Post-processing: EffectComposer + bloom
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
-      0.4,   // strength
-      0.3,   // radius
-      0.85,  // threshold
-    );
-    this.composer.addPass(this.bloomPass);
-    this.composer.addPass(new OutputPass());
 
     this.setupGround();
     this.setupResizeObserver(canvas);
@@ -651,14 +630,7 @@ export class SceneRenderer {
     this.sun.intensity = preset.sunIntensity;
     this.sun.position.set(...preset.sunPosition);
 
-    // Apply bloom settings from environment.effects
-    const bloomCfg = env.effects?.bloom;
-    const baseStrength = bloomCfg?.strength ?? 0.4;
-    // Auto-boost bloom for night scenes
-    const isNight = env.skybox === "night" || env.timeOfDay === "night";
-    this.bloomPass.strength = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
-    this.bloomPass.radius = bloomCfg?.radius ?? 0.3;
-    this.bloomPass.threshold = bloomCfg?.threshold ?? 0.85;
+    // bloom config stored in env.effects?.bloom — post-processing to be re-enabled when stable
 
     // Path C: execute sceneCode if present
     if (data.sceneCode) {
@@ -809,7 +781,6 @@ export class SceneRenderer {
     cancelAnimationFrame(this.animFrame);
     this.controls.dispose();
     this.renderer.dispose();
-    this.composer.dispose();
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
@@ -830,7 +801,6 @@ export class SceneRenderer {
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
-      this.composer.setSize(w, h);
     });
     observer.observe(canvas);
   }
@@ -866,7 +836,7 @@ export class SceneRenderer {
       }
 
       this.controls.update();
-      this.composer.render();
+      this.renderer.render(this.scene, this.camera);
     };
     loop(0);
   }
