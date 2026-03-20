@@ -198,10 +198,21 @@ export class SessionManager {
 	}
 
 	private hydrateActiveSkills(agent: Agent): void {
-		const md = this.skillLoader.getActivePromptMarkdown("generator");
-		if (!md) return;
-		const base = agent.state.systemPrompt.split("\n\n## Scene Generation")[0];
-		agent.setSystemPrompt(`${base}\n\n## Scene Generation\n\n${md}`);
+		let prompt = agent.state.systemPrompt
+			.split("\n\n## Scene Generation")[0]
+			.split("\n\n## Renderer Capabilities")[0];
+
+		const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
+		if (generatorMd) {
+			prompt += `\n\n## Scene Generation\n\n${generatorMd}`;
+		}
+
+		const rendererMd = this.skillLoader.getActivePromptMarkdown("renderer");
+		if (rendererMd) {
+			prompt += `\n\n## Renderer Capabilities\n\n${rendererMd}`;
+		}
+
+		agent.setSystemPrompt(prompt);
 	}
 
 	private async saveSession(msg: ChatMessage, agent: Agent, activeSceneId: string | null): Promise<void> {
