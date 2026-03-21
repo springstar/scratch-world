@@ -620,9 +620,52 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         }
         group.position.set(x, y, z);
         root = group;
-      } else if (shape === "floor") {
+      } else if (shape === "hill") {
+        // Rounded hill — upper hemisphere dome.
+        // position.y = top of hill (peak); objects on the hill sit at this y.
+        const hw = (obj.metadata.width  as number | undefined) ?? 10; // half-width footprint radius
+        const hh = (obj.metadata.height as number | undefined) ?? 4;  // peak height above base
+        const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
+        const mesh = new THREE.Mesh(geo, makeMat(0x4a6a3a, 0.95, 0));
+        mesh.scale.set(hw, hh, hw);
+        mesh.position.set(x, y - hh * 0.05, z); // slight sink so base blends into ground
+        mesh.receiveShadow = true;
+        mesh.castShadow = true;
+        root = mesh;
+      } else if (shape === "cliff") {
+        // Sheer rock face — tall, narrow slab.
+        // position.y = top of cliff; base is buried underground.
+        const cw = (obj.metadata.width  as number | undefined) ?? 12;
+        const ch = (obj.metadata.height as number | undefined) ?? 8;
+        const cd = (obj.metadata.depth  as number | undefined) ?? 3;
         const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(20, 0.15, 20),
+          new THREE.BoxGeometry(cw, ch, cd),
+          makeMat(0x8a7a68, 0.95, 0.05),
+        );
+        // y places top at position.y — bury lower half underground for seamless join
+        mesh.position.set(x, y - ch * 0.5 + 0.1, z);
+        mesh.receiveShadow = true;
+        mesh.castShadow = true;
+        root = mesh;
+      } else if (shape === "platform") {
+        // Elevated flat slab (cliff-top, raised plaza, floating island tier).
+        // position.y = top surface where objects sit.
+        const pw = (obj.metadata.width  as number | undefined) ?? 10;
+        const ph = (obj.metadata.height as number | undefined) ?? 2;  // slab thickness
+        const pd = (obj.metadata.depth  as number | undefined) ?? 10;
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(pw, ph, pd),
+          makeMat(0x9b8c7a, 0.95, 0),
+        );
+        mesh.position.set(x, y - ph * 0.5, z); // top surface at y
+        mesh.receiveShadow = true;
+        mesh.castShadow = true;
+        root = mesh;
+      } else if (shape === "floor") {
+        const fw = (obj.metadata.width as number | undefined) ?? 20;
+        const fd = (obj.metadata.depth as number | undefined) ?? 20;
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(fw, 0.15, fd),
           makeMat(0xc8b89a, 1, 0),
         );
         mesh.position.set(x, y + 0.075, z);

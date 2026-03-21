@@ -41,12 +41,15 @@ The `sceneData` field must be a JSON object with this exact structure:
       "interactable": true,
       "interactionHint": "try 'examine the ...'",
       "metadata": {
-        "shape": "desk | chair | blackboard | window | door | wall | floor | shelf | box | pillar | hoop | court",
+        "shape": "desk | chair | blackboard | window | door | wall | floor | shelf | box | pillar | hoop | court | hill | cliff | platform",
         "state": "current state string if stateful",
         "transitions": { "action verb": "next state" },
         "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
         "scale": 1.0,
-        "yOffset": 0
+        "yOffset": 0,
+        "width": 20,
+        "depth": 20,
+        "height": 4
       }
     }
   ]
@@ -65,7 +68,7 @@ The `sceneData` field must be a JSON object with this exact structure:
   - Use type `"npc"` for people. Use type `"item"` for small pickable items.
   - Do **NOT** add trees or outdoor buildings to indoor scenes.
 - **OUTDOOR scenes** (forest, city, park, street, beach, rooftop, **basketball court, tennis court, football field, sports field, playground**, etc.):
-  - Use type `"terrain"` for ground only. **Do NOT add walls or ceiling.**
+  - Use type `"terrain"` for ground and landforms. **Do NOT add walls or ceiling.**
   - Use types `"tree"`, `"building"`, `"npc"`, `"item"`, `"object"` freely.
   - Sports courts and open-air venues are always OUTDOOR — **never add walls or ceiling**.
 - **INDOOR arena** (gymnasium, sports hall — only when the prompt explicitly says "indoor" or "gymnasium/体育馆"):
@@ -76,24 +79,126 @@ The `sceneData` field must be a JSON object with this exact structure:
   - Add surrounding elements freely: `npc` for players, `item` for balls, `object` (shape `box`) for benches/scoreboards, `tree` or `building` for surroundings.
   - Do **NOT** add walls, ceiling, or indoor floor terrain.
 - **Stateful objects**: set `metadata.state` (e.g. `"written"`, `"open"`, `"closed"`, `"on"`, `"off"`) and `metadata.transitions` (e.g. `{"erase": "erased", "write": "written"}` for a blackboard).
-- **Object positions**: spread across a 40×40 unit area (x and z from −20 to 20).
-- **`position.y` rules** — CRITICAL, wrong y causes floating or sunken objects:
 
-| Object | `position.y` | Reason |
+---
+
+## Open-World Depth & Elevation (CRITICAL for immersive scenes)
+
+A flat scene with everything at `y=0` looks like a tabletop game, **not** an open world. Follow these rules for any outdoor or large-scale scene.
+
+### Three-layer depth composition
+
+Divide the scene into three depth bands along the **z axis**:
+
+| Layer | z range | Purpose | Example objects |
+|---|---|---|---|
+| **Foreground** | z = +5 to +15 (nearest to camera) | Detail, texture, interactables | NPC, items, low rock, flowers |
+| **Midground** | z = -5 to +5 (scene focus) | Main action, focal points | Buildings, trees, court, shrine |
+| **Background** | z = -15 to -25 (far horizon) | Scale, atmosphere, world edge | Distant mountains, cliff faces, forest wall |
+
+- Background objects should be **larger** (scale 1.5–3×) and slightly **elevated** to peek above the midground.
+- Use **fog** (`"weather": "foggy"`) to naturally fade far objects — this is free atmospheric depth.
+- Spread objects across the full x range (−20 to +20) so the scene never feels like a single row.
+
+### Elevation & height variation
+
+**NEVER put every object at y=0.** Use elevation to break the flat-plane monotony:
+
+| Terrain shape | `position.y` meaning | Typical `metadata.height` |
 |---|---|---|
-| `terrain/floor` | `0` | Ground level |
-| `terrain/wall` | half wall height (e.g. `1.6`) | Renderer uses y as wall center |
-| `terrain/ceiling` | room height (e.g. `3.2`) | Renderer uses y directly |
-| `object/*` furniture | `0` | Renderer builds upward from y=0 |
-| `npc` | `0` | Feet placed at y=0 by renderer |
-| `tree`, `building` | `0` | Built upward from y=0 |
+| `terrain/floor` | top surface = `y + 0.075` | — (flat tile, use `metadata.width/depth`) |
+| `terrain/hill` | **peak of the dome** | 3–8 units |
+| `terrain/cliff` | **top edge** of the rock face | 5–12 units |
+| `terrain/platform` | **top surface** where objects stand | 1–5 units |
 
-- **Blackboard text**: put the exact text to display in the `description` field (e.g. `"黑板上写着'数学分析'"`). The renderer extracts and renders it automatically.
+**Rule: any object sitting ON elevated terrain uses the same `y` as the terrain's `position.y`.**
+
+```
+terrain/hill at y=4    → trees on the hilltop: y=4
+terrain/platform at y=3 → buildings on the platform: y=3
+terrain/cliff at y=8   → (cliff walls have nothing on top in most cases)
+```
+
+### Terrain shape catalog
+
+| shape | Visual result | Good for |
+|---|---|---|
+| `floor` | Flat slab (custom `metadata.width/depth`) | Main ground, plazas, fields |
+| `hill` | Rounded green dome (width/height configurable) | Rolling countryside, island mound |
+| `cliff` | Tall grey rock face (width/height/depth) | Mountainside, canyon wall, sea cliff |
+| `platform` | Raised flat slab (width/height/depth) | Elevated ruins, fortress battlements |
+| `wall` | Interior room wall | INDOOR only |
+| `ceiling` | Interior room ceiling | INDOOR only |
+| `court` | Basketball/sports court | Sports scenes |
+
+**Metadata fields for new terrain shapes:**
+- `metadata.width` — footprint width (x, default 10–12)
+- `metadata.height` — vertical extent / peak height (default 4–8)
+- `metadata.depth` — footprint depth (z, default 10–12)
+
+### Example: layered mountain valley scene
+
+```json
+[
+  { "objectId": "t_ground",    "type": "terrain", "position": {"x":0,"y":0,"z":0},
+    "metadata": {"shape":"floor","width":40,"depth":40} },
+
+  { "objectId": "t_hill_l",    "type": "terrain", "position": {"x":-12,"y":0,"z":-18},
+    "metadata": {"shape":"hill","width":14,"height":7} },
+  { "objectId": "t_hill_r",    "type": "terrain", "position": {"x":14,"y":0,"z":-20},
+    "metadata": {"shape":"hill","width":10,"height":5} },
+
+  { "objectId": "t_cliff",     "type": "terrain", "position": {"x":0,"y":8,"z":-22},
+    "metadata": {"shape":"cliff","width":30,"height":10,"depth":4} },
+
+  { "objectId": "t_platform",  "type": "terrain", "position": {"x":6,"y":3,"z":-6},
+    "metadata": {"shape":"platform","width":8,"height":2,"depth":8} },
+
+  { "objectId": "tree_hilltop","type": "tree",    "position": {"x":-12,"y":7,"z":-18} },
+  { "objectId": "building_mid","type": "building","position": {"x":6,"y":3,"z":-6} },
+  { "objectId": "npc_fg",      "type": "npc",     "position": {"x":2,"y":0,"z":8} }
+]
+```
+
+### Viewpoint rules for immersive depth
+
+- **Eye-level shot** (y≈1.7): place at z=+12–18, look toward midground — feels like standing in the scene
+- **Elevated panorama** (y=8–15): place above a hill, look down at 30–45° — reveals the full terrain
+- **Dramatic low angle** (y=0.5–1): z=+5, look up at cliff or building — exaggerates scale
+- Always set `lookAt` to the focal point of the scene, never `{x:0,y:0,z:0}` blindly
+
+---
+
+## `position.y` rules (full table)
+
+| Object | `position.y` | Notes |
+|---|---|---|
+| `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.075 |
+| `terrain/hill` | desired **peak height** (e.g. `4`) | Dome descends from this peak |
+| `terrain/cliff` | desired **top edge** height (e.g. `8`) | Rock face descends below |
+| `terrain/platform` | desired **top surface** height (e.g. `3`) | Slab hangs below this level |
+| `terrain/wall` | half wall height (e.g. `1.6`) | INDOOR only |
+| `terrain/ceiling` | room height (e.g. `3.2`) | INDOOR only |
+| `object/*` furniture | **surface y it stands on** (e.g. `0` on floor, `3` on platform) | Renderer builds upward |
+| `npc` | **surface y it stands on** | Feet placed at this y |
+| `tree` | **surface y it stands on** | Trunk starts at this y |
+| `building` | **surface y it stands on** | Builds upward from this y |
+
+---
+
+## Blackboard text
+
+Put the exact text to display in the `description` field (e.g. `"黑板上写着'数学分析'"`). The renderer extracts and renders it automatically.
+
+## General rules
+
 - Include **exactly 2–3 viewpoints** suited to the scene.
 - Make names and descriptions vivid and specific to the theme.
-- `interactable: true` for `npc`, `item`, and interactive objects; `false` for floor/wall/ceiling terrain.
+- `interactable: true` for `npc`, `item`, and interactive objects; `false` for floor/wall/ceiling/hill/cliff terrain.
 - All `objectId` values must be unique strings (e.g. `"obj_gate"`, `"obj_fountain"`).
 - All `viewpointId` values must be unique strings (e.g. `"vp_entrance"`, `"vp_overview"`).
+
+---
 
 ## GLTF Model Loading (Path A)
 
@@ -127,6 +232,8 @@ Any object can load a real 3D model by setting `metadata.modelUrl` to a GLTF/GLB
 - `scale` (number, default 1) — uniform scale applied to the loaded model
 - `yOffset` (number, default 0) — vertical offset to correct ground alignment
 
+---
+
 ## Post-Processing Effects (Path B)
 
 Set `environment.effects.bloom` to enable glow on emissive materials:
@@ -154,6 +261,8 @@ Set `environment.effects.bloom` to enable glow on emissive materials:
 - Night skybox auto-boosts bloom strength to 0.8 minimum
 - **threshold minimum is 0.9** — never set lower; values below 0.9 cause ordinary lit surfaces to bloom and wash out the scene
 
+---
+
 ## Code Generation Mode (Path C)
 
 **WARNING: Use `sceneCode` ONLY when the scene genuinely requires it. Most scenes should use JSON mode.**
@@ -162,11 +271,12 @@ Use `sceneCode` ONLY for:
 - Particle systems (fountains, fire, snow, smoke)
 - Continuous per-frame animations (rotating objects, wave effects, morphing geometry)
 - Custom shaders or procedural geometry that cannot be expressed as static objects
+- Complex terrain with vertex-color heightmaps or displacement maps
 
 Do NOT use `sceneCode` for:
 - **Any static scene** (classroom, office, park, street, shop — use JSON `objects` array)
 - **Indoor scenes** (rooms, halls, labs) — always JSON mode
-- **Outdoor scenes** without animation — always JSON mode
+- **Outdoor scenes without animation** — use JSON mode with hill/cliff/platform terrain shapes
 - Tile/grid floor patterns — use a single `terrain/floor` object instead
 - Adding more detail to walls, ceilings, or furniture — JSON shapes handle this
 

@@ -16,10 +16,13 @@ When generating sceneData, use this reference to know what shapes, effects, and 
 
 | type | shape (metadata.shape) | Visual result |
 |---|---|---|
-| `terrain` | `floor` | Flat marble-toned surface panel (20×20) |
+| `terrain` | `floor` | Flat marble-toned surface panel; `metadata.width/depth` control size (default 20×20) |
 | `terrain` | `wall` | Wall slab (20×3.2); auto-rotates 90° for side walls placed at ±x |
 | `terrain` | `ceiling` | Ceiling panel (20×20) |
 | `terrain` | `court` | Basketball court with hardwood floor, center line, three-point arcs, key areas |
+| `terrain` | `hill` | Rounded green dome; `position.y` = peak; `metadata.width` = footprint radius, `metadata.height` = peak height |
+| `terrain` | `cliff` | Tall grey rock face; `position.y` = top edge; `metadata.width/height/depth` control shape |
+| `terrain` | `platform` | Raised flat slab; `position.y` = top surface; `metadata.width/height/depth` control shape |
 | `object` | `desk` / `table` | Desk top + 4 cylindrical legs |
 | `object` | `chair` / `stool` | Seat + backrest + 4 legs |
 | `object` | `blackboard` | Dark green chalkboard with wooden frame, chalk tray; **text from `description` rendered automatically via CanvasTexture** |
@@ -40,12 +43,15 @@ These rules determine correct placement. Wrong y values cause objects to float o
 
 | Object | Correct `position.y` | Notes |
 |---|---|---|
-| `terrain/floor` | `0` | Sits at ground level |
+| `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.075 |
+| `terrain/hill` | desired **peak height** (e.g. `4`) | Dome descends from this peak |
+| `terrain/cliff` | desired **top edge** height (e.g. `8`) | Rock face descends below |
+| `terrain/platform` | desired **top surface** height (e.g. `3`) | Slab hangs below this level |
 | `terrain/wall` | **half of wall height** (e.g. `1.6` for a 3.2 m room) | Renderer uses y as the wall center |
 | `terrain/ceiling` | room height (e.g. `3.2`) | Renderer uses y directly |
-| `object/*` (furniture) | `0` | Renderer builds upward from y=0 internally |
-| `npc` | `0` | Renderer places feet at y=0 |
-| `tree`, `building` | `0` | Renderer builds upward from y=0 |
+| `object/*` (furniture) | **surface y it stands on** | Renderer builds upward from this y |
+| `npc` | **surface y it stands on** | Renderer places feet at y |
+| `tree`, `building` | **surface y it stands on** | Renderer builds upward from y |
 
 ### Environment Settings
 
