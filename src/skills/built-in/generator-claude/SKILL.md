@@ -184,6 +184,37 @@ Sandbox variables available:
   - renderer   — THREE.WebGLRenderer
   - controls   — OrbitControls
   - animate    — function(cb: (delta: number) => void) — register a per-frame callback
+  - Water      — THREE.js Water addon (three/addons/objects/Water.js)
+                 Use for realistic reflective ocean/lake surfaces.
+                 Requires a waterNormals texture loaded via THREE.TextureLoader.
+                 Normal map CDN: https://threejs.org/examples/textures/waternormals.jpg
+```
+
+### Water addon usage pattern
+
+```javascript
+const waterGeometry = new THREE.PlaneGeometry(200, 200);
+const water = new Water(waterGeometry, {
+  textureWidth: 512,
+  textureHeight: 512,
+  waterNormals: new THREE.TextureLoader().load(
+    'https://threejs.org/examples/textures/waternormals.jpg',
+    (tex) => { tex.wrapS = tex.wrapT = THREE.RepeatWrapping; }
+  ),
+  sunDirection: new THREE.Vector3(0.5, 1, 0.5).normalize(),
+  sunColor: 0xffffff,
+  waterColor: 0x001e0f,
+  distortionScale: 3.7,
+  fog: false,
+});
+water.rotation.x = -Math.PI / 2;
+water.position.y = 0.0;
+scene.add(water);
+
+// Update water time uniform each frame
+animate((delta) => {
+  water.material.uniforms['time'].value += delta;
+});
 ```
 
 **Example: Animated particle system**

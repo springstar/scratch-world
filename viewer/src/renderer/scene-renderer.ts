@@ -5,6 +5,8 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { Sky } from "three/addons/objects/Sky.js";
+import { Water } from "three/addons/objects/Water.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
 
 // Colour palette keyed by object type
@@ -671,13 +673,22 @@ function buildObject(obj: SceneObject): THREE.Object3D {
 // ── Environment presets ──────────────────────────────────────────────────────
 
 interface EnvPreset {
-  skyColor: number;
+  skyColor: number;       // fallback color for indoor / night
   groundColor: number;
   fogColor: number;
   sunColor: number;
   sunIntensity: number;
   sunPosition: [number, number, number];
   ambientIntensity: number;
+  // Sky shader parameters (outdoor only)
+  sky: {
+    turbidity: number;      // atmospheric haze 1–20
+    rayleigh: number;       // sky blueness
+    mieCoefficient: number; // sun halo density
+    mieDirectionalG: number;// sun halo sharpness
+    elevation: number;      // sun elevation angle in degrees
+    azimuth: number;        // sun azimuth angle in degrees
+  } | null;                 // null = use flat skyColor (indoor / night)
 }
 
 function resolveEnvPreset(skybox?: string, timeOfDay?: string): EnvPreset {
@@ -693,8 +704,9 @@ function resolveEnvPreset(skybox?: string, timeOfDay?: string): EnvPreset {
   let sunIntensity: number;
   let sunPosition: [number, number, number];
   let ambientIntensity: number;
+  let sky: EnvPreset["sky"];
 
-  const tod = timeOfDay ?? skybox; // fall back to skybox key if no separate timeOfDay
+  const tod = timeOfDay ?? skybox;
   switch (tod) {
     case "dawn":
     case "dusk":
@@ -703,28 +715,39 @@ function resolveEnvPreset(skybox?: string, timeOfDay?: string): EnvPreset {
       sunIntensity = 0.8;
       sunPosition = [10, 5, 30];
       ambientIntensity = 0.35;
+      sky = { turbidity: 10, rayleigh: 3, mieCoefficient: 0.005, mieDirectionalG: 0.7, elevation: 4, azimuth: 180 };
       break;
     case "night":
       sunColor = 0x2244aa;
       sunIntensity = 0.05;
       sunPosition = [0, 20, 0];
       ambientIntensity = 0.15;
+      sky = null; // flat dark background for night
       break;
     case "noon":
       sunColor = 0xffffff;
       sunIntensity = 1.4;
       sunPosition = [5, 60, 10];
       ambientIntensity = 0.55;
+      sky = { turbidity: 2, rayleigh: 0.5, mieCoefficient: 0.002, mieDirectionalG: 0.8, elevation: 70, azimuth: 180 };
       break;
-    default:
+    case "overcast":
+      sunColor = 0xccccdd;
+      sunIntensity = 0.6;
+      sunPosition = [0, 40, 0];
+      ambientIntensity = 0.6;
+      sky = { turbidity: 20, rayleigh: 4, mieCoefficient: 0.02, mieDirectionalG: 0.5, elevation: 40, azimuth: 180 };
+      break;
+    default: // clear_day / dawn
       sunColor = 0xfff4e0;
       sunIntensity = 1.2;
       sunPosition = [30, 50, 20];
       ambientIntensity = 0.5;
+      sky = { turbidity: 4, rayleigh: 1, mieCoefficient: 0.003, mieDirectionalG: 0.75, elevation: 35, azimuth: 180 };
       break;
   }
 
-  return { skyColor, groundColor: 0x4a7c59, fogColor: skyColor, sunColor, sunIntensity, sunPosition, ambientIntensity };
+  return { skyColor, groundColor: 0x4a7c59, fogColor: skyColor, sunColor, sunIntensity, sunPosition, ambientIntensity, sky };
 }
 
 // ── PickResult ───────────────────────────────────────────────────────────────
@@ -749,6 +772,7 @@ export class SceneRenderer {
   private sun: THREE.DirectionalLight;
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
+  private sky: Sky;
   private gltfLoader = new GLTFLoader();
   // Group that owns everything added by sceneCode — cleared on every loadScene()
   private codeGroup = new THREE.Group();
@@ -810,6 +834,12 @@ export class SceneRenderer {
     this.setupGround();
     this.scene.add(this.codeGroup);
 
+    // Atmospheric sky (Preetham model) — always in scene; toggled per preset
+    this.sky = new Sky();
+    this.sky.scale.setScalar(450000);
+    this.sky.visible = false; // hidden until loadScene() activates it
+    this.scene.add(this.sky);
+
     // Post-processing: EffectComposer + bloom + output
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -842,7 +872,6 @@ export class SceneRenderer {
     const env = data.environment ?? {};
     const preset = resolveEnvPreset(env.skybox, env.timeOfDay);
 
-    (this.scene.background as THREE.Color).set(preset.skyColor);
     (this.scene.fog as THREE.Fog).color.set(preset.fogColor);
 
     this.hemi.color.set(preset.skyColor);
@@ -851,7 +880,33 @@ export class SceneRenderer {
 
     this.sun.color.set(preset.sunColor);
     this.sun.intensity = preset.sunIntensity;
-    this.sun.position.set(...preset.sunPosition);
+
+    if (preset.sky !== null) {
+      // Outdoor / atmospheric sky — activate Three.Sky shader
+      this.sky.visible = true;
+      this.scene.background = null;
+
+      const skyUniforms = (this.sky.material as THREE.ShaderMaterial).uniforms;
+      skyUniforms["turbidity"].value = preset.sky.turbidity;
+      skyUniforms["rayleigh"].value = preset.sky.rayleigh;
+      skyUniforms["mieCoefficient"].value = preset.sky.mieCoefficient;
+      skyUniforms["mieDirectionalG"].value = preset.sky.mieDirectionalG;
+
+      // Compute sun direction from elevation + azimuth angles
+      const phi = THREE.MathUtils.degToRad(90 - preset.sky.elevation);
+      const theta = THREE.MathUtils.degToRad(preset.sky.azimuth);
+      const sunDir = new THREE.Vector3();
+      sunDir.setFromSphericalCoords(1, phi, theta);
+      skyUniforms["sunPosition"].value.copy(sunDir);
+
+      // Position the directional light to match the sky sun
+      this.sun.position.copy(sunDir.clone().multiplyScalar(100));
+    } else {
+      // Night / indoor — hide sky mesh, show flat background colour
+      this.sky.visible = false;
+      this.scene.background = new THREE.Color(preset.skyColor);
+      this.sun.position.set(...preset.sunPosition);
+    }
 
     // Apply bloom settings from environment.effects
     const bloomCfg = env.effects?.bloom;
@@ -960,7 +1015,7 @@ export class SceneRenderer {
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const fn = new Function(
-        "THREE", "scene", "camera", "renderer", "controls", "animate",
+        "THREE", "scene", "camera", "renderer", "controls", "animate", "Water",
         code,
       );
       fn(
@@ -970,6 +1025,7 @@ export class SceneRenderer {
         this.renderer,
         this.controls,
         (cb: (delta: number) => void) => { this.codeAnimCbs.push(cb); },
+        Water,
       );
     } catch (err) {
       console.error("[SceneRenderer] sceneCode execution error:", err);
