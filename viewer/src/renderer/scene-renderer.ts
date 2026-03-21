@@ -599,6 +599,13 @@ export class SceneRenderer {
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.camera.left = -40;
+    this.sun.shadow.camera.right = 40;
+    this.sun.shadow.camera.top = 40;
+    this.sun.shadow.camera.bottom = -40;
+    this.sun.shadow.camera.near = 1;
+    this.sun.shadow.camera.far = 200;
+    this.sun.shadow.bias = -0.001;
     this.scene.add(this.sun);
 
     this.setupGround();
@@ -790,6 +797,7 @@ export class SceneRenderer {
     const mat = new THREE.MeshStandardMaterial({ color: 0x5a7a3a, roughness: 1 });
     const ground = new THREE.Mesh(geo, mat);
     ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.02; // slightly below y=0 to avoid z-fighting with terrain objects
     ground.receiveShadow = true;
     this.scene.add(ground);
   }
