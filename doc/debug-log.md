@@ -57,7 +57,61 @@ if (process.env.ANTHROPIC_BASE_URL) {
 
 ---
 
-## Notes for future runs
+# Debug Log: Scene Quality Improvements & Rendering Flicker
+
+Date: 2026-03-21
+
+## Issue 5: Visible flickering when rotating the 3D scene
+
+**Symptom:** After adding EffectComposer + UnrealBloomPass (post-processing bloom), rotating the camera in the Three.js viewer caused明显的 visible flickering throughout the scene.
+
+### Diagnosis path
+
+**First hypothesis: tone mapping double-application**
+
+Initial fix set `renderer.toneMapping = THREE.NoToneMapping` to prevent double tone mapping between the renderer and `OutputPass`. This did not resolve the flickering.
+
+**Second hypothesis: EffectComposer ↔ MSAA conflict**
+
+Removed EffectComposer entirely and reverted to `renderer.render()` directly. The user confirmed the flickering persisted — proving post-processing was never the cause.
+
+**Root cause (confirmed):** Two independent issues stacking:
+
+1. **Shadow camera frustum too small (primary cause)**
+   - `DirectionalLight.shadow.camera` defaults to `left/right/top/bottom = ±5` units
+   - Scene objects are spread over `±20` units; objects outside the ±5 frustum have no shadow or incorrect shadow boundary
+   - As the camera rotates, objects near the ±5 boundary cycle in and out of the shadow frustum, causing abrupt shadow changes that appear as flickering
+
+2. **Z-fighting between ground plane and terrain objects (secondary cause)**
+   - `setupGround()` placed a 200×200 plane at `y=0`
+   - Court floor geometry sits at `y=0.05`; terrain floor objects at `y=0.075`
+   - At grazing camera angles and far distances, the depth precision (near=0.1, far=500) is insufficient to distinguish `y=0` from `y=0.05`, causing depth test instability
+
+### Fix
+
+```typescript
+// Expand shadow camera to cover full scene extent (±40 with margin)
+this.sun.shadow.camera.left = -40;
+this.sun.shadow.camera.right = 40;
+this.sun.shadow.camera.top = 40;
+this.sun.shadow.camera.bottom = -40;
+this.sun.shadow.camera.near = 1;
+this.sun.shadow.camera.far = 200;
+this.sun.shadow.bias = -0.001;  // also fixes shadow acne
+
+// Move ground plane below y=0 to clear z-fighting
+ground.position.y = -0.02;
+```
+
+**Commit:** `f8aab75`
+
+### Lessons
+
+- Always set `shadow.camera.left/right/top/bottom` to match the actual scene extent; default ±5 is almost always too small
+- Set `shadow.bias = -0.001` as standard practice to prevent shadow acne
+- When a ground plane coexists with flat terrain objects, offset it by at least `y=-0.02` to guarantee z-fighting never occurs
+- Post-processing (EffectComposer) was a red herring; shadow/z-fighting bugs look identical to rendering pipeline bugs during rotation
+
 
 - Always set `VIEWER_BASE_URL=http://localhost:5173` in dev `.env`
 - ofox model IDs use short form without date suffix (e.g. `claude-sonnet-4-6`, not `claude-sonnet-4-20250514`)
