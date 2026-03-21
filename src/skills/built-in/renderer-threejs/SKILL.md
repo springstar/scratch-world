@@ -16,23 +16,36 @@ When generating sceneData, use this reference to know what shapes, effects, and 
 
 | type | shape (metadata.shape) | Visual result |
 |---|---|---|
-| `terrain` | `floor` | Flat surface panel (20×20) |
-| `terrain` | `wall` | Vertical wall slab (8×3) |
+| `terrain` | `floor` | Flat marble-toned surface panel (20×20) |
+| `terrain` | `wall` | Wall slab (20×3.2); auto-rotates 90° for side walls placed at ±x |
 | `terrain` | `ceiling` | Ceiling panel (20×20) |
 | `terrain` | `court` | Basketball court with hardwood floor, center line, three-point arcs, key areas |
-| `object` | `desk` / `table` | Desk with four legs |
-| `object` | `chair` / `stool` | Chair with backrest |
-| `object` | `blackboard` | Green chalkboard with optional chalk writing |
-| `object` | `window` | Transparent glass window frame |
-| `object` | `door` | Wooden door panel |
-| `object` | `shelf` / `bookcase` | Tall shelf unit |
+| `object` | `desk` / `table` | Desk top + 4 cylindrical legs |
+| `object` | `chair` / `stool` | Seat + backrest + 4 legs |
+| `object` | `blackboard` | Dark green chalkboard with wooden frame, chalk tray; **text from `description` rendered automatically via CanvasTexture** |
+| `object` | `window` | Window frame + transparent glass pane |
+| `object` | `door` | Door frame + panelled door + gold knob |
+| `object` | `shelf` / `bookcase` | Shelf unit with back panel, 5 shelves, randomly coloured books |
 | `object` | `pillar` / `column` | Cylindrical column |
 | `object` | `hoop` | Basketball hoop (pole + arm + backboard + rim + net); auto-mirrors for right-side hoop |
 | `object` | `box` | Generic box (default fallback) |
-| `tree` | — | Trunk + conical foliage, random scale/rotation |
-| `building` | — | Box body + pyramid roof |
-| `npc` | — | Capsule-shaped character |
+| `tree` | — | Tapered trunk + 3-layer spheroid foliage; scale/rotation varies by position |
+| `building` | — | Box body + pyramid roof + glass windows + door |
+| `npc` | — | Multi-part humanoid: legs, torso, arms, neck, head, hair; deterministic clothing colour from position |
 | `item` | — | Cylinder-shaped collectible |
+
+### Position & Y Coordinate Rules (CRITICAL)
+
+These rules determine correct placement. Wrong y values cause objects to float or sink:
+
+| Object | Correct `position.y` | Notes |
+|---|---|---|
+| `terrain/floor` | `0` | Sits at ground level |
+| `terrain/wall` | **half of wall height** (e.g. `1.6` for a 3.2 m room) | Renderer uses y as the wall center |
+| `terrain/ceiling` | room height (e.g. `3.2`) | Renderer uses y directly |
+| `object/*` (furniture) | `0` | Renderer builds upward from y=0 internally |
+| `npc` | `0` | Renderer places feet at y=0 |
+| `tree`, `building` | `0` | Renderer builds upward from y=0 |
 
 ### Environment Settings
 

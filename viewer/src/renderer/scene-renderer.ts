@@ -55,6 +55,7 @@ function buildObjectByShape(
     case "blackboard":
     case "chalkboard": {
       const group = new THREE.Group();
+      // Board surface
       const board = new THREE.Mesh(
         new THREE.BoxGeometry(4, 2.5, 0.1),
         makeMat(0x1a3a2a, 0.9, 0),
@@ -63,16 +64,67 @@ function buildObjectByShape(
       board.castShadow = true;
       board.receiveShadow = true;
       group.add(board);
-      // Chalk writing — thin plane on the front face, hidden when erased
-      if (state !== "erased" && state !== "clean") {
-        const chalk = new THREE.Mesh(
-          new THREE.PlaneGeometry(3.4, 2.0),
-          new THREE.MeshStandardMaterial({ color: 0xddeedd, roughness: 1, metalness: 0, opacity: 0.55, transparent: true }),
-        );
-        chalk.position.set(0, 1.5, 0.056);
-        group.add(chalk);
+      // Wooden frame
+      const frameMat = makeMat(0x8b6040, 0.8, 0);
+      for (const [fw, fh, fx2, fy2] of [
+        [4.12, 0.08, 0, 2.76], [4.12, 0.08, 0, 0.24],
+        [0.08, 2.5,  -2.02, 1.5], [0.08, 2.5, 2.02, 1.5],
+      ] as [number, number, number, number][]) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(fw, fh, 0.06), frameMat);
+        bar.position.set(fx2, fy2, 0.08);
+        group.add(bar);
       }
-      group.position.set(x, y, z);
+      // Chalk tray
+      const tray = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.06, 0.14), frameMat);
+      tray.position.set(0, 0.3, 0.1);
+      group.add(tray);
+
+      // Text on board using CanvasTexture
+      if (state !== "erased" && state !== "clean") {
+        // Extract text from description or name
+        const rawText: string = (obj.description ?? obj.name ?? "").trim();
+        // Pull out CJK chars or short Latin words that look like board content
+        const cjkMatch = rawText.match(/[\u4e00-\u9fff\u3040-\u30ff]{2,}/g);
+        const quotedMatch = rawText.match(/[「"'《]([^」"'》]{1,20})[」"'》]/);
+        const boardText = quotedMatch
+          ? quotedMatch[1]
+          : cjkMatch
+          ? cjkMatch[0]
+          : "";
+
+        const canvas = document.createElement("canvas");
+        canvas.width = 1024;
+        canvas.height = 640;
+        const ctx = canvas.getContext("2d")!;
+        // Board background
+        ctx.fillStyle = "#1a3a2a";
+        ctx.fillRect(0, 0, 1024, 640);
+        if (boardText) {
+          // Main chalk text — large, centred
+          ctx.fillStyle = "rgba(230,255,230,0.88)";
+          ctx.font = `bold ${boardText.length <= 6 ? 140 : 100}px serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(boardText, 512, 280);
+        }
+        // Chalk scribble lines (decorative)
+        ctx.strokeStyle = "rgba(200,240,200,0.22)";
+        ctx.lineWidth = 2;
+        for (let li = 0; li < 6; li++) {
+          ctx.beginPath();
+          ctx.moveTo(60, 420 + li * 28);
+          ctx.lineTo(960, 420 + li * 28);
+          ctx.stroke();
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        const writing = new THREE.Mesh(
+          new THREE.PlaneGeometry(3.8, 2.38),
+          new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 }),
+        );
+        writing.position.set(0, 1.5, 0.056);
+        group.add(writing);
+      }
+      group.position.set(x, 0, z);
       return group;
     }
 
@@ -95,7 +147,7 @@ function buildObjectByShape(
         leg.position.set(lx, 0.38, lz);
         group.add(leg);
       }
-      group.position.set(x, y, z);
+      group.position.set(x, 0, z);
       return group;
     }
 
@@ -122,7 +174,7 @@ function buildObjectByShape(
         leg.position.set(lx, 0.225, lz);
         group.add(leg);
       }
-      group.position.set(x, y, z);
+      group.position.set(x, 0, z);
       return group;
     }
 
@@ -140,25 +192,56 @@ function buildObjectByShape(
       );
       glass.position.y = 1.4;
       group.add(glass);
-      group.position.set(x, y, z);
+      group.position.set(x, 0, z);
       return group;
     }
 
     case "door": {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.9, 2.1, 0.08),
-        makeMat(0x8b6040, 0.8, 0),
+      const group = new THREE.Group();
+      const woodMat = makeMat(0x8b6040, 0.8, 0);
+      const frameMat = makeMat(0x6a4828, 0.85, 0);
+      // Door frame
+      const frameTop = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.1, 0.1), frameMat);
+      frameTop.position.set(0, 2.15, 0);
+      group.add(frameTop);
+      for (const fx of [-0.5, 0.5]) {
+        const frameSide = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.2, 0.1), frameMat);
+        frameSide.position.set(fx, 1.1, 0);
+        group.add(frameSide);
+      }
+      // Door panel with inset detail
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.88, 2.05, 0.07), woodMat);
+      panel.position.set(0, 1.025, 0);
+      group.add(panel);
+      // Inset panels (upper and lower)
+      for (const py of [0.55, 1.52]) {
+        const inset = new THREE.Mesh(
+          new THREE.BoxGeometry(0.68, 0.7, 0.03),
+          makeMat(0x7a5535, 0.85, 0),
+        );
+        inset.position.set(0, py, 0.04);
+        group.add(inset);
+      }
+      // Door knob
+      const knob = new THREE.Mesh(
+        new THREE.SphereGeometry(0.04, 8, 6),
+        makeMat(0xc8a832, 0.3, 0.8),
       );
-      mesh.position.set(x, y + 1.05, z);
-      return mesh;
+      knob.position.set(0.36, 1.05, 0.07);
+      group.add(knob);
+      group.position.set(x, 0, z);
+      return group;
     }
 
     case "wall": {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(8, 3, 0.2),
+        new THREE.BoxGeometry(20, 3.2, 0.2),
         makeMat(0xe8e0d0, 0.95, 0),
       );
-      mesh.position.set(x, y + 1.5, z);
+      mesh.position.set(x, y, z);
+      if (Math.abs(x) > Math.abs(z)) {
+        mesh.rotation.y = Math.PI / 2;
+      }
       mesh.receiveShadow = true;
       return mesh;
     }
@@ -177,13 +260,43 @@ function buildObjectByShape(
     case "shelf":
     case "bookcase": {
       const group = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2, 2.0, 0.35),
-        makeMat(0xc8a46e, 0.8, 0),
-      );
-      body.position.y = 1.0;
-      group.add(body);
-      group.position.set(x, y, z);
+      const woodMat = makeMat(0xb8864e, 0.75, 0);
+      // Back panel
+      const back = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.0, 0.05), woodMat);
+      back.position.set(0, 1.0, -0.15);
+      group.add(back);
+      // Side panels
+      for (const sx of [-0.575, 0.575]) {
+        const side = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.0, 0.35), woodMat);
+        side.position.set(sx, 1.0, 0);
+        group.add(side);
+      }
+      // Shelves (top, 3 mid, bottom)
+      const shelfYs = [0.05, 0.55, 1.05, 1.55, 1.98];
+      for (const sy of shelfYs) {
+        const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.04, 0.32), woodMat);
+        shelf.position.set(0, sy, 0);
+        group.add(shelf);
+      }
+      // Books on each middle shelf
+      const bookColors = [0xcc3333, 0x3366cc, 0x228844, 0xdd8822, 0x8833aa, 0x336688, 0xaa4422];
+      let bci = 0;
+      for (const sy of [0.59, 1.09, 1.59]) {
+        let bx = -0.48;
+        while (bx < 0.46) {
+          const bw = 0.06 + ((bci * 7 + 3) % 5) * 0.01;
+          const bh = 0.28 + ((bci * 3 + 1) % 4) * 0.04;
+          const book = new THREE.Mesh(
+            new THREE.BoxGeometry(bw, bh, 0.22),
+            makeMat(bookColors[bci % bookColors.length], 0.9, 0),
+          );
+          book.position.set(bx + bw / 2, sy + bh / 2 + 0.04, 0);
+          group.add(book);
+          bx += bw + 0.005;
+          bci++;
+        }
+      }
+      group.position.set(x, 0, z);
       return group;
     }
 
@@ -251,7 +364,7 @@ function buildObjectByShape(
       group.add(net);
       // Mirror for right-side hoop (positive x)
       if (x > 0) group.rotation.y = Math.PI;
-      group.position.set(x, y, z);
+      group.position.set(x, 0, z);
       return group;
     }
 
@@ -285,22 +398,32 @@ function buildObject(obj: SceneObject): THREE.Object3D {
   switch (type) {
     case "tree": {
       const group = new THREE.Group();
+      // Trunk — slightly tapered
       const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.3, 0.4, 2, 8),
-        makeMat(0x5c3d1e),
+        new THREE.CylinderGeometry(0.18, 0.28, 2.2, 8),
+        makeMat(0x5c3d1e, 0.9, 0),
       );
-      trunk.position.y = 1;
+      trunk.position.y = 1.1;
       trunk.castShadow = true;
       group.add(trunk);
-
-      const foliage = new THREE.Mesh(
-        new THREE.ConeGeometry(1.2, 2.5, 8),
-        makeMat(colorFor("tree")),
-      );
-      foliage.position.y = 3.25;
-      foliage.castShadow = true;
-      group.add(foliage);
-
+      // Multi-layer foliage — 3 overlapping spheroid clusters
+      const leafMat = makeMat(colorFor("tree"), 0.95, 0);
+      const layers: [number, number, number, number][] = [
+        [0,    2.8, 0, 1.4],
+        [0.3,  3.6, 0.2, 1.1],
+        [-0.2, 4.3, -0.1, 0.85],
+      ];
+      for (const [lx, ly, lz, lr] of layers) {
+        const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 8, 6), leafMat);
+        leaf.scale.y = 0.78;
+        leaf.position.set(lx, ly, lz);
+        leaf.castShadow = true;
+        group.add(leaf);
+      }
+      // Random scale/rotation for visual variety using position as seed
+      const seed = Math.abs(x * 7 + z * 13) % 1;
+      group.scale.setScalar(0.85 + seed * 0.45);
+      group.rotation.y = seed * Math.PI * 2;
       group.position.set(x, y, z);
       root = group;
       break;
@@ -308,39 +431,100 @@ function buildObject(obj: SceneObject): THREE.Object3D {
 
     case "building": {
       const group = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(5, 4, 5),
-        makeMat(colorFor("building")),
-      );
+      const wallMat = makeMat(colorFor("building"), 0.85, 0.05);
+      const roofMat = makeMat(0x6b3a2a, 0.8, 0);
+      const glassMat = new THREE.MeshStandardMaterial({
+        color: 0x88bbdd, roughness: 0.05, metalness: 0.2,
+        transparent: true, opacity: 0.6,
+        emissive: 0x224466, emissiveIntensity: 0.15,
+      });
+      // Main body
+      const body = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 5), wallMat);
       body.position.y = 2;
       body.castShadow = true;
       body.receiveShadow = true;
       group.add(body);
-
-      const roof = new THREE.Mesh(
-        new THREE.ConeGeometry(4, 2, 4),
-        makeMat(0x6b3a2a),
-      );
-      roof.position.y = 5;
+      // Roof
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 1.8, 4), roofMat);
+      roof.position.y = 4.9;
       roof.rotation.y = Math.PI / 4;
       roof.castShadow = true;
       group.add(roof);
-
+      // Windows — 2×2 grid on front and back faces
+      const winPositions: [number, number, number][] = [
+        [-1.2, 2.8, 2.51], [1.2, 2.8, 2.51],
+        [-1.2, 1.2, 2.51], [1.2, 1.2, 2.51],
+        [-1.2, 2.8, -2.51], [1.2, 2.8, -2.51],
+        [-1.2, 1.2, -2.51], [1.2, 1.2, -2.51],
+      ];
+      for (const [wx, wy, wz] of winPositions) {
+        const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.8), glassMat);
+        win.position.set(wx, wy, wz);
+        if (wz < 0) win.rotation.y = Math.PI;
+        group.add(win);
+      }
+      // Door on front face
+      const door = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.7, 1.6),
+        makeMat(0x5a3318, 0.9, 0),
+      );
+      door.position.set(0, 0.8, 2.52);
+      group.add(door);
       group.position.set(x, y, z);
       root = group;
       break;
     }
 
     case "npc": {
-      // CapsuleGeometry(radius, length, capSegments, radialSegments)
-      const mesh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.4, 0.8, 4, 8),
-        makeMat(colorFor("npc")),
+      const group = new THREE.Group();
+      // Deterministic color from position to keep appearance stable across re-renders
+      const seed = Math.abs(Math.round(x * 3 + z * 7)) % 12;
+      const shirtColors = [0xcc3333, 0x3366cc, 0x228844, 0xdd8822, 0x8833aa, 0x336688,
+                           0xee5544, 0x4488cc, 0x33aa66, 0xcc7722, 0x6644bb, 0x228899];
+      const pantsColors = [0x222244, 0x334422, 0x443322, 0x111111, 0x444466, 0x224422,
+                           0x221133, 0x223311, 0x332211, 0x000000, 0x443355, 0x112233];
+      const skinTones  = [0xf5c5a0, 0xe8a87c, 0xc68642, 0x8d5524, 0xf0d0b0, 0xd4956a];
+      const skinMat  = makeMat(skinTones[seed % skinTones.length], 0.9, 0);
+      const shirtMat = makeMat(shirtColors[seed], 0.8, 0);
+      const pantsMat = makeMat(pantsColors[seed % pantsColors.length], 0.85, 0);
+      const hairMat  = makeMat([0x1a0a00, 0x3d1c02, 0xf5c518, 0x444444, 0xcc5500, 0x111111][seed % 6], 0.9, 0);
+
+      // Legs
+      for (const lx of [-0.1, 0.1]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.07, 0.55, 7), pantsMat);
+        leg.position.set(lx, 0.275, 0);
+        group.add(leg);
+      }
+      // Torso
+      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.42, 0.22), shirtMat);
+      torso.position.set(0, 0.76, 0);
+      group.add(torso);
+      // Arms
+      for (const ax of [-0.22, 0.22]) {
+        const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.38, 6), shirtMat);
+        arm.rotation.z = ax > 0 ? -0.25 : 0.25;
+        arm.position.set(ax, 0.7, 0);
+        group.add(arm);
+      }
+      // Neck
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.12, 7), skinMat);
+      neck.position.set(0, 1.02, 0);
+      group.add(neck);
+      // Head
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 10, 8), skinMat);
+      head.position.set(0, 1.23, 0);
+      group.add(head);
+      // Hair cap
+      const hair = new THREE.Mesh(
+        new THREE.SphereGeometry(0.162, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.52),
+        hairMat,
       );
-      // capsule total height = length + 2*radius = 0.8 + 0.8 = 1.6; center it at y=0.8
-      mesh.position.set(x, y + 0.8, z);
-      mesh.castShadow = true;
-      root = mesh;
+      hair.position.set(0, 1.31, 0);
+      group.add(hair);
+
+      group.position.set(x, y, z);
+      group.castShadow = true;
+      root = group;
       break;
     }
 
@@ -359,10 +543,13 @@ function buildObject(obj: SceneObject): THREE.Object3D {
       const shape = obj.metadata.shape as string | undefined;
       if (shape === "wall") {
         const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(8, 3, 0.2),
+          new THREE.BoxGeometry(20, 3.2, 0.2),
           makeMat(0xe8e0d0, 0.95, 0),
         );
-        mesh.position.set(x, y + 1.5, z);
+        mesh.position.set(x, y, z);
+        if (Math.abs(x) > Math.abs(z)) {
+          mesh.rotation.y = Math.PI / 2;
+        }
         mesh.receiveShadow = true;
         root = mesh;
       } else if (shape === "ceiling") {

@@ -58,6 +58,9 @@ The `sceneData` field must be a JSON object with this exact structure:
 - Generate **8–16 objects**. Analyse the prompt and choose the most fitting types and shapes.
 - **INDOOR scenes** (classroom, room, hall, lab, shop, corridor, etc.):
   - Use type `"terrain"` for floor (shape `"floor"`), walls (shape `"wall"`), ceiling (shape `"floor"`).
+  - **MUST include exactly 4 walls** (front, back, left, right) — a room with missing walls looks broken.
+  - Wall positions for a room of half-width W and half-depth D: back `z=-D`, front `z=D`, left `x=-W`, right `x=W`. **Wall `y` must equal half the wall height** (e.g. `y: 1.6` for a 3.2m wall). Do NOT set `y: 0` for walls.
+  - The blackboard `description` field **must contain the exact text to write on the board** (e.g. `"黑板上写着'数学分析'"`). The renderer reads this field to render chalk text automatically.
   - Use type `"object"` for furniture with the correct shape (`desk`, `chair`, `blackboard`, `window`, `door`, `shelf`, etc.).
   - Use type `"npc"` for people. Use type `"item"` for small pickable items.
   - Do **NOT** add trees or outdoor buildings to indoor scenes.
@@ -73,7 +76,19 @@ The `sceneData` field must be a JSON object with this exact structure:
   - Add surrounding elements freely: `npc` for players, `item` for balls, `object` (shape `box`) for benches/scoreboards, `tree` or `building` for surroundings.
   - Do **NOT** add walls, ceiling, or indoor floor terrain.
 - **Stateful objects**: set `metadata.state` (e.g. `"written"`, `"open"`, `"closed"`, `"on"`, `"off"`) and `metadata.transitions` (e.g. `{"erase": "erased", "write": "written"}` for a blackboard).
-- **Object positions**: spread across a 40×40 unit area (x and z from −20 to 20), y=0 unless elevated.
+- **Object positions**: spread across a 40×40 unit area (x and z from −20 to 20).
+- **`position.y` rules** — CRITICAL, wrong y causes floating or sunken objects:
+
+| Object | `position.y` | Reason |
+|---|---|---|
+| `terrain/floor` | `0` | Ground level |
+| `terrain/wall` | half wall height (e.g. `1.6`) | Renderer uses y as wall center |
+| `terrain/ceiling` | room height (e.g. `3.2`) | Renderer uses y directly |
+| `object/*` furniture | `0` | Renderer builds upward from y=0 |
+| `npc` | `0` | Feet placed at y=0 by renderer |
+| `tree`, `building` | `0` | Built upward from y=0 |
+
+- **Blackboard text**: put the exact text to display in the `description` field (e.g. `"黑板上写着'数学分析'"`). The renderer extracts and renders it automatically.
 - Include **exactly 2–3 viewpoints** suited to the scene.
 - Make names and descriptions vivid and specific to the theme.
 - `interactable: true` for `npc`, `item`, and interactive objects; `false` for floor/wall/ceiling terrain.
@@ -141,7 +156,23 @@ Set `environment.effects.bloom` to enable glow on emissive materials:
 
 ## Code Generation Mode (Path C)
 
-For scenes requiring complex animations, custom shaders, or visual effects beyond the JSON schema, pass `sceneCode` instead of (or alongside) `sceneData`.
+**WARNING: Use `sceneCode` ONLY when the scene genuinely requires it. Most scenes should use JSON mode.**
+
+Use `sceneCode` ONLY for:
+- Particle systems (fountains, fire, snow, smoke)
+- Continuous per-frame animations (rotating objects, wave effects, morphing geometry)
+- Custom shaders or procedural geometry that cannot be expressed as static objects
+
+Do NOT use `sceneCode` for:
+- **Any static scene** (classroom, office, park, street, shop — use JSON `objects` array)
+- **Indoor scenes** (rooms, halls, labs) — always JSON mode
+- **Outdoor scenes** without animation — always JSON mode
+- Tile/grid floor patterns — use a single `terrain/floor` object instead
+- Adding more detail to walls, ceilings, or furniture — JSON shapes handle this
+
+If a scene has NPCs, furniture, buildings, or terrain but **no moving/animated elements**, use pure JSON mode (`sceneData` only, no `sceneCode`).
+
+For scenes requiring complex animations, custom shaders, or visual effects beyond the JSON schema, pass `sceneCode` alongside `sceneData`.
 
 The `sceneCode` is a JavaScript function body that receives the full rendering context:
 
