@@ -569,7 +569,7 @@ export class SceneRenderer {
   private objectMeta = new Map<string, SceneObject>();
   private animFrame = 0;
   private raycaster = new THREE.Raycaster();
-  private codeAnimCb: ((delta: number) => void) | null = null;
+  private codeAnimCbs: Array<(delta: number) => void> = [];
   private lastFrameTime = 0;
 
   // Smooth transition state
@@ -593,6 +593,8 @@ export class SceneRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     this.renderer.shadowMap.enabled = true;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.6;
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -644,7 +646,7 @@ export class SceneRenderer {
     }
     this.objects.clear();
     this.objectMeta.clear();
-    this.codeAnimCb = null;
+    this.codeAnimCbs = [];
 
     // Remove all objects added by previous sceneCode execution
     this.codeGroup.clear();
@@ -670,15 +672,21 @@ export class SceneRenderer {
     const isNight = env.skybox === "night" || env.timeOfDay === "night";
     this.bloomPass.strength = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
     this.bloomPass.radius = bloomCfg?.radius ?? 0.3;
-    this.bloomPass.threshold = bloomCfg?.threshold ?? 0.85;
+    // Clamp threshold to minimum 0.9 — prevents scene-specified low thresholds
+    // from blooming ordinary lit surfaces and washing out the image.
+    this.bloomPass.threshold = Math.max(bloomCfg?.threshold ?? 0.9, 0.9);
 
-    // Path C: execute sceneCode if present
+    // Path C: execute sceneCode if present.
+    // Mute renderer's built-in lights so sceneCode has full lighting control.
     if (data.sceneCode) {
+      this.hemi.intensity = 0;
+      this.sun.intensity = 0;
       this.executeCode(data.sceneCode);
       return;
     }
 
-    // Path A + default: build objects from JSON schema
+    // Path A + default: restore built-in lights (they were set above from preset)
+    // (intensities already applied by preset above — nothing to restore here)
     const loadPromises: Promise<void>[] = [];
 
     for (const obj of data.objects) {
@@ -742,7 +750,7 @@ export class SceneRenderer {
   }
 
   executeCode(code: string): void {
-    this.codeAnimCb = null;
+    this.codeAnimCbs = [];
 
     // Proxy wraps codeGroup so that scene.add() / scene.remove() target the group,
     // but scene.background / scene.fog / scene.environment still reach the real Scene.
@@ -774,7 +782,7 @@ export class SceneRenderer {
         this.camera,
         this.renderer,
         this.controls,
-        (cb: (delta: number) => void) => { this.codeAnimCb = cb; },
+        (cb: (delta: number) => void) => { this.codeAnimCbs.push(cb); },
       );
     } catch (err) {
       console.error("[SceneRenderer] sceneCode execution error:", err);
@@ -879,13 +887,13 @@ export class SceneRenderer {
         if (t >= 1) this.transitioning = false;
       }
 
-      // Per-frame callback from sceneCode
-      if (this.codeAnimCb) {
+      // Per-frame callbacks from sceneCode
+      for (let i = this.codeAnimCbs.length - 1; i >= 0; i--) {
         try {
-          this.codeAnimCb(delta);
+          this.codeAnimCbs[i](delta);
         } catch (err) {
           console.warn("[SceneRenderer] codeAnimCb error:", err);
-          this.codeAnimCb = null;
+          this.codeAnimCbs.splice(i, 1);
         }
       }
 

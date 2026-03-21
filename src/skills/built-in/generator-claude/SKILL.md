@@ -124,7 +124,7 @@ Set `environment.effects.bloom` to enable glow on emissive materials:
       "bloom": {
         "strength": 1.2,
         "radius": 0.4,
-        "threshold": 0.7
+        "threshold": 0.9
       }
     }
   }
@@ -135,8 +135,9 @@ Set `environment.effects.bloom` to enable glow on emissive materials:
 - Night scenes with neon lights, glowing windows, streetlamps
 - Sci-fi scenes with emissive panels, energy beams
 - Sunset scenes with strong light halos
-- Default bloom is always active (subtle: strength=0.4, threshold=0.85)
+- Default bloom is always active (subtle: strength=0.4, threshold=0.9)
 - Night skybox auto-boosts bloom strength to 0.8 minimum
+- **threshold minimum is 0.9** — never set lower; values below 0.9 cause ordinary lit surfaces to bloom and wash out the scene
 
 ## Code Generation Mode (Path C)
 
@@ -186,6 +187,27 @@ animate((delta) => {
 - **JSON Mode** (default): simple scenes, furniture, buildings, NPCs, nature — use `sceneData`
 - **Code Mode**: particle systems, procedural animations, custom shaders, morphing geometry, physics — use `sceneCode`
 - Code mode is sandboxed — no network calls, no DOM manipulation, only Three.js API
+
+## Performance Rules for Code Mode (CRITICAL)
+
+Violating these causes severe lag or dropped frames:
+
+- **Max particles per system: 100** — use `BufferGeometry` + `Points`; never exceed 100 points per system
+- **Max total geometries: 30** — count every `new THREE.Mesh(...)` call; keep total ≤ 30
+- **Never call `Math.random()` inside `animate()`** — precompute random values in arrays before the loop
+- **Never reassign `geometry.attributes.position.array` inside `animate()`** — update in-place and set `needsUpdate = true` only when necessary; prefer shader-driven animation
+- **Max `animate()` registrations: 3** — each call registers one per-frame callback; keep it minimal
+- **No `castShadow = true` on particle systems** — only set shadow casting on ≤ 5 static meshes
+
+## Lighting Rules for Code Mode (CRITICAL)
+
+When `sceneCode` is present, the renderer **mutes its built-in lights** and hands full lighting control to your code. You must supply all lighting yourself.
+
+- **Always add at least one ambient or hemisphere light** — without it the scene will be pitch black
+- **Total light intensity budget**: `AmbientLight ≤ 0.6` + `DirectionalLight ≤ 1.2` + point lights with falloff distance ≤ 20
+- **Max PointLights: 6** — each point light multiplies render cost; use emissive materials for decorative glow instead
+- **Never exceed emissiveIntensity > 1.5** on any material — high emissive values combined with bloom threshold cause severe overexposure
+- **Do NOT set `castShadow = true` on DirectionalLight in sceneCode** — the renderer's shadow-casting sun is already muted; adding a new shadow light doubles GPU cost
 
 ## Text Rendering in Code Mode (CRITICAL)
 

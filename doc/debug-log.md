@@ -113,6 +113,56 @@ ground.position.y = -0.02;
 - Post-processing (EffectComposer) was a red herring; shadow/z-fighting bugs look identical to rendering pipeline bugs during rotation
 
 
+---
+
+# Debug Log: Overexposed Scenes in Code Mode
+
+Date: 2026-03-21
+
+## Issue 6: sceneCode scenes appear blown-out/overexposed, especially from top-down view
+
+**Symptom:** Scenes generated with `sceneCode` appear white and washed-out. Looking upward from the bottom of the scene looked fine, but looking down from a bird's eye view showed severe overexposure.
+
+### Diagnosis path
+
+**First hypothesis: LinearToneMapping clipping HDR values**
+
+Without explicit tone mapping, Three.js defaults to `LinearToneMapping` which hard-clips any luminance > 1.0 to pure white. Bright emissive surfaces + bloom pass = large areas of solid white.
+
+**Fix 1:** Set `renderer.toneMapping = THREE.ACESFilmicToneMapping` with `toneMappingExposure = 0.85`. ACES applies an S-curve to compress highlights instead of clipping. Improved the situation but still too bright.
+
+**Fix 2:** Lowered `toneMappingExposure` from 0.85 → 0.7 and clamped `bloomPass.threshold` to a minimum of 0.9 (scenes were specifying `threshold: 0.75`, causing too many surfaces to bloom). Still too bright from top-down view.
+
+**Root cause (confirmed): double lighting**
+
+When `sceneCode` is present, `loadScene()` applies the renderer's built-in `HemisphereLight` + `DirectionalLight` from the env preset *before* calling `executeCode()`. The sceneCode then adds its *own* ambient, directional, and point lights — stacking on top of the renderer lights. Total scene illumination is roughly double.
+
+The asymmetric symptom (fine from below, overexposed from above) was the key diagnostic clue: looking up, the ceiling was the only surface visible, blocking direct light. Looking down, both the renderer's sun and sceneCode's directional light hit every surface simultaneously.
+
+### Fix
+
+```typescript
+// In loadScene(), before executeCode():
+if (data.sceneCode) {
+  this.hemi.intensity = 0;
+  this.sun.intensity = 0;
+  this.executeCode(data.sceneCode);
+  return;
+}
+// For JSON-mode scenes, preset intensities applied above remain active
+```
+
+**Commit:** (pending)
+
+### Lessons
+
+- When `sceneCode` is present, **always zero out renderer built-in lights** before executing — sceneCode takes full ownership of lighting
+- The asymmetric overexposure symptom (angle-dependent) is a reliable signal for double-lighting, not a bloom or tone mapping issue
+- Use `ACESFilmicToneMapping` with `toneMappingExposure ≈ 0.6–0.7` as baseline for any scene using bloom
+- Clamp `bloomPass.threshold` to a floor value (0.9) so scene-authored low thresholds can't cause runaway bloom on ordinary surfaces
+
+---
+
 - Always set `VIEWER_BASE_URL=http://localhost:5173` in dev `.env`
 - ofox model IDs use short form without date suffix (e.g. `claude-sonnet-4-6`, not `claude-sonnet-4-20250514`)
 - pi-ai does not read `~/.pi/agent/models.json` — that file is for the pi-agent CLI only
