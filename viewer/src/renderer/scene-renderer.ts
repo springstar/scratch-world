@@ -563,6 +563,8 @@ export class SceneRenderer {
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
   private gltfLoader = new GLTFLoader();
+  // Group that owns everything added by sceneCode — cleared on every loadScene()
+  private codeGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
   private animFrame = 0;
@@ -617,6 +619,7 @@ export class SceneRenderer {
     this.scene.add(this.sun);
 
     this.setupGround();
+    this.scene.add(this.codeGroup);
 
     // Post-processing: EffectComposer + bloom + output
     this.composer = new EffectComposer(this.renderer);
@@ -635,13 +638,16 @@ export class SceneRenderer {
   }
 
   async loadScene(data: SceneData): Promise<void> {
-    // Remove existing object nodes
+    // Remove JSON-built objects
     for (const obj of this.objects.values()) {
       this.scene.remove(obj);
     }
     this.objects.clear();
     this.objectMeta.clear();
     this.codeAnimCb = null;
+
+    // Remove all objects added by previous sceneCode execution
+    this.codeGroup.clear();
 
     // Apply environment settings first (needed for bloom boost logic)
     const env = data.environment ?? {};
@@ -736,16 +742,27 @@ export class SceneRenderer {
   }
 
   executeCode(code: string): void {
-    // Clear objects loaded from JSON
-    for (const obj of this.objects.values()) {
-      this.scene.remove(obj);
-    }
-    this.objects.clear();
-    this.objectMeta.clear();
     this.codeAnimCb = null;
 
+    // Proxy wraps codeGroup so that scene.add() / scene.remove() target the group,
+    // but scene.background / scene.fog / scene.environment still reach the real Scene.
+    const sceneProxy = new Proxy(this.codeGroup, {
+      get: (target, prop) => {
+        if (prop === "add" || prop === "remove" || prop === "children") {
+          return typeof target[prop as keyof typeof target] === "function"
+            ? (target[prop as keyof typeof target] as (...a: unknown[]) => unknown).bind(target)
+            : target[prop as keyof typeof target];
+        }
+        const val = (this.scene as unknown as Record<string | symbol, unknown>)[prop as string | symbol];
+        return typeof val === "function" ? val.bind(this.scene) : val;
+      },
+      set: (_target, prop, value) => {
+        (this.scene as unknown as Record<string | symbol, unknown>)[prop as string | symbol] = value;
+        return true;
+      },
+    });
+
     try {
-      // Sandbox: receives THREE, scene, camera, renderer, controls, animate
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const fn = new Function(
         "THREE", "scene", "camera", "renderer", "controls", "animate",
@@ -753,7 +770,7 @@ export class SceneRenderer {
       );
       fn(
         THREE,
-        this.scene,
+        sceneProxy,
         this.camera,
         this.renderer,
         this.controls,
