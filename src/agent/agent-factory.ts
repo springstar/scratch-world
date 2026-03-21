@@ -38,6 +38,9 @@ export function createAgent(
 	// Allow overriding the API base URL via env var (e.g. for ofox proxy)
 	if (process.env.ANTHROPIC_BASE_URL) {
 		model.baseUrl = process.env.ANTHROPIC_BASE_URL;
+		// Many proxies don't support the fine-grained-tool-streaming beta — override the header.
+		// Allow further customization via ANTHROPIC_BETA (e.g. set to empty string to disable all betas).
+		model.headers = { "anthropic-beta": process.env.ANTHROPIC_BETA ?? "" };
 	}
 
 	const systemPrompt = skillPrompt
