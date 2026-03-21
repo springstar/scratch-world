@@ -4,6 +4,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { Water } from "three/addons/objects/Water.js";
@@ -772,6 +773,7 @@ export class SceneRenderer {
   private sun: THREE.DirectionalLight;
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
+  private ssaoPass: SSAOPass;
   private sky: Sky;
   private gltfLoader = new GLTFLoader();
   // Group that owns everything added by sceneCode — cleared on every loadScene()
@@ -859,9 +861,16 @@ export class SceneRenderer {
     this.sky.visible = false; // hidden until loadScene() activates it
     this.scene.add(this.sky);
 
-    // Post-processing: EffectComposer + bloom + output
+    // Post-processing: EffectComposer + SSAO + bloom + output
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // SSAO (R3F-inspired): soft contact shadows from ambient occlusion.
+    // Inserted before bloom so AO-darkened crevices don't get boosted by bloom.
+    this.ssaoPass = new SSAOPass(this.scene, this.camera, canvas.clientWidth, canvas.clientHeight);
+    this.ssaoPass.kernelRadius = 8;
+    this.ssaoPass.minDistance = 0.002;
+    this.ssaoPass.maxDistance = 0.08;
+    this.composer.addPass(this.ssaoPass);
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
       0.4,   // strength
@@ -1128,6 +1137,7 @@ export class SceneRenderer {
     const el = this.renderer.domElement;
     this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
     this.renderer.setSize(el.clientWidth, el.clientHeight, false);
+    this.ssaoPass.setSize(el.clientWidth, el.clientHeight);
     this.composer.setSize(el.clientWidth, el.clientHeight);
     if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
     this.perfRestoreTimer = setTimeout(() => {
@@ -1135,6 +1145,7 @@ export class SceneRenderer {
       this.perfCurrent = this.perfMax;
       this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
       this.renderer.setSize(el.clientWidth, el.clientHeight, false);
+      this.ssaoPass.setSize(el.clientWidth, el.clientHeight);
       this.composer.setSize(el.clientWidth, el.clientHeight);
       this.invalidate(2);
     }, this.perfDebounce);
@@ -1158,6 +1169,7 @@ export class SceneRenderer {
       this.camera.updateProjectionMatrix();
       this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
       this.renderer.setSize(w, h, false);
+      this.ssaoPass.setSize(w, h);
       this.composer.setSize(w, h);
       this.invalidate(2);
     });
