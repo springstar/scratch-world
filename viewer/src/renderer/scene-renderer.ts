@@ -789,6 +789,21 @@ export class SceneRenderer {
   private transitionTo   = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
   private transitioning  = false;
 
+  // ── Demand rendering (R3F-style frameloop:"demand") ──────────────────────
+  // framesDue > 0 → render this frame and decrement.
+  // Always render when codeAnimCbs are active (animated scenes like Water).
+  private framesDue = 0;
+
+  // ── Adaptive DPR (R3F-style performance.regress) ──────────────────────────
+  // Tracks rendering performance; lowers pixel-ratio on frame drops.
+  private perfCurrent = 1;            // multiplier applied to devicePixelRatio
+  private readonly perfMin    = 0.5;  // floor during regression
+  private readonly perfMax    = 1;    // ceiling during recovery
+  private readonly perfDebounce = 200; // ms before DPR is restored
+  private perfRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+  // Rolling frame-time budget: if a frame exceeds this, regress.
+  private readonly frameBudgetMs = 50; // ~20 fps threshold
+
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87ceeb);
@@ -804,6 +819,8 @@ export class SceneRenderer {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // softer shadow edges (R3F default)
+    this.renderer.shadowMap.autoUpdate = false; // update only when invalidated
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.6;
 
@@ -813,6 +830,8 @@ export class SceneRenderer {
     this.controls.dampingFactor = 0.05;
     this.controls.minDistance = 2;
     this.controls.maxDistance = 200;
+    // Demand rendering: each controls change (including damping) queues a frame
+    this.controls.addEventListener("change", () => this.invalidate(1));
 
     // Lights — will be overridden by loadScene() env settings
     this.hemi = new THREE.HemisphereLight(0x87ceeb, 0x4a7c59, 0.6);
@@ -953,6 +972,9 @@ export class SceneRenderer {
 
     // Wait for all GLTF loads (errors are caught inside loadGltfModel)
     await Promise.all(loadPromises);
+
+    // Scene is ready — queue two frames so the first render fires immediately
+    this.invalidate(2);
   }
 
   private async loadGltfModel(obj: SceneObject, url: string, placeholder: THREE.Object3D): Promise<void> {
@@ -1041,6 +1063,7 @@ export class SceneRenderer {
 
     this.transitionStart = performance.now();
     this.transitioning = true;
+    this.invalidate(Math.ceil(TRANSITION_DURATION / 16) + 4);
   }
 
   // Returns the first interactable object under the pointer, or null
@@ -1077,16 +1100,45 @@ export class SceneRenderer {
         if (mat?.emissive) mat.emissive.set(emissive);
       });
     }
+    this.invalidate(2);
+  }
+
+  /** Queue N frames to render. Call whenever the scene visually changes. */
+  invalidate(frames = 2): void {
+    this.framesDue = Math.max(this.framesDue, frames);
   }
 
   dispose(): void {
     cancelAnimationFrame(this.animFrame);
+    if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
     this.controls.dispose();
     this.composer.dispose();
     this.renderer.dispose();
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
+
+  /**
+   * Adaptive DPR regression (R3F performance.regress pattern).
+   * Halves the pixel ratio immediately; schedules restore after debounce.
+   */
+  private regress(): void {
+    if (this.perfCurrent <= this.perfMin) return; // already at floor
+    this.perfCurrent = this.perfMin;
+    const el = this.renderer.domElement;
+    this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
+    this.renderer.setSize(el.clientWidth, el.clientHeight, false);
+    this.composer.setSize(el.clientWidth, el.clientHeight);
+    if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
+    this.perfRestoreTimer = setTimeout(() => {
+      this.perfRestoreTimer = null;
+      this.perfCurrent = this.perfMax;
+      this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
+      this.renderer.setSize(el.clientWidth, el.clientHeight, false);
+      this.composer.setSize(el.clientWidth, el.clientHeight);
+      this.invalidate(2);
+    }, this.perfDebounce);
+  }
 
   private setupGround(): void {
     const geo = new THREE.PlaneGeometry(200, 200);
@@ -1104,8 +1156,10 @@ export class SceneRenderer {
       const h = canvas.clientHeight;
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(w, h);
+      this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
+      this.renderer.setSize(w, h, false);
       this.composer.setSize(w, h);
+      this.invalidate(2);
     });
     observer.observe(canvas);
   }
@@ -1117,20 +1171,22 @@ export class SceneRenderer {
       const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
       this.lastFrameTime = now;
 
+      // Always update controls (needed for damping to progress every RAF tick)
+      this.controls.update();
+
       // Smooth camera transition
       if (this.transitioning) {
         const elapsed = performance.now() - this.transitionStart;
         const t = Math.min(elapsed / TRANSITION_DURATION, 1);
-        // Ease out cubic
         const eased = 1 - Math.pow(1 - t, 3);
-
         this.camera.position.lerpVectors(this.transitionFrom.pos, this.transitionTo.pos, eased);
         this.controls.target.lerpVectors(this.transitionFrom.target, this.transitionTo.target, eased);
-
         if (t >= 1) this.transitioning = false;
+        this.invalidate(1);
       }
 
-      // Per-frame callbacks from sceneCode
+      // Per-frame callbacks from sceneCode (animated scenes: Water, particles…)
+      const hasAnimCbs = this.codeAnimCbs.length > 0;
       for (let i = this.codeAnimCbs.length - 1; i >= 0; i--) {
         try {
           this.codeAnimCbs[i](delta);
@@ -1139,9 +1195,20 @@ export class SceneRenderer {
           this.codeAnimCbs.splice(i, 1);
         }
       }
+      // Animated scenes always need the next frame
+      if (hasAnimCbs) this.invalidate(1);
 
-      this.controls.update();
+      // ── Demand render ─────────────────────────────────────────────────────
+      // Only call composer.render() when work is queued.
+      if (this.framesDue <= 0) return;
+      this.framesDue--;
+
+      // Adaptive DPR: measure JS frame time; regress on overrun
+      const frameStart = performance.now();
+      this.renderer.shadowMap.needsUpdate = true;
       this.composer.render();
+      const frameMs = performance.now() - frameStart;
+      if (frameMs > this.frameBudgetMs) this.regress();
     };
     loop(0);
   }
