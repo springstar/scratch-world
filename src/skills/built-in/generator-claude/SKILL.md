@@ -186,3 +186,63 @@ animate((delta) => {
 - **JSON Mode** (default): simple scenes, furniture, buildings, NPCs, nature — use `sceneData`
 - **Code Mode**: particle systems, procedural animations, custom shaders, morphing geometry, physics — use `sceneCode`
 - Code mode is sandboxed — no network calls, no DOM manipulation, only Three.js API
+
+## Text Rendering in Code Mode (CRITICAL)
+
+**NEVER construct text by assembling geometric primitives (boxes, planes as strokes).** This produces unrecognizable shapes, especially for CJK (Chinese/Japanese/Korean) characters.
+
+**ALWAYS use `CanvasTexture` for any text content.** The browser's font renderer handles all scripts correctly.
+
+### Correct pattern: text on a surface
+
+```javascript
+// Create canvas and draw text
+const canvas = document.createElement('canvas');
+canvas.width = 1024;
+canvas.height = 256;
+const ctx = canvas.getContext('2d');
+
+// Background
+ctx.fillStyle = '#163a25';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+// Text — browser renders CJK correctly
+ctx.fillStyle = '#f0ece4';
+ctx.font = 'bold 180px serif';
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.fillText('振兴中华', canvas.width / 2, canvas.height / 2);
+
+// Apply as texture — flipY:true (default) corrects vertical axis
+const texture = new THREE.CanvasTexture(canvas);
+
+// Attach to a PlaneGeometry facing the camera (+z by default)
+const mesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(8.7, 1.4),
+  new THREE.MeshStandardMaterial({ map: texture, roughness: 0.88 }),
+);
+mesh.position.set(0, 2.15, -5.87);
+scene.add(mesh);
+```
+
+### UV orientation rules (prevents mirroring)
+
+| Plane rotation | Camera side | Text mirrored? | Fix |
+|---|---|---|---|
+| None (default, faces +z) | +z side | No | None needed |
+| `rotation.y = Math.PI` (faces −z) | −z side | **Yes, horizontally** | `ctx.scale(-1, 1); ctx.translate(-width, 0)` before drawing |
+| `rotation.x = -Math.PI/2` (floor) | above | No | None needed |
+
+When in doubt, use default orientation (no rotation) and position the camera on the +z side.
+
+### Multiple lines / styled text
+
+```javascript
+ctx.font = 'bold 72px sans-serif';
+ctx.fillStyle = '#ffffff';
+const lines = ['Line one', 'Line two'];
+lines.forEach((line, i) => {
+  ctx.fillText(line, canvas.width / 2, 80 + i * 90);
+});
+```
+
