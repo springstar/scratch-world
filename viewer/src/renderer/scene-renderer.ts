@@ -777,6 +777,8 @@ export class SceneRenderer {
   private ssaoPass: SSAOPass;
   private sky: Sky;
   private gltfLoader = new GLTFLoader();
+  // InstancedMesh batches for trees (cleared on each loadScene)
+  private treeInstances: THREE.InstancedMesh[] = [];
   // Group that owns everything added by sceneCode — cleared on every loadScene()
   private codeGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
@@ -902,6 +904,13 @@ export class SceneRenderer {
     this.objectMeta.clear();
     this.codeAnimCbs = [];
 
+    // Dispose previous instanced tree batches
+    for (const im of this.treeInstances) {
+      this.scene.remove(im);
+      im.geometry.dispose();
+    }
+    this.treeInstances = [];
+
     // Remove all objects added by previous sceneCode execution
     this.codeGroup.clear();
 
@@ -968,8 +977,17 @@ export class SceneRenderer {
     // (intensities already applied by preset above — nothing to restore here)
     const loadPromises: Promise<void>[] = [];
 
+    // Separate trees for InstancedMesh batching (R3F-inspired)
+    const treeObjects: SceneObject[] = [];
+
     for (const obj of data.objects) {
       const modelUrl = obj.metadata.modelUrl as string | undefined;
+
+      // Collect trees without modelUrl for instanced batching
+      if (obj.type === "tree" && !modelUrl) {
+        treeObjects.push(obj);
+        continue;
+      }
 
       if (modelUrl) {
         // Path A: load GLTF model — show placeholder while loading
@@ -987,6 +1005,9 @@ export class SceneRenderer {
         this.objectMeta.set(obj.objectId, obj);
       }
     }
+
+    // Batch trees as InstancedMesh (R3F-inspired: reduces N×4 draw calls → 4)
+    this.buildInstancedTrees(treeObjects);
 
     // Wait for all GLTF loads (errors are caught inside loadGltfModel)
     await Promise.all(loadPromises);
@@ -1029,6 +1050,72 @@ export class SceneRenderer {
       console.warn(`[SceneRenderer] Failed to load GLTF from ${url}:`, err);
       // Keep placeholder — already in scene
     }
+  }
+
+  /**
+   * Build InstancedMesh batches for all trees in the scene.
+   * R3F-inspired: N trees → 4 draw calls (trunk + 3 foliage layers) instead of N×4.
+   * Trees are generally not interactive so we store phantom Groups for the objects map.
+   */
+  private buildInstancedTrees(trees: SceneObject[]): void {
+    if (trees.length === 0) return;
+
+    const count = trees.length;
+    const dummy = new THREE.Object3D();
+
+    const trunkMat = makeMat(0x5c3d1e, 0.9, 0);
+    const leafMat  = makeMat(colorFor("tree"), 0.95, 0);
+
+    // One InstancedMesh per part: trunk + 3 foliage layers
+    const trunkIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 8), trunkMat, count);
+    trunkIM.castShadow = true;
+
+    const foliageConfigs: [number, number, number, number, number][] = [
+      // lx, ly, lz, radius, scaleY
+      [0,    2.8, 0,    1.4, 0.78],
+      [0.3,  3.6, 0.2,  1.1, 0.78],
+      [-0.2, 4.3, -0.1, 0.85, 0.78],
+    ];
+    const foliageIMs = foliageConfigs.map(([, , , r]) =>
+      new THREE.InstancedMesh(new THREE.SphereGeometry(r, 8, 6), leafMat, count),
+    );
+    foliageIMs.forEach((im) => { im.castShadow = true; });
+
+    trees.forEach((tree, i) => {
+      const { x, y, z } = tree.position;
+      const seed = Math.abs(x * 7 + z * 13) % 1;
+      const s = 0.85 + seed * 0.45;
+      const rotY = seed * Math.PI * 2;
+
+      // Trunk: positioned at half-height above tree base
+      dummy.position.set(x, y + 1.1 * s, z);
+      dummy.rotation.set(0, rotY, 0);
+      dummy.scale.setScalar(s);
+      dummy.updateMatrix();
+      trunkIM.setMatrixAt(i, dummy.matrix);
+
+      // Foliage layers (lx/lz offsets ignored for rotation simplicity — < 0.3 units)
+      foliageConfigs.forEach(([lx, ly, lz, , sy], j) => {
+        dummy.position.set(x + lx * s, y + ly * s, z + lz * s);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(s, s * sy, s);
+        dummy.updateMatrix();
+        foliageIMs[j].setMatrixAt(i, dummy.matrix);
+      });
+
+      // Phantom Group for objects map (supports pick/highlight even without real mesh)
+      const phantom = new THREE.Group();
+      phantom.position.set(x, y, z);
+      applyUserData(phantom, tree.objectId, tree.interactable);
+      this.objects.set(tree.objectId, phantom);
+      this.objectMeta.set(tree.objectId, tree);
+    });
+
+    trunkIM.instanceMatrix.needsUpdate = true;
+    foliageIMs.forEach((im) => { im.instanceMatrix.needsUpdate = true; });
+
+    this.scene.add(trunkIM, ...foliageIMs);
+    this.treeInstances = [trunkIM, ...foliageIMs];
   }
 
   executeCode(code: string): void {
