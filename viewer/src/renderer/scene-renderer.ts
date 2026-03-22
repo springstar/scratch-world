@@ -609,7 +609,9 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       group.add(hair);
 
       group.position.set(x, y, z);
-      group.castShadow = true;
+      // castShadow must be set on each Mesh child — Group has no geometry,
+      // so setting it only on the group has no effect on shadow rendering.
+      group.traverse((child) => { if ((child as THREE.Mesh).isMesh) child.castShadow = true; });
       root = group;
       break;
     }
@@ -1448,6 +1450,9 @@ export class SceneRenderer {
       while (diff >  Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       s.root.rotation.y += diff * Math.min(delta * 8, 1);
+      // Normalise to [-π, π] to prevent float accumulation over long sessions
+      if (s.root.rotation.y > Math.PI)  s.root.rotation.y -= Math.PI * 2;
+      if (s.root.rotation.y < -Math.PI) s.root.rotation.y += Math.PI * 2;
 
       // 走路时腿部摆动（children 0=左腿, 1=右腿）
       const swing = Math.sin(s.elapsed * 6) * 0.5;
