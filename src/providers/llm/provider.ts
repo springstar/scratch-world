@@ -17,7 +17,7 @@ The JSON must have this exact structure:
 {
   "environment": { "skybox": "clear_day|sunset|night|overcast", "timeOfDay": "dawn|noon|dusk|night", "ambientLight": "warm|cool|neutral", "weather": "clear|foggy|rainy" },
   "viewpoints": [
-    { "viewpointId": "vp_1", "name": "descriptive name", "position": {"x": 0, "y": 1.7, "z": -8}, "lookAt": {"x": 0, "y": 1, "z": 0} }
+    { "viewpointId": "vp_1", "name": "descriptive name", "position": {"x": 0, "y": 1.7, "z": 12}, "lookAt": {"x": 0, "y": 2, "z": 0} }
   ],
   "objects": [
     {
@@ -29,9 +29,12 @@ The JSON must have this exact structure:
       "interactable": true,
       "interactionHint": "try 'examine the ...'",
       "metadata": {
-        "shape": "desk|chair|blackboard|window|door|wall|floor|shelf|box|pillar",
+        "shape": "desk|chair|blackboard|window|door|wall|floor|shelf|box|pillar|hoop|court|hill|cliff|platform",
         "state": "current state string if stateful",
-        "transitions": {"action verb": "next state"}
+        "transitions": {"action verb": "next state"},
+        "width": 20,
+        "depth": 20,
+        "height": 4
       }
     }
   ]
@@ -39,19 +42,28 @@ The JSON must have this exact structure:
 
 Rules:
 - Generate 8-16 objects. Analyse the prompt and choose the most fitting types and shapes.
-- INDOOR scenes (classroom, room, hall, lab, shop, etc.):
+- INDOOR scenes (classroom, room, hall, lab, shop, corridor, etc.):
     Use type "terrain" for floor (shape "floor"), walls (shape "wall"), ceiling (shape "floor").
+    MUST include exactly 4 walls (front, back, left, right). Wall y must equal half wall height (e.g. y:1.6 for a 3.2m wall).
     Use type "object" for furniture with the correct shape (desk, chair, blackboard, window, door, shelf, etc.).
     Use type "npc" for people. Use type "item" for small pickable items.
     Do NOT add trees or outdoor buildings to indoor scenes.
-- OUTDOOR scenes (forest, city, park, etc.):
-    Use type "terrain" for ground. Use type "tree", "building", "npc", "item", "object" freely.
-- Stateful objects: set metadata.state (e.g. "written", "open", "closed", "on", "off") and
-    metadata.transitions (e.g. {"erase": "erased", "write": "written"} for a blackboard).
-- Objects positions: spread across a 40x40 unit area (x and z from -20 to 20), y=0 unless elevated.
-- Include exactly 2-3 viewpoints suited to the scene.
+- OUTDOOR scenes (forest, city, park, beach, mountains, etc.):
+    Use type "terrain" for ground and landforms. Do NOT add walls or ceiling.
+    Use types "tree", "building", "npc", "item", "object" freely.
+    CRITICAL for immersive outdoor scenes — use three depth layers:
+      Foreground z=+5 to +15: NPCs, items, low rocks
+      Midground z=-5 to +5: main buildings, trees, focal points
+      Background z=-15 to -25: mountains, cliffs, forest walls (larger scale)
+    NEVER put every object at y=0. Use terrain shapes to create elevation:
+      terrain/hill: position.y = peak height (3-8). Objects ON the hill use same y.
+      terrain/cliff: position.y = top edge height (5-12).
+      terrain/platform: position.y = top surface height (1-5). Objects ON platform use same y.
+      terrain/floor: position.y = 0 (or surface elevation). metadata.width/depth control size.
+- Stateful objects: set metadata.state and metadata.transitions.
+- Include exactly 2-3 viewpoints. Eye-level (y≈1.7) at z=+12 looking toward midground is a good default.
 - Make names and descriptions vivid and specific to the theme.
-- interactable: true for npc, item, and interactive objects; false for floor/wall/ceiling terrain.
+- interactable: true for npc, item, interactive objects; false for terrain.
 `.trim();
 
 const EDIT_SYSTEM_PROMPT = `\
