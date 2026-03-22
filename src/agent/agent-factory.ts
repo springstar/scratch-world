@@ -2,6 +2,7 @@ import { Agent } from "@mariozechner/pi-agent-core";
 import { getModel } from "@mariozechner/pi-ai";
 import type { SceneManager } from "../scene/scene-manager.js";
 import { trimContext } from "./context-trimmer.js";
+import { createCityTool } from "./tools/create-city.js";
 import { createSceneTool } from "./tools/create-scene.js";
 import { getSceneTool } from "./tools/get-scene.js";
 import { interactWithObjectTool } from "./tools/interact-with-object.js";
@@ -13,6 +14,7 @@ const BASE_SYSTEM_PROMPT = `\
 You are a world-building companion. You help users create, explore, and evolve persistent 3D worlds through conversation.
 
 When a user describes a place, scene, or environment they want to create, call create_scene.
+When a user wants a city, town, village, settlement, or commercial district, call create_city.
 When a user wants to change or add something to an existing scene, call update_scene.
 When a user wants to look around, go somewhere, or change their viewpoint, call navigate_to.
 When a user tries to interact with an object (touch, open, examine, pick up, etc.), call interact_with_object.
@@ -53,6 +55,7 @@ export function createAgent(
 			model,
 			tools: [
 				createSceneTool(sceneManager, ownerId, viewerUrl),
+				createCityTool(sceneManager, ownerId, viewerUrl),
 				updateSceneTool(sceneManager, viewerUrl),
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager, ownerId),

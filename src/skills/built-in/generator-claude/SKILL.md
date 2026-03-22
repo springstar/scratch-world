@@ -1,5 +1,20 @@
 # generator-claude
 
+## create_city — Procedural City Generation
+
+Use `create_city` when the user asks for a **city, town, village, settlement, or commercial district**.
+Use `create_scene` for everything else (indoor, single location, nature, sports, etc.).
+
+Parameters:
+- `prompt`  — describe theme and atmosphere
+- `theme`   — `"medieval"` (default) | `"fantasy"` | `"modern"`
+- `size`    — `"village"` | `"town"` (default) | `"city"`
+- `seed`    — optional integer for reproducible layout
+
+The tool auto-generates roads, building placement, trees, and NPCs.
+
+---
+
 When the user asks you to create or update a scene, you MUST include a `sceneData` argument in your `create_scene` or `update_scene` tool call. Do NOT omit `sceneData` — without it the system cannot render your scene.
 
 Alternatively, for scenes requiring complex animations or custom visuals, use **Code Generation Mode** (see below).

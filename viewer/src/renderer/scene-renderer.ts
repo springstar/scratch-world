@@ -524,38 +524,53 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         transparent: true, opacity: 0.6,
         emissive: 0x224466, emissiveIntensity: 0.15,
       });
-      // Main body
-      const body = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 5), wallMat);
-      body.position.y = 2;
+      // Read optional citygen metadata for variable-size buildings
+      const bw     = (meta?.buildingWidth  as number | undefined) ?? 5;
+      const bd     = (meta?.buildingDepth  as number | undefined) ?? 5;
+      const bh     = (meta?.buildingHeight as number | undefined) ?? 4;
+      const bStyle = (meta?.buildingStyle  as string | undefined) ?? "house";
+      const rotY   = (meta?.rotationY      as number | undefined) ?? 0;
+      // Main body — scaled to citygen footprint
+      const body = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), wallMat);
+      body.position.y = bh / 2;
       body.castShadow = true;
       body.receiveShadow = true;
       group.add(body);
-      // Roof
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 1.8, 4), roofMat);
-      roof.position.y = 4.9;
+      // Roof — proportional, taller for towers
+      const roofR = Math.max(bw, bd) * 0.55;
+      const roofH = bStyle === "tower" ? bh * 0.6 : 1.8;
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(roofR, roofH, 4), roofMat);
+      roof.position.y = bh + roofH / 2;
       roof.rotation.y = Math.PI / 4;
       roof.castShadow = true;
       group.add(roof);
-      // Windows — 2×2 grid on front and back faces
-      const winPositions: [number, number, number][] = [
-        [-1.2, 2.8, 2.51], [1.2, 2.8, 2.51],
-        [-1.2, 1.2, 2.51], [1.2, 1.2, 2.51],
-        [-1.2, 2.8, -2.51], [1.2, 2.8, -2.51],
-        [-1.2, 1.2, -2.51], [1.2, 1.2, -2.51],
-      ];
-      for (const [wx, wy, wz] of winPositions) {
-        const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.8), glassMat);
-        win.position.set(wx, wy, wz);
-        if (wz < 0) win.rotation.y = Math.PI;
-        group.add(win);
+      // Windows/door — only if building is large enough (≥ 2 units)
+      if (bw >= 2 && bd >= 2 && bh >= 2) {
+        const sw = bw / 5;  // scale ratios vs original 5×4×5
+        const sd = bd / 5;
+        const sh = bh / 4;
+        // Windows — 2×2 grid on front and back faces
+        const winPositions: [number, number, number][] = [
+          [-1.2 * sw, 2.8 * sh, (bd / 2 + 0.01)], [1.2 * sw, 2.8 * sh, (bd / 2 + 0.01)],
+          [-1.2 * sw, 1.2 * sh, (bd / 2 + 0.01)], [1.2 * sw, 1.2 * sh, (bd / 2 + 0.01)],
+          [-1.2 * sw, 2.8 * sh, -(bd / 2 + 0.01)], [1.2 * sw, 2.8 * sh, -(bd / 2 + 0.01)],
+          [-1.2 * sw, 1.2 * sh, -(bd / 2 + 0.01)], [1.2 * sw, 1.2 * sh, -(bd / 2 + 0.01)],
+        ];
+        for (const [wx, wy, wz] of winPositions) {
+          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9 * sw, 0.8 * sh), glassMat);
+          win.position.set(wx, wy, wz);
+          if (wz < 0) win.rotation.y = Math.PI;
+          group.add(win);
+        }
+        // Door on front face
+        const door = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.7 * sw, 1.6 * sh),
+          makeMat(0x5a3318, 0.9, 0),
+        );
+        door.position.set(0, 0.8 * sh, bd / 2 + 0.02);
+        group.add(door);
       }
-      // Door on front face
-      const door = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.7, 1.6),
-        makeMat(0x5a3318, 0.9, 0),
-      );
-      door.position.set(0, 0.8, 2.52);
-      group.add(door);
+      group.rotation.y = rotY;  // road-facing rotation from citygen
       group.position.set(x, y, z);
       root = group;
       break;
