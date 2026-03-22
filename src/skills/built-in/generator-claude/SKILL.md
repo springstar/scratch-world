@@ -49,7 +49,8 @@ The `sceneData` field must be a JSON object with this exact structure:
         "yOffset": 0,
         "width": 20,
         "depth": 20,
-        "height": 4
+        "height": 4,
+        "texture": "polyhaven-asset-id (optional, overrides auto-selected PBR texture for terrain/floor)"
       }
     }
   ]
