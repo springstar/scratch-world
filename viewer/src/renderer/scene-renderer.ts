@@ -729,12 +729,28 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       } else if (shape === "floor") {
         const fw = (obj.metadata.width as number | undefined) ?? 20;
         const fd = (obj.metadata.depth as number | undefined) ?? 20;
+        // Infer surface type from name/description for texture selection
+        const nameStr = (obj.name + " " + (obj.description ?? "")).toLowerCase();
+        const isIndoor = nameStr.includes("wood") || nameStr.includes("hardwood")
+          || nameStr.includes("indoor") || nameStr.includes("室内")
+          || nameStr.includes("floor") && (nameStr.includes("office") || nameStr.includes("classroom") || nameStr.includes("教室") || nameStr.includes("办公"));
+        const isStone = nameStr.includes("stone") || nameStr.includes("marble")
+          || nameStr.includes("tile") || nameStr.includes("cobble")
+          || nameStr.includes("plaza") || nameStr.includes("广场");
+        // metadata.texture overrides auto-detection
+        const texId = (obj.metadata.texture as string | undefined)
+          ?? (isIndoor ? "light_wood_floor_02" : isStone ? "cobblestone_floor_08" : "aerial_grass_rock_02");
+        const floorColor = isIndoor ? 0xd4b896 : isStone ? 0xb0a080 : 0xc8b89a;
+        const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 1, metalness: 0 });
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(fw, 0.15, fd),
-          makeMat(0xc8b89a, 1, 0),
+          floorMat,
         );
         mesh.position.set(x, y + 0.075, z);
         mesh.receiveShadow = true;
+        // UV repeat scales with floor size so texels stay ~1 m²
+        const repeat = Math.round(Math.max(fw, fd) / 4);
+        if (invalidate) applyTerrainPbr(floorMat, texId, repeat, invalidate);
         root = mesh;
       } else {
         const mesh = new THREE.Mesh(
