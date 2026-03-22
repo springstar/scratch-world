@@ -753,8 +753,8 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         );
         mesh.position.set(x, y + 0.075, z);
         mesh.receiveShadow = true;
-        // UV repeat scales with floor size so texels stay ~1 m²
-        const repeat = Math.round(Math.max(fw, fd) / 4);
+        // UV repeat: ~2m² texel density — finer than size/4 to improve close-up quality
+        const repeat = Math.round(Math.max(fw, fd) / 2);
         if (invalidate) applyTerrainPbr(floorMat, texId, repeat, invalidate);
         root = mesh;
       } else {
