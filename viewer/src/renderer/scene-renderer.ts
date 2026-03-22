@@ -609,15 +609,17 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
     case "terrain": {
       const shape = obj.metadata.shape as string | undefined;
       if (shape === "wall") {
+        const wallMat = makeMat(0xe8e0d0, 0.95, 0);
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(20, 3.2, 0.2),
-          makeMat(0xe8e0d0, 0.95, 0),
+          wallMat,
         );
         mesh.position.set(x, y, z);
         if (Math.abs(x) > Math.abs(z)) {
           mesh.rotation.y = Math.PI / 2;
         }
         mesh.receiveShadow = true;
+        if (invalidate) applyTerrainPbr(wallMat, "plastered_wall_02", 4, invalidate);
         root = mesh;
       } else if (shape === "ceiling") {
         const mesh = new THREE.Mesh(
