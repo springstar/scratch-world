@@ -7,6 +7,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { loadEnvMap } from "./hdri-cache.js";
+import { applyTerrainPbr } from "./texture-cache.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { Water } from "three/addons/objects/Water.js";
@@ -450,7 +451,7 @@ function applyUserData(obj: THREE.Object3D, objectId: string, interactable: bool
   });
 }
 
-function buildObject(obj: SceneObject): THREE.Object3D {
+function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D {
   const { objectId, type, position, interactable } = obj;
   const x = position.x;
   const y = position.y;
@@ -685,14 +686,13 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         const hw = (obj.metadata.width  as number | undefined) ?? 10;
         const hh = (obj.metadata.height as number | undefined) ?? 4;
         const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
-        const mesh = new THREE.Mesh(geo,
-          // top=grass green, side/base=earth brown; blend 0.35→0.75 of objectNormal.y
-          makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75),
-        );
+        const hillMat = makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75);
+        const mesh = new THREE.Mesh(geo, hillMat);
         mesh.scale.set(hw, hh, hw);
         mesh.position.set(x, y - hh * 0.05, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
+        if (invalidate) applyTerrainPbr(hillMat, "aerial_grass_rock_02", 4, invalidate);
         root = mesh;
       } else if (shape === "cliff") {
         // Sheer rock face — tall, narrow slab.
@@ -700,14 +700,15 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         const cw = (obj.metadata.width  as number | undefined) ?? 12;
         const ch = (obj.metadata.height as number | undefined) ?? 8;
         const cd = (obj.metadata.depth  as number | undefined) ?? 3;
+        const cliffMat = makeTerrainSlopeMat(0x908070, 0x5a4a3c, 0.7, 0.9);
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(cw, ch, cd),
-          // top=lighter stone, face=dark rock; sharp transition (0.7→0.9)
-          makeTerrainSlopeMat(0x908070, 0x5a4a3c, 0.7, 0.9),
+          cliffMat,
         );
         mesh.position.set(x, y - ch * 0.5 + 0.1, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
+        if (invalidate) applyTerrainPbr(cliffMat, "rock_face", 3, invalidate);
         root = mesh;
       } else if (shape === "platform") {
         // Elevated flat slab (cliff-top, raised plaza, floating island tier).
@@ -715,14 +716,15 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         const pw = (obj.metadata.width  as number | undefined) ?? 10;
         const ph = (obj.metadata.height as number | undefined) ?? 2;
         const pd = (obj.metadata.depth  as number | undefined) ?? 10;
+        const platformMat = makeTerrainSlopeMat(0xb0a282, 0x7a6a58, 0.6, 0.85);
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(pw, ph, pd),
-          // top=light stone, sides=darker stone edge; transition 0.6→0.85
-          makeTerrainSlopeMat(0xb0a282, 0x7a6a58, 0.6, 0.85),
+          platformMat,
         );
         mesh.position.set(x, y - ph * 0.5, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
+        if (invalidate) applyTerrainPbr(platformMat, "cobblestone_floor_08", 4, invalidate);
         root = mesh;
       } else if (shape === "floor") {
         const fw = (obj.metadata.width as number | undefined) ?? 20;
@@ -1112,7 +1114,7 @@ export class SceneRenderer {
 
       if (modelUrl) {
         // Path A: load GLTF model — show placeholder while loading
-        const placeholder = buildObject(obj);
+        const placeholder = buildObject(obj, () => this.invalidate(2));
         this.scene.add(placeholder);
         this.objects.set(obj.objectId, placeholder);
         this.objectMeta.set(obj.objectId, obj);
@@ -1120,7 +1122,7 @@ export class SceneRenderer {
         const promise = this.loadGltfModel(obj, modelUrl, placeholder);
         loadPromises.push(promise);
       } else {
-        const node = buildObject(obj);
+        const node = buildObject(obj, () => this.invalidate(2));
         this.scene.add(node);
         this.objects.set(obj.objectId, node);
         this.objectMeta.set(obj.objectId, obj);
