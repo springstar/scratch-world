@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-20
+**Last Updated:** 2026-03-22
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -327,7 +327,7 @@ EnvironmentConfig = {
 | `TELEGRAM_BOT_TOKEN` | — | Required when `CHANNEL=telegram` |
 | `ANTHROPIC_API_KEY` | — | Claude API key |
 | `ANTHROPIC_BASE_URL` | — | Optional proxy URL |
-| `PROVIDER` | `stub` | `marble` or `stub` |
+| `SCENE_PROVIDER` | `stub` | `marble`, `llm`, or `stub` |
 | `MARBLE_API_KEY` | — | Required when `PROVIDER=marble` |
 | `MARBLE_API_URL` | — | Marble endpoint (if custom) |
 | `DATABASE_URL` | `sqlite:./dev.db` | `sqlite:<path>` or `postgres://...` |
@@ -362,6 +362,7 @@ EnvironmentConfig = {
 ## Related Documents
 
 - **doc/architecture.md** — Detailed system design with diagrams
+- **doc/renderer.md** — Three.js 渲染器设计与实现（完整渲染管线、材质系统、动画、后期处理）
 - **doc/interactions.md** — Interaction system design and future enhancements
 - **doc/debug-log.md** — Startup issues and troubleshooting
 - **CLAUDE.md** — Project conventions for Claude Code

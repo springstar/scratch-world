@@ -10,6 +10,8 @@
 
 ## 已完成
 
+- [x] **水面可见性修复** — 深海军蓝 + emissive + 近镜面粗糙度（0.02）+ 高不透明度（0.93）；SKILL.md 新增湖边村庄布局规范（floor 与 water 不得重叠）
+
 - [x] 后期处理：SSAO + UnrealBloom（EffectComposer）
 - [x] GLTF 模型加载（metadata.modelUrl，Path A）
 - [x] 代码生成沙盒（sceneCode，Path C）
