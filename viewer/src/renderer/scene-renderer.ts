@@ -1258,13 +1258,15 @@ export class SceneRenderer {
     const geo = new THREE.PlaneGeometry(ww, wd, 1, 1);
 
     const waterMat = new THREE.MeshPhysicalMaterial({
-      color: 0x1a6b8a,
-      roughness: 0.08,
-      metalness: 0.0,
+      color: 0x0a2e45,          // deep dark navy — looks like deep water not a puddle
+      emissive: new THREE.Color(0x003355),
+      emissiveIntensity: 0.25,  // self-illuminated glow so it reads as water even in shadows
+      roughness: 0.02,          // mirror-smooth surface catches sky highlights
+      metalness: 0.15,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.93,            // nearly opaque so the dark color dominates over grass below
       depthWrite: false,        // prevents z-fighting with underlying floor
-      envMapIntensity: 0.6,
+      envMapIntensity: 1.2,     // strong env map reflection
       side: THREE.FrontSide,
     });
 
@@ -1275,7 +1277,7 @@ export class SceneRenderer {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(4, 4);
         waterMat.normalMap = tex;
-        waterMat.normalScale.set(0.5, 0.5);
+        waterMat.normalScale.set(1.2, 1.2);  // stronger ripple visibility
         waterMat.needsUpdate = true;
         this.invalidate(2);
       },

@@ -115,6 +115,8 @@ Divide the scene into three depth bands along the **z axis**:
 
 **CRITICAL: never place `npc`, `building`, or `tree` objects at the same position as a `terrain/water` object — they will stand on the water surface. Always place them on solid terrain (`floor`, `hill`, `platform`) away from the water area.**
 
+**CRITICAL: never make `terrain/floor` large enough to cover the `terrain/water` footprint — the water will be invisible. The floor must cover only the village/activity area; the lake/river must be positioned in a non-overlapping area (different z range). See the lakeside village example below.**
+
 **Rule: any object sitting ON elevated terrain uses the same `y` as the terrain's `position.y`.**
 
 ```
@@ -164,6 +166,39 @@ terrain/cliff at y=8   → (cliff walls have nothing on top in most cases)
   { "objectId": "npc_fg",      "type": "npc",     "position": {"x":2,"y":0,"z":8} }
 ]
 ```
+
+### Example: lakeside village scene (CRITICAL layout rules)
+
+**WRONG — floor covers the lake (water will be invisible):**
+```
+floor at x=0, z=0, width=60, depth=60   ← covers EVERYTHING including where the lake is
+water at x=0, z=-10, width=24, depth=18 ← buried under the floor
+```
+
+**CORRECT — floor covers only the village; lake is separate, outside the floor footprint:**
+```json
+[
+  { "objectId": "t_village_ground", "type": "terrain", "position": {"x":4,"y":0,"z":8},
+    "metadata": {"shape":"floor","width":28,"depth":20} },
+
+  { "objectId": "t_lake", "type": "terrain", "position": {"x":0,"y":-0.1,"z":-8},
+    "metadata": {"shape":"water","width":30,"depth":20} },
+
+  { "objectId": "t_hill_l", "type": "terrain", "position": {"x":-14,"y":5,"z":-20},
+    "metadata": {"shape":"hill","width":14,"height":6} },
+
+  { "objectId": "npc_fisherman", "type": "npc", "position": {"x":-2,"y":0,"z":3},
+    "description": "老渔民坐在湖岸边垂钓" },
+
+  { "objectId": "bld_1", "type": "building", "position": {"x":5,"y":0,"z":10} }
+]
+```
+
+**Key rules for lake-village layouts:**
+- Make the `floor` cover **only** the village area (where buildings/NPCs actually stand)
+- Position the `water` **outside and adjacent to** the floor footprint — not under it
+- Water and floor should be in **different z ranges** (e.g., floor at z=5–15, water at z=-15 to -5)
+- NPCs walk **beside** the lake (on the floor side), not on top of the water
 
 ### Viewpoint rules for immersive depth
 
