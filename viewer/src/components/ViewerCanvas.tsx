@@ -12,6 +12,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<SceneRenderer | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [fading, setFading] = useState(false);
   // Drag detection: skip click if mouse moved more than threshold pixels
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
   const DRAG_THRESHOLD = 5;
@@ -27,9 +28,18 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
     };
   }, []);
 
-  // Reload scene when data changes
+  // Reload scene when data changes — fade out → load → fade in
   useEffect(() => {
-    rendererRef.current?.loadScene(sceneData).catch(console.error);
+    const r = rendererRef.current;
+    if (!r) return;
+    setFading(true);
+    // Small delay so the fade-in frame renders before the scene swap
+    const t = setTimeout(() => {
+      r.loadScene(sceneData)
+        .catch(console.error)
+        .finally(() => setFading(false));
+    }, 80);
+    return () => clearTimeout(t);
   }, [sceneData]);
 
   // Navigate to viewpoint when it changes
@@ -84,12 +94,25 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
   );
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: "100%", height: "100%", display: "block", cursor: hovered ? "pointer" : "default" }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onClick={handleClick}
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <canvas
+        ref={canvasRef}
+        style={{ width: "100%", height: "100%", display: "block", cursor: hovered ? "pointer" : "default" }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onClick={handleClick}
+      />
+      {/* Scene transition overlay — fades in when a new scene loads, then fades out */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "#000",
+          pointerEvents: "none",
+          opacity: fading ? 1 : 0,
+          transition: fading ? "none" : "opacity 0.4s ease-out",
+        }}
+      />
+    </div>
   );
 }
