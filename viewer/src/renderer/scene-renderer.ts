@@ -463,13 +463,15 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
     case "tree": {
       const group = new THREE.Group();
       // Trunk — slightly tapered
+      const trunkMat = makeMat(0x5c3d1e, 0.9, 0);
       const trunk = new THREE.Mesh(
         new THREE.CylinderGeometry(0.18, 0.28, 2.2, 8),
-        makeMat(0x5c3d1e, 0.9, 0),
+        trunkMat,
       );
       trunk.position.y = 1.1;
       trunk.castShadow = true;
       group.add(trunk);
+      if (invalidate) applyTerrainPbr(trunkMat, "bark_brown_02", 2, invalidate);
       // Multi-layer foliage — 3 overlapping spheroid clusters
       const leafMat = makeMat(colorFor("tree"), 0.95, 0);
       const layers: [number, number, number, number][] = [
@@ -496,6 +498,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
     case "building": {
       const group = new THREE.Group();
       const wallMat = makeMat(colorFor("building"), 0.85, 0.05);
+      if (invalidate) applyTerrainPbr(wallMat, "red_brick_04", 3, invalidate);
       const roofMat = makeMat(0x6b3a2a, 0.8, 0);
       const glassMat = new THREE.MeshStandardMaterial({
         color: 0x88bbdd, roughness: 0.05, metalness: 0.2,
@@ -1204,6 +1207,7 @@ export class SceneRenderer {
 
     const trunkMat = makeMat(0x5c3d1e, 0.9, 0);
     const leafMat  = makeMat(colorFor("tree"), 0.95, 0);
+    applyTerrainPbr(trunkMat, "bark_brown_02", 2, () => this.invalidate(2));
 
     // One InstancedMesh per part: trunk + 3 foliage layers
     const trunkIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 8), trunkMat, count);
