@@ -1162,6 +1162,9 @@ export class SceneRenderer {
     // Batch trees as InstancedMesh (R3F-inspired: reduces N×4 draw calls → 4)
     this.buildInstancedTrees(treeObjects);
 
+    // NPC idle animation: gentle bob + sway for each npc object
+    this.registerNpcIdleAnims();
+
     // Wait for all GLTF loads (errors are caught inside loadGltfModel)
     await Promise.all(loadPromises);
 
@@ -1210,6 +1213,37 @@ export class SceneRenderer {
    * R3F-inspired: N trees → 4 draw calls (trunk + 3 foliage layers) instead of N×4.
    * Trees are generally not interactive so we store phantom Groups for the objects map.
    */
+  /**
+   * Register per-frame idle animations for all NPC objects in the scene.
+   * Each NPC bobs gently up/down and sways slightly — deterministic phase
+   * offset from objectId keeps NPCs out of sync with each other.
+   */
+  private registerNpcIdleAnims(): void {
+    const npcs: Array<{ root: THREE.Object3D; baseY: number; phase: number }> = [];
+
+    for (const [id, root] of this.objects) {
+      const meta = this.objectMeta.get(id);
+      if (!meta || meta.type !== "npc") continue;
+      // Deterministic phase from objectId so NPCs move independently
+      const phase = (id.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % 100) / 100 * Math.PI * 2;
+      npcs.push({ root, baseY: root.position.y, phase });
+    }
+
+    if (npcs.length === 0) return;
+
+    let elapsed = 0;
+    this.codeAnimCbs.push((delta) => {
+      elapsed += delta;
+      for (const { root, baseY, phase } of npcs) {
+        // Gentle vertical bob: ±0.04 units at ~0.8 Hz
+        root.position.y = baseY + Math.sin(elapsed * 5 + phase) * 0.04;
+        // Subtle sway: ±1.5° rotation at ~0.5 Hz
+        root.rotation.y = Math.sin(elapsed * 3.2 + phase) * 0.026;
+      }
+      this.invalidate(1);
+    });
+  }
+
   /**
    * Build an animated Water mesh for terrain/water objects.
    * Uses Three.js Water shader (already imported). Registers a per-frame
