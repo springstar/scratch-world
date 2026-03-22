@@ -30,6 +30,64 @@ function makeMat(color: number, rough = 0.8, metal = 0.1): THREE.MeshStandardMat
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
 }
 
+/**
+ * Slope-blended terrain material using onBeforeCompile GLSL injection.
+ *
+ * Passes objectNormal.y (object-space normal y) as a varying from the
+ * vertex shader to the fragment shader.  smoothstep(lo, hi, y) blends
+ * between sideColor (cliffs / earth) and topColor (grass / stone top).
+ *
+ * Works with THREE.WebGLRenderer — no TSL / WebGPURenderer required.
+ */
+function makeTerrainSlopeMat(
+  topColor: number,
+  sideColor: number,
+  lo = 0.35,
+  hi = 0.75,
+  roughness = 0.95,
+): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({ roughness, metalness: 0 });
+
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTopColor  = { value: new THREE.Color(topColor) };
+    shader.uniforms.uSideColor = { value: new THREE.Color(sideColor) };
+    shader.uniforms.uSlopeLo   = { value: lo };
+    shader.uniforms.uSlopeHi   = { value: hi };
+
+    // Vertex: declare varying and compute objectNormal.y after normals are set up
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <common>",
+      `#include <common>\nvarying float vSlopeY;`,
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <beginnormal_vertex>",
+      `#include <beginnormal_vertex>\nvSlopeY = objectNormal.y;`,
+    );
+
+    // Fragment: declare uniforms + varying, then replace diffuse color after base color
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <common>",
+      `#include <common>
+uniform vec3 uTopColor;
+uniform vec3 uSideColor;
+uniform float uSlopeLo;
+uniform float uSlopeHi;
+varying float vSlopeY;`,
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      `#include <color_fragment>
+float slopeBlend = smoothstep(uSlopeLo, uSlopeHi, vSlopeY);
+diffuseColor.rgb = mix(uSideColor, uTopColor, slopeBlend);`,
+    );
+  };
+
+  // Unique cache key so Three.js doesn't share this program with plain MeshStandardMaterial
+  mat.customProgramCacheKey = () => `terrain-slope-${topColor}-${sideColor}`;
+
+  return mat;
+}
+
 function inferShape(name: string): string {
   const n = name.toLowerCase();
   if (n.includes("blackboard") || n.includes("chalkboard")) return "blackboard";
@@ -623,12 +681,15 @@ function buildObject(obj: SceneObject): THREE.Object3D {
       } else if (shape === "hill") {
         // Rounded hill — upper hemisphere dome.
         // position.y = top of hill (peak); objects on the hill sit at this y.
-        const hw = (obj.metadata.width  as number | undefined) ?? 10; // half-width footprint radius
-        const hh = (obj.metadata.height as number | undefined) ?? 4;  // peak height above base
+        const hw = (obj.metadata.width  as number | undefined) ?? 10;
+        const hh = (obj.metadata.height as number | undefined) ?? 4;
         const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
-        const mesh = new THREE.Mesh(geo, makeMat(0x4a6a3a, 0.95, 0));
+        const mesh = new THREE.Mesh(geo,
+          // top=grass green, side/base=earth brown; blend 0.35→0.75 of objectNormal.y
+          makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75),
+        );
         mesh.scale.set(hw, hh, hw);
-        mesh.position.set(x, y - hh * 0.05, z); // slight sink so base blends into ground
+        mesh.position.set(x, y - hh * 0.05, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
         root = mesh;
@@ -640,9 +701,9 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         const cd = (obj.metadata.depth  as number | undefined) ?? 3;
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(cw, ch, cd),
-          makeMat(0x8a7a68, 0.95, 0.05),
+          // top=lighter stone, face=dark rock; sharp transition (0.7→0.9)
+          makeTerrainSlopeMat(0x908070, 0x5a4a3c, 0.7, 0.9),
         );
-        // y places top at position.y — bury lower half underground for seamless join
         mesh.position.set(x, y - ch * 0.5 + 0.1, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
@@ -651,13 +712,14 @@ function buildObject(obj: SceneObject): THREE.Object3D {
         // Elevated flat slab (cliff-top, raised plaza, floating island tier).
         // position.y = top surface where objects sit.
         const pw = (obj.metadata.width  as number | undefined) ?? 10;
-        const ph = (obj.metadata.height as number | undefined) ?? 2;  // slab thickness
+        const ph = (obj.metadata.height as number | undefined) ?? 2;
         const pd = (obj.metadata.depth  as number | undefined) ?? 10;
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(pw, ph, pd),
-          makeMat(0x9b8c7a, 0.95, 0),
+          // top=light stone, sides=darker stone edge; transition 0.6→0.85
+          makeTerrainSlopeMat(0xb0a282, 0x7a6a58, 0.6, 0.85),
         );
-        mesh.position.set(x, y - ph * 0.5, z); // top surface at y
+        mesh.position.set(x, y - ph * 0.5, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
         root = mesh;
