@@ -41,7 +41,7 @@ The `sceneData` field must be a JSON object with this exact structure:
       "interactable": true,
       "interactionHint": "try 'examine the ...'",
       "metadata": {
-        "shape": "desk | chair | blackboard | window | door | wall | floor | shelf | box | pillar | hoop | court | hill | cliff | platform",
+        "shape": "desk | chair | blackboard | window | door | wall | floor | water | shelf | box | pillar | hoop | court | hill | cliff | platform",
         "state": "current state string if stateful",
         "transitions": { "action verb": "next state" },
         "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
@@ -125,6 +125,7 @@ terrain/cliff at y=8   → (cliff walls have nothing on top in most cases)
 | shape | Visual result | Good for |
 |---|---|---|
 | `floor` | Flat slab (custom `metadata.width/depth`) | Main ground, plazas, fields |
+| `water` | Animated reflective water surface | Rivers, lakes, ocean, pools |
 | `hill` | Rounded green dome (width/height configurable) | Rolling countryside, island mound |
 | `cliff` | Tall grey rock face (width/height/depth) | Mountainside, canyon wall, sea cliff |
 | `platform` | Raised flat slab (width/height/depth) | Elevated ruins, fortress battlements |
@@ -175,6 +176,7 @@ terrain/cliff at y=8   → (cliff walls have nothing on top in most cases)
 | Object | `position.y` | Notes |
 |---|---|---|
 | `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.075 |
+| `terrain/water` | desired **water level** (e.g. `0`, `-1`) | Animated reflective surface at this y |
 | `terrain/hill` | desired **peak height** (e.g. `4`) | Dome descends from this peak |
 | `terrain/cliff` | desired **top edge** height (e.g. `8`) | Rock face descends below |
 | `terrain/platform` | desired **top surface** height (e.g. `3`) | Slab hangs below this level |

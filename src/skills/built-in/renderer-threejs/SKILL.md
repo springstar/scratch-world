@@ -16,6 +16,7 @@ When generating sceneData, use this reference to know what shapes, effects, and 
 
 | type | shape (metadata.shape) | Visual result |
 |---|---|---|
+| `terrain` | `water` | Animated reflective water surface (Three.js Water shader); `position.y` = water level; `metadata.width/depth` control size (default 20×20) |
 | `terrain` | `floor` | Flat surface panel; `metadata.width/depth` control size (default 20×20); PBR texture auto-selected from name (grass / stone / wood); override with `metadata.texture` (Polyhaven asset ID) |
 | `terrain` | `wall` | Wall slab (20×3.2); auto-rotates 90° for side walls placed at ±x |
 | `terrain` | `ceiling` | Ceiling panel (20×20) |

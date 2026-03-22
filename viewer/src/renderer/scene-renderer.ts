@@ -1133,6 +1133,15 @@ export class SceneRenderer {
         continue;
       }
 
+      // Water terrain: handled inline to register per-frame animation callback
+      if (obj.type === "terrain" && (obj.metadata.shape as string) === "water") {
+        const water = this.buildWater(obj);
+        this.scene.add(water);
+        this.objects.set(obj.objectId, water);
+        this.objectMeta.set(obj.objectId, obj);
+        continue;
+      }
+
       if (modelUrl) {
         // Path A: load GLTF model — show placeholder while loading
         const placeholder = buildObject(obj, () => this.invalidate(2));
@@ -1201,6 +1210,47 @@ export class SceneRenderer {
    * R3F-inspired: N trees → 4 draw calls (trunk + 3 foliage layers) instead of N×4.
    * Trees are generally not interactive so we store phantom Groups for the objects map.
    */
+  /**
+   * Build an animated Water mesh for terrain/water objects.
+   * Uses Three.js Water shader (already imported). Registers a per-frame
+   * time-update callback so the surface animates when the RAF loop fires.
+   */
+  private buildWater(obj: SceneObject): THREE.Mesh {
+    const ww = (obj.metadata.width as number | undefined) ?? 20;
+    const wd = (obj.metadata.depth as number | undefined) ?? 20;
+
+    const geo = new THREE.PlaneGeometry(ww, wd);
+    const water = new Water(geo, {
+      textureWidth: 512,
+      textureHeight: 512,
+      waterNormals: new THREE.TextureLoader().load(
+        "https://threejs.org/examples/textures/waternormals.jpg",
+        (tex) => {
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          this.invalidate(2);
+        },
+      ),
+      sunDirection: this.sun.position.clone().normalize(),
+      sunColor: this.sun.color,
+      waterColor: 0x001e0f,
+      distortionScale: 3.7,
+      fog: this.scene.fog !== undefined,
+    });
+
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(obj.position.x, obj.position.y, obj.position.z);
+
+    applyUserData(water, obj.objectId, obj.interactable);
+
+    // Animate: advance time uniform every frame
+    this.codeAnimCbs.push((delta) => {
+      (water.material as THREE.ShaderMaterial).uniforms["time"].value += delta;
+      this.invalidate(1);
+    });
+
+    return water as unknown as THREE.Mesh;
+  }
+
   private buildInstancedTrees(trees: SceneObject[]): void {
     if (trees.length === 0) return;
 
