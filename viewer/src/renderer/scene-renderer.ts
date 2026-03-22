@@ -819,6 +819,41 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
   return root;
 }
 
+// ── NPC Mob System ────────────────────────────────────────────────────────────
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+interface NpcMobState {
+  root:       THREE.Object3D;
+  baseY:      number;
+  phase:      number;           // idle anim phase offset
+  mode:       "idle" | "randomwalk" | "patrol";
+  speed:      number;           // units/sec
+  origin:     THREE.Vector3;    // randomwalk: 原点
+  maxRadius:  number;           // randomwalk: 游荡半径
+  waypoints:  THREE.Vector3[];  // patrol: 路径点
+  wpIdx:      number;           // patrol: 当前路径点索引
+  walkState:  "walking" | "pausing";
+  pauseTimer: number;           // 剩余暂停秒数
+  target:     THREE.Vector3 | null;
+  elapsed:    number;           // 自身计时器（腿部动画）
+  chatter:    string[];
+  chatSprite: THREE.Sprite | null;
+  chatTimer:  number;           // >0 时显示气泡
+}
+
 // ── Environment presets ──────────────────────────────────────────────────────
 
 interface EnvPreset {
@@ -899,6 +934,26 @@ function resolveEnvPreset(skybox?: string, timeOfDay?: string): EnvPreset {
   return { skyColor, groundColor: 0x4a7c59, fogColor: skyColor, sunColor, sunIntensity, sunPosition, ambientIntensity, sky };
 }
 
+// ── AnimSystem priority queue (inspired by tiny-web-metaverse SystemOrder) ───
+//
+// Systems run every frame in ascending priority order.
+// Explicit ordering prevents the bugs that arise from relying on push() sequence.
+//
+//  300 Simulation  — NPC movement, physics, state machines
+//  500 Culling     — distance culling (must see final positions from Simulation)
+//  600 Render      — water UV scroll, particles, sceneCode animate callbacks
+
+const SystemOrder = {
+  Simulation: 300,
+  Culling:    500,
+  Render:     600,
+} as const;
+
+interface AnimSystem {
+  priority: number;
+  tick: (delta: number) => void;
+}
+
 // ── PickResult ───────────────────────────────────────────────────────────────
 
 export interface PickResult {
@@ -932,9 +987,10 @@ export class SceneRenderer {
   private scatterGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
+  private npcMobStates: NpcMobState[] = [];
   private animFrame = 0;
+  private animSystems: AnimSystem[] = [];
   private raycaster = new THREE.Raycaster();
-  private codeAnimCbs: Array<(delta: number) => void> = [];
   private lastFrameTime = 0;
 
   // Smooth transition state
@@ -945,7 +1001,7 @@ export class SceneRenderer {
 
   // ── Demand rendering (R3F-style frameloop:"demand") ──────────────────────
   // framesDue > 0 → render this frame and decrement.
-  // Always render when codeAnimCbs are active (animated scenes like Water).
+  // Always render when animSystems are active (animated scenes like Water).
   private framesDue = 0;
 
   // ── Adaptive DPR (R3F-style performance.regress) ──────────────────────────
@@ -1063,6 +1119,17 @@ export class SceneRenderer {
     this.startLoop();
   }
 
+  /** Register a per-frame system. Systems are kept sorted by priority (ascending). */
+  private registerSystem(priority: number, tick: (delta: number) => void): void {
+    const system: AnimSystem = { priority, tick };
+    const idx = this.animSystems.findIndex(s => s.priority > priority);
+    if (idx === -1) {
+      this.animSystems.push(system);
+    } else {
+      this.animSystems.splice(idx, 0, system);
+    }
+  }
+
   async loadScene(data: SceneData): Promise<void> {
     // Remove JSON-built objects
     for (const obj of this.objects.values()) {
@@ -1070,7 +1137,7 @@ export class SceneRenderer {
     }
     this.objects.clear();
     this.objectMeta.clear();
-    this.codeAnimCbs = [];
+    this.animSystems = [];
 
     // Dispose previous instanced tree batches
     for (const im of this.treeInstances) {
@@ -1207,8 +1274,8 @@ export class SceneRenderer {
     // Ambient scatter: rocks + shrubs in the peripheral zone for outdoor scenes
     this.scatterAmbientProps(data.objects);
 
-    // NPC idle animation: gentle bob + sway for each npc object
-    this.registerNpcIdleAnims();
+    // NPC mob system: random walk / patrol + idle animation + chatter bubbles
+    this.setupNpcSystem();
 
     // Wait for all GLTF loads (errors are caught inside loadGltfModel)
     await Promise.all(loadPromises);
@@ -1259,36 +1326,193 @@ export class SceneRenderer {
    * Trees are generally not interactive so we store phantom Groups for the objects map.
    */
   /**
-   * Register per-frame idle animations for all NPC objects in the scene.
-   * Each NPC bobs gently up/down and sways slightly — deterministic phase
-   * offset from objectId keeps NPCs out of sync with each other.
+   * Set up the NPC mob system: random walk / patrol + idle animation + chatter bubbles.
+   * Replaces the old registerNpcIdleAnims().
    */
-  private registerNpcIdleAnims(): void {
-    const npcs: Array<{ root: THREE.Object3D; baseY: number; phase: number }> = [];
+  private setupNpcSystem(): void {
+    this.npcMobStates = [];
 
     for (const [id, root] of this.objects) {
       const meta = this.objectMeta.get(id);
       if (!meta || meta.type !== "npc") continue;
-      // Deterministic phase from objectId so NPCs move independently
+
       const phase = (id.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % 100) / 100 * Math.PI * 2;
-      npcs.push({ root, baseY: root.position.y, phase });
+      const mode  = (meta.metadata.moveMode as string | undefined) ?? "idle";
+      const speed = (meta.metadata.speed    as number | undefined) ?? 0.8;
+      const maxR  = (meta.metadata.maxRadius as number | undefined) ?? 3.0;
+      const rawWp = (meta.metadata.waypoints as Array<{x: number; z: number}> | undefined) ?? [];
+      const waypoints = rawWp.map(w => new THREE.Vector3(w.x, root.position.y, w.z));
+      const chatter = (meta.metadata.chatter as string[] | undefined) ?? [];
+
+      this.npcMobStates.push({
+        root, baseY: root.position.y, phase,
+        mode: mode as NpcMobState["mode"], speed,
+        origin: root.position.clone(), maxRadius: maxR,
+        waypoints, wpIdx: 0,
+        walkState: "pausing", pauseTimer: Math.random() * 2,
+        target: null, elapsed: 0,
+        chatter, chatSprite: null, chatTimer: 0,
+      });
     }
 
-    if (npcs.length === 0) return;
+    if (this.npcMobStates.length === 0) return;
 
-    let elapsed = 0;
-    this.codeAnimCbs.push((delta) => {
-      elapsed += delta;
-      for (const { root, baseY, phase } of npcs) {
-        // Breathing: very slight Y rise ±0.03 at slow rate (~0.3 Hz)
-        root.position.y = baseY + Math.sin(elapsed * 1.9 + phase) * 0.03;
-        // Weight-shift sway: lean left/right (z-axis) ±2° at ~0.4 Hz
-        root.rotation.z = Math.sin(elapsed * 2.5 + phase) * 0.035;
-        // Subtle forward-back lean (x-axis) ±1° at slightly different rate
-        root.rotation.x = Math.sin(elapsed * 1.7 + phase + 1) * 0.018;
-      }
+    this.registerSystem(SystemOrder.Simulation, (delta) => {
+      for (const s of this.npcMobStates) this.tickNpc(s, delta);
+    });
+
+    this.registerSystem(SystemOrder.Culling, () => {
+      this.updateDistanceCulling();
       this.invalidate(1);
     });
+  }
+
+  private tickNpc(s: NpcMobState, delta: number): void {
+    s.elapsed += delta;
+
+    // ── Chatter timer ──────────────────────────────────────────────
+    if (s.chatTimer > 0) {
+      s.chatTimer -= delta;
+      if (s.chatTimer <= 0 && s.chatSprite) s.chatSprite.visible = false;
+    }
+
+    // ── Idle mode: bob + sway ──────────────────────────────────────
+    if (s.mode === "idle") {
+      s.root.position.y = s.baseY + Math.sin(s.elapsed * 1.9 + s.phase) * 0.03;
+      s.root.rotation.z = Math.sin(s.elapsed * 2.5 + s.phase) * 0.035;
+      s.root.rotation.x = Math.sin(s.elapsed * 1.7 + s.phase + 1) * 0.018;
+      return;
+    }
+
+    // ── Movement modes ─────────────────────────────────────────────
+    if (s.walkState === "pausing") {
+      // 暂停时仍做 idle 动画
+      s.root.position.y = s.baseY + Math.sin(s.elapsed * 1.9 + s.phase) * 0.03;
+      s.root.rotation.z = Math.sin(s.elapsed * 2.5 + s.phase) * 0.035;
+      s.root.rotation.x = Math.sin(s.elapsed * 1.7 + s.phase + 1) * 0.018;
+      // reset legs
+      const legs = [s.root.children[0], s.root.children[1]];
+      legs.forEach(l => { if (l) l.rotation.x *= 0.85; });
+
+      s.pauseTimer -= delta;
+      if (s.pauseTimer > 0) return;
+
+      // 选取下一个目标
+      if (s.mode === "randomwalk") {
+        const angle = Math.random() * Math.PI * 2;
+        const dist  = Math.random() * s.maxRadius;
+        s.target = new THREE.Vector3(
+          s.origin.x + Math.cos(angle) * dist,
+          s.baseY,
+          s.origin.z + Math.sin(angle) * dist,
+        );
+      } else if (s.mode === "patrol" && s.waypoints.length > 0) {
+        s.target = s.waypoints[s.wpIdx].clone();
+        s.target.y = s.baseY;
+      }
+      s.walkState = "walking";
+
+    } else { // walking
+      if (!s.target) { s.walkState = "pausing"; return; }
+
+      const toTarget = s.target.clone().sub(s.root.position);
+      toTarget.y = 0;
+      const dist = toTarget.length();
+
+      if (dist < 0.15) {
+        // 到达目标
+        s.root.position.x = s.target.x;
+        s.root.position.z = s.target.z;
+        if (s.mode === "patrol") {
+          s.wpIdx = (s.wpIdx + 1) % (s.waypoints.length || 1);
+          s.target = s.waypoints[s.wpIdx].clone();
+          s.target.y = s.baseY;
+        } else {
+          s.walkState = "pausing";
+          s.pauseTimer = 2 + Math.random() * 3;
+          s.target = null;
+        }
+        return;
+      }
+
+      // 移动
+      const dir = toTarget.normalize();
+      s.root.position.x += dir.x * s.speed * delta;
+      s.root.position.z += dir.z * s.speed * delta;
+      s.root.position.y = s.baseY + Math.sin(s.elapsed * 8) * 0.02; // 走路微抖
+
+      // 朝向（smooth rotate）
+      const targetAngle = Math.atan2(dir.x, dir.z);
+      const curAngle    = s.root.rotation.y;
+      let diff = targetAngle - curAngle;
+      while (diff >  Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      s.root.rotation.y += diff * Math.min(delta * 8, 1);
+
+      // 走路时腿部摆动（children 0=左腿, 1=右腿）
+      const swing = Math.sin(s.elapsed * 6) * 0.5;
+      if (s.root.children[0]) s.root.children[0].rotation.x =  swing;
+      if (s.root.children[1]) s.root.children[1].rotation.x = -swing;
+      s.root.rotation.z = 0;
+      s.root.rotation.x = 0;
+    }
+  }
+
+  private updateDistanceCulling(): void {
+    const cam = this.camera.position;
+    const thresh: Record<string, number> = {
+      npc: 55, tree: 70, building: 80, item: 40, object: 50,
+    };
+    for (const [id, root] of this.objects) {
+      const meta = this.objectMeta.get(id);
+      if (!meta) continue;
+      root.visible = root.position.distanceTo(cam) < (thresh[meta.type] ?? 50);
+    }
+  }
+
+  /**
+   * Trigger a chatter bubble on the NPC with the given objectId.
+   * Shows a random line from the NPC's chatter array as a Canvas Sprite above its head.
+   */
+  public triggerNpcChatter(objectId: string): void {
+    const s = this.npcMobStates.find(n => n.root.userData.objectId === objectId);
+    if (!s || s.chatter.length === 0) return;
+
+    const line = s.chatter[Math.floor(Math.random() * s.chatter.length)];
+
+    if (!s.chatSprite) {
+      const canvas = document.createElement("canvas");
+      canvas.width  = 256;
+      canvas.height = 80;
+      const tex = new THREE.CanvasTexture(canvas);
+      const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+      const sp  = new THREE.Sprite(mat);
+      sp.scale.set(1.4, 0.44, 1);
+      sp.position.set(0, 1.65, 0);
+      s.root.add(sp);
+      s.chatSprite = sp;
+    }
+
+    // 重绘 canvas 文字
+    const mat = s.chatSprite.material as THREE.SpriteMaterial;
+    const canvas = (mat.map as THREE.CanvasTexture).image as HTMLCanvasElement;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 白色圆角气泡背景
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    roundRect(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 12);
+    ctx.fill();
+    // 文字
+    ctx.fillStyle = "#1a1a1a";
+    ctx.font = "bold 22px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(line, canvas.width / 2, canvas.height / 2, canvas.width - 24);
+    (mat.map as THREE.CanvasTexture).needsUpdate = true;
+
+    s.chatSprite.visible = true;
+    s.chatTimer = 3.5;
+    this.invalidate(3);
   }
 
   /**
@@ -1353,7 +1577,7 @@ export class SceneRenderer {
     applyUserData(group, obj.objectId, obj.interactable);
 
     let t = 0;
-    this.codeAnimCbs.push((delta) => {
+    this.registerSystem(SystemOrder.Render, (delta) => {
       t += delta;
       normalTex.offset.set(t * 0.03, t * 0.015);
       this.invalidate(1);
@@ -1425,7 +1649,7 @@ export class SceneRenderer {
   }
 
   executeCode(code: string): void {
-    this.codeAnimCbs = [];
+    this.animSystems = [];
 
     // Proxy wraps codeGroup so that scene.add() / scene.remove() target the group,
     // but scene.background / scene.fog / scene.environment still reach the real Scene.
@@ -1457,7 +1681,7 @@ export class SceneRenderer {
         this.camera,
         this.renderer,
         this.controls,
-        (cb: (delta: number) => void) => { this.codeAnimCbs.push(cb); },
+        (cb: (delta: number) => void) => { this.registerSystem(SystemOrder.Render, cb); },
         Water,
       );
     } catch (err) {
@@ -1749,18 +1973,19 @@ export class SceneRenderer {
         this.invalidate(1);
       }
 
-      // Per-frame callbacks from sceneCode (animated scenes: Water, particles…)
-      const hasAnimCbs = this.codeAnimCbs.length > 0;
-      for (let i = this.codeAnimCbs.length - 1; i >= 0; i--) {
+      // Per-frame systems — run in ascending priority order
+      const hasSystems = this.animSystems.length > 0;
+      for (let i = 0; i < this.animSystems.length; i++) {
         try {
-          this.codeAnimCbs[i](delta);
+          this.animSystems[i].tick(delta);
         } catch (err) {
-          console.warn("[SceneRenderer] codeAnimCb error:", err);
-          this.codeAnimCbs.splice(i, 1);
+          console.warn("[SceneRenderer] animSystem error (priority=%d):", this.animSystems[i].priority, err);
+          this.animSystems.splice(i, 1);
+          i--;
         }
       }
       // Animated scenes always need the next frame
-      if (hasAnimCbs) this.invalidate(1);
+      if (hasSystems) this.invalidate(1);
 
       // ── Demand render ─────────────────────────────────────────────────────
       // Only call composer.render() when work is queued.

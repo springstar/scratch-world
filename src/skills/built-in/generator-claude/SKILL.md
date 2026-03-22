@@ -248,6 +248,47 @@ Put the exact text to display in the `description` field (e.g. `"黑板上写着
 
 ---
 
+## NPC Behavior Metadata
+
+NPCs support movement modes and chatter bubbles via `metadata`:
+
+```json
+{
+  "objectId": "npc_merchant",
+  "type": "npc",
+  "position": { "x": 3, "y": 0, "z": 0 },
+  "interactable": true,
+  "metadata": {
+    "moveMode": "randomwalk",
+    "speed": 0.8,
+    "maxRadius": 4,
+    "waypoints": [{"x": 2, "z": 3}, {"x": -2, "z": 1}],
+    "chatter": ["今天生意不错", "你是外地人？", "小心山里的野狼"]
+  }
+}
+```
+
+**Movement mode fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `moveMode` | `"idle" \| "randomwalk" \| "patrol"` | `"idle"` | `"idle"` = bob/sway in place; `"randomwalk"` = wander randomly within `maxRadius`; `"patrol"` = loop through `waypoints` |
+| `speed` | number | `0.8` | Movement speed in units/sec |
+| `maxRadius` | number | `3.0` | Max wander radius for `randomwalk` mode |
+| `waypoints` | `Array<{x, z}>` | `[]` | Ordered patrol points for `patrol` mode (y is inferred from NPC position) |
+
+**Chatter field:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `chatter` | `string[]` | `[]` | Lines shown as speech bubbles when the NPC is clicked. A random line is chosen each click. Bubbles auto-hide after 3.5 s |
+
+- `patrol` mode requires at least one entry in `waypoints`; without waypoints it falls back to pausing indefinitely.
+- NPCs always perform idle bob/sway animation while paused or in `"idle"` mode.
+- Clicking an NPC with no `chatter` array (or an empty one) silently does nothing.
+
+---
+
 ## GLTF Model Loading (Path A)
 
 Any object can load a real 3D model by setting `metadata.modelUrl` to a GLTF/GLB URL. The viewer will show a placeholder shape while loading, then replace it with the real model.

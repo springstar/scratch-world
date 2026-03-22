@@ -88,7 +88,12 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
       if (!r) return;
       const { x, y } = toNdc(e);
       const hit = r.pick(x, y);
-      if (hit) onObjectClick(hit.objectId, hit.name, hit.interactable);
+      if (hit) {
+        onObjectClick(hit.objectId, hit.name, hit.interactable);
+        if (hit.interactable) {
+          r.triggerNpcChatter(hit.objectId);
+        }
+      }
     },
     [onObjectClick, toNdc],
   );
