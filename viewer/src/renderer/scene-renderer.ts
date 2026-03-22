@@ -471,7 +471,7 @@ function applyUserData(obj: THREE.Object3D, objectId: string, interactable: bool
 }
 
 function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D {
-  const { objectId, type, position, interactable } = obj;
+  const { objectId, type, position, interactable, metadata: meta } = obj;
   const x = position.x;
   const y = position.y;
   const z = position.z;
