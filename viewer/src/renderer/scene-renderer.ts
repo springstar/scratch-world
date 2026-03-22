@@ -1235,10 +1235,12 @@ export class SceneRenderer {
     this.codeAnimCbs.push((delta) => {
       elapsed += delta;
       for (const { root, baseY, phase } of npcs) {
-        // Vertical bob: ±0.12 units at ~0.8 Hz — clearly visible
-        root.position.y = baseY + Math.sin(elapsed * 5 + phase) * 0.12;
-        // Side sway: ±4.5° rotation at ~0.5 Hz
-        root.rotation.y = Math.sin(elapsed * 3.2 + phase) * 0.08;
+        // Breathing: very slight Y rise ±0.03 at slow rate (~0.3 Hz)
+        root.position.y = baseY + Math.sin(elapsed * 1.9 + phase) * 0.03;
+        // Weight-shift sway: lean left/right (z-axis) ±2° at ~0.4 Hz
+        root.rotation.z = Math.sin(elapsed * 2.5 + phase) * 0.035;
+        // Subtle forward-back lean (x-axis) ±1° at slightly different rate
+        root.rotation.x = Math.sin(elapsed * 1.7 + phase + 1) * 0.018;
       }
       this.invalidate(1);
     });
@@ -1260,8 +1262,10 @@ export class SceneRenderer {
       roughness: 0.08,
       metalness: 0.0,
       transparent: true,
-      opacity: 0.82,
-      envMapIntensity: 0.5,
+      opacity: 0.85,
+      depthWrite: false,        // prevents z-fighting with underlying floor
+      envMapIntensity: 0.6,
+      side: THREE.FrontSide,
     });
 
     // Load waternormals for ripple effect — scroll UV each frame
@@ -1271,7 +1275,7 @@ export class SceneRenderer {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(4, 4);
         waterMat.normalMap = tex;
-        waterMat.normalScale.set(0.4, 0.4);
+        waterMat.normalScale.set(0.5, 0.5);
         waterMat.needsUpdate = true;
         this.invalidate(2);
       },
@@ -1279,8 +1283,10 @@ export class SceneRenderer {
 
     const mesh = new THREE.Mesh(geo, waterMat);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
-    mesh.receiveShadow = true;
+    // Lift 0.12 above the specified y so it always floats above the ground plane
+    // regardless of what y the LLM provides (floor top surface is at y+0.075)
+    mesh.position.set(obj.position.x, obj.position.y + 0.12, obj.position.z);
+    mesh.renderOrder = 1;       // render after opaque terrain so transparency composites correctly
 
     applyUserData(mesh, obj.objectId, obj.interactable);
 
