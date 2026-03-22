@@ -6,6 +6,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { loadEnvMap } from "./hdri-cache.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { Water } from "three/addons/objects/Water.js";
@@ -934,9 +935,8 @@ export class SceneRenderer {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.6;
 
-    // HDRI environment (R3F-inspired): PMREMGenerator from RoomEnvironment gives
-    // physically correct IBL reflections on all MeshStandardMaterial objects.
-    // One-time setup — no network requests needed.
+    // HDRI environment — baseline: RoomEnvironment (no network, immediate).
+    // Per-scene: replaced by a Polyhaven 1k HDRI in loadScene() once loaded.
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     pmrem.compileEquirectangularShader();
     this.scene.environment = pmrem.fromScene(new RoomEnvironment()).texture;
@@ -1068,6 +1068,22 @@ export class SceneRenderer {
     // Clamp threshold to minimum 0.9 — prevents scene-specified low thresholds
     // from blooming ordinary lit surfaces and washing out the image.
     this.bloomPass.threshold = Math.max(bloomCfg?.threshold ?? 0.9, 0.9);
+
+    // Upgrade scene.environment from RoomEnvironment baseline to a real Polyhaven
+    // HDRI matched to the skybox preset.  Fire-and-forget: the baseline keeps
+    // things looking reasonable while the ~200 KB 1k .hdr downloads.
+    // Skip for sceneCode scenes — they control their own lighting.
+    if (!data.sceneCode && env.skybox) {
+      const skyboxKey = env.skybox;
+      loadEnvMap(skyboxKey, this.renderer)
+        .then((envMap) => {
+          this.scene.environment = envMap;
+          this.invalidate(2);
+        })
+        .catch(() => {
+          // Network unavailable — RoomEnvironment baseline remains active
+        });
+    }
 
     // Path C: execute sceneCode if present.
     // Mute renderer's built-in lights so sceneCode has full lighting control.
