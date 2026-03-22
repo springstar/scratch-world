@@ -108,9 +108,12 @@ Divide the scene into three depth bands along the **z axis**:
 | Terrain shape | `position.y` meaning | Typical `metadata.height` |
 |---|---|---|
 | `terrain/floor` | top surface = `y + 0.075` | — (flat tile, use `metadata.width/depth`) |
+| `terrain/water` | animated water surface at this y | — (use `metadata.width/depth`) |
 | `terrain/hill` | **peak of the dome** | 3–8 units |
 | `terrain/cliff` | **top edge** of the rock face | 5–12 units |
 | `terrain/platform` | **top surface** where objects stand | 1–5 units |
+
+**CRITICAL: never place `npc`, `building`, or `tree` objects at the same position as a `terrain/water` object — they will stand on the water surface. Always place them on solid terrain (`floor`, `hill`, `platform`) away from the water area.**
 
 **Rule: any object sitting ON elevated terrain uses the same `y` as the terrain's `position.y`.**
 

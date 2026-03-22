@@ -1235,54 +1235,64 @@ export class SceneRenderer {
     this.codeAnimCbs.push((delta) => {
       elapsed += delta;
       for (const { root, baseY, phase } of npcs) {
-        // Gentle vertical bob: ±0.04 units at ~0.8 Hz
-        root.position.y = baseY + Math.sin(elapsed * 5 + phase) * 0.04;
-        // Subtle sway: ±1.5° rotation at ~0.5 Hz
-        root.rotation.y = Math.sin(elapsed * 3.2 + phase) * 0.026;
+        // Vertical bob: ±0.12 units at ~0.8 Hz — clearly visible
+        root.position.y = baseY + Math.sin(elapsed * 5 + phase) * 0.12;
+        // Side sway: ±4.5° rotation at ~0.5 Hz
+        root.rotation.y = Math.sin(elapsed * 3.2 + phase) * 0.08;
       }
       this.invalidate(1);
     });
   }
 
   /**
-   * Build an animated Water mesh for terrain/water objects.
-   * Uses Three.js Water shader (already imported). Registers a per-frame
-   * time-update callback so the surface animates when the RAF loop fires.
+   * Build an animated water surface for terrain/water objects.
+   * Uses MeshPhysicalMaterial + scrolling waternormals UV offset —
+   * avoids the mirror-reflection artifacts of the full Water reflector shader.
    */
   private buildWater(obj: SceneObject): THREE.Mesh {
     const ww = (obj.metadata.width as number | undefined) ?? 20;
     const wd = (obj.metadata.depth as number | undefined) ?? 20;
 
-    const geo = new THREE.PlaneGeometry(ww, wd);
-    const water = new Water(geo, {
-      textureWidth: 512,
-      textureHeight: 512,
-      waterNormals: new THREE.TextureLoader().load(
-        "https://threejs.org/examples/textures/waternormals.jpg",
-        (tex) => {
-          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          this.invalidate(2);
-        },
-      ),
-      sunDirection: this.sun.position.clone().normalize(),
-      sunColor: this.sun.color,
-      waterColor: 0x001e0f,
-      distortionScale: 3.7,
-      fog: this.scene.fog !== undefined,
+    const geo = new THREE.PlaneGeometry(ww, wd, 1, 1);
+
+    const waterMat = new THREE.MeshPhysicalMaterial({
+      color: 0x1a6b8a,
+      roughness: 0.08,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.82,
+      envMapIntensity: 0.5,
     });
 
-    water.rotation.x = -Math.PI / 2;
-    water.position.set(obj.position.x, obj.position.y, obj.position.z);
+    // Load waternormals for ripple effect — scroll UV each frame
+    const normalTex = new THREE.TextureLoader().load(
+      "https://threejs.org/examples/textures/waternormals.jpg",
+      (tex) => {
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(4, 4);
+        waterMat.normalMap = tex;
+        waterMat.normalScale.set(0.4, 0.4);
+        waterMat.needsUpdate = true;
+        this.invalidate(2);
+      },
+    );
 
-    applyUserData(water, obj.objectId, obj.interactable);
+    const mesh = new THREE.Mesh(geo, waterMat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
+    mesh.receiveShadow = true;
 
-    // Animate: advance time uniform every frame
+    applyUserData(mesh, obj.objectId, obj.interactable);
+
+    // Animate: dual-direction UV scroll for flowing ripple effect
+    let t = 0;
     this.codeAnimCbs.push((delta) => {
-      (water.material as THREE.ShaderMaterial).uniforms["time"].value += delta;
+      t += delta;
+      normalTex.offset.set(t * 0.03, t * 0.015);
       this.invalidate(1);
     });
 
-    return water as unknown as THREE.Mesh;
+    return mesh;
   }
 
   private buildInstancedTrees(trees: SceneObject[]): void {
