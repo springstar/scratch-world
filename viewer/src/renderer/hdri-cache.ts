@@ -26,10 +26,10 @@ const SKYBOX_HDRI_ID: Record<string, string> = {
   overcast:  "overcast_soil_puresky",
 };
 
-const CDN = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k";
+const CDN = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k";
 
 function hdriUrl(id: string): string {
-  return `${CDN}/${id}_1k.hdr`;
+  return `${CDN}/${id}_2k.hdr`;
 }
 
 // In-memory cache: skybox preset key → ready PMREM texture

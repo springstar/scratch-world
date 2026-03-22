@@ -71,6 +71,13 @@ The `sceneData` field must be a JSON object with this exact structure:
 - **OUTDOOR scenes** (forest, city, park, street, beach, rooftop, **basketball court, tennis court, football field, sports field, playground**, etc.):
   - Use type `"terrain"` for ground and landforms. **Do NOT add walls or ceiling.**
   - Use types `"tree"`, `"building"`, `"npc"`, `"item"`, `"object"` freely.
+  - **Outdoor scene minimum specs (CRITICAL — undersized scenes feel like dioramas):**
+    - `terrain/floor` width and depth: **≥ 80 × 60** units (anything smaller exposes bare edges and feels cramped)
+    - Buildings/trees must be spread **8–15 units apart** — never cluster everything in a 10-unit zone
+    - Background layer (z = -15 to -25) must have **at least 2–3** `terrain/hill` objects (height 5–10) filling the horizon width
+    - Foreground layer (z = +8 to +15) should have **loose scatter**: trees, rocks, or small items at varying x positions — the renderer also auto-scatters ambient rocks, but explicit foreground objects greatly help depth
+    - Recommended viewpoint: z = 16–22, y = 1.7 (eye-level), lookAt toward scene center
+    - `terrain/water` `position.y` should be `0` — **do NOT use negative values**
   - Sports courts and open-air venues are always OUTDOOR — **never add walls or ceiling**.
 - **INDOOR arena** (gymnasium, sports hall — only when the prompt explicitly says "indoor" or "gymnasium/体育馆"):
   - Treat as INDOOR and may include walls/ceiling.
@@ -107,7 +114,7 @@ Divide the scene into three depth bands along the **z axis**:
 
 | Terrain shape | `position.y` meaning | Typical `metadata.height` |
 |---|---|---|
-| `terrain/floor` | top surface = `y + 0.075` | — (flat tile, use `metadata.width/depth`) |
+| `terrain/floor` | top surface = `y + 0.002` | Flat plane, no visible edges at any angle |
 | `terrain/water` | animated water surface at this y | — (use `metadata.width/depth`) |
 | `terrain/hill` | **peak of the dome** | 3–8 units |
 | `terrain/cliff` | **top edge** of the rock face | 5–12 units |
@@ -213,7 +220,7 @@ water at x=0, z=-10, width=24, depth=18 ← buried under the floor
 
 | Object | `position.y` | Notes |
 |---|---|---|
-| `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.075 |
+| `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.002 (PlaneGeometry, no visible sides) |
 | `terrain/water` | desired **water level** (e.g. `0`, `-1`) | Animated reflective surface at this y |
 | `terrain/hill` | desired **peak height** (e.g. `4`) | Dome descends from this peak |
 | `terrain/cliff` | desired **top edge** height (e.g. `8`) | Rock face descends below |

@@ -5,9 +5,11 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
+import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { loadEnvMap } from "./hdri-cache.js";
-import { applyTerrainPbr } from "./texture-cache.js";
+import { applyTerrainPbr, setupUv2 } from "./texture-cache.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { Water } from "three/addons/objects/Water.js";
@@ -80,7 +82,16 @@ varying float vSlopeY;`,
       "#include <color_fragment>",
       `#include <color_fragment>
 float slopeBlend = smoothstep(uSlopeLo, uSlopeHi, vSlopeY);
-diffuseColor.rgb = mix(uSideColor, uTopColor, slopeBlend);`,
+vec3 slopeColor = mix(uSideColor, uTopColor, slopeBlend);
+// When a diffuse map is loaded, use its luminance as a detail modulator
+// (preserves surface variation like dark soil crevices and bright grass tips)
+// rather than discarding it entirely with a plain assignment.
+#ifdef USE_MAP
+  float luma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+  diffuseColor.rgb = slopeColor * (luma * 1.8 + 0.1);
+#else
+  diffuseColor.rgb = slopeColor;
+#endif`,
     );
   };
 
@@ -111,6 +122,7 @@ function buildObjectByShape(
   x: number,
   y: number,
   z: number,
+  invalidate?: () => void,
 ): THREE.Object3D {
   const shape = (obj.metadata.shape as string | undefined) ?? inferShape(obj.name);
   const state = obj.metadata.state as string | undefined;
@@ -195,13 +207,15 @@ function buildObjectByShape(
     case "desk":
     case "table": {
       const group = new THREE.Group();
+      const topMat = makeMat(0xc8a46e, 0.7, 0);
       const top = new THREE.Mesh(
         new THREE.BoxGeometry(1.2, 0.06, 0.7),
-        makeMat(0xc8a46e, 0.7, 0),
+        topMat,
       );
       top.position.y = 0.76;
       top.castShadow = true;
       top.receiveShadow = true;
+      if (invalidate) applyTerrainPbr(topMat, "light_wood_floor_02", 2, invalidate);
       group.add(top);
       for (const [lx, lz] of [[-0.55, -0.3], [0.55, -0.3], [-0.55, 0.3], [0.55, 0.3]] as [number, number][]) {
         const leg = new THREE.Mesh(
@@ -218,15 +232,17 @@ function buildObjectByShape(
     case "chair":
     case "stool": {
       const group = new THREE.Group();
+      const woodMat = makeMat(0xb08050, 0.8, 0);
+      if (invalidate) applyTerrainPbr(woodMat, "light_wood_floor_02", 2, invalidate);
       const seat = new THREE.Mesh(
         new THREE.BoxGeometry(0.45, 0.05, 0.45),
-        makeMat(0xb08050, 0.8, 0),
+        woodMat,
       );
       seat.position.y = 0.45;
       group.add(seat);
       const back = new THREE.Mesh(
         new THREE.BoxGeometry(0.45, 0.5, 0.04),
-        makeMat(0xb08050, 0.8, 0),
+        woodMat,
       );
       back.position.set(0, 0.73, -0.22);
       group.add(back);
@@ -325,6 +341,7 @@ function buildObjectByShape(
     case "bookcase": {
       const group = new THREE.Group();
       const woodMat = makeMat(0xb8864e, 0.75, 0);
+      if (invalidate) applyTerrainPbr(woodMat, "light_wood_floor_02", 3, invalidate);
       // Back panel
       const back = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.0, 0.05), woodMat);
       back.position.set(0, 1.0, -0.15);
@@ -366,10 +383,12 @@ function buildObjectByShape(
 
     case "pillar":
     case "column": {
+      const pillarMat = makeMat(0xd4ccc0, 0.9, 0);
       const mesh = new THREE.Mesh(
         new THREE.CylinderGeometry(0.25, 0.25, 3, 8),
-        makeMat(0xd4ccc0, 0.9, 0),
+        pillarMat,
       );
+      if (invalidate) applyTerrainPbr(pillarMat, "cobblestone_floor_08", 2, invalidate);
       mesh.position.set(x, y + 1.5, z);
       return mesh;
     }
@@ -465,7 +484,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       // Trunk — slightly tapered
       const trunkMat = makeMat(0x5c3d1e, 0.9, 0);
       const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.28, 2.2, 8),
+        new THREE.CylinderGeometry(0.18, 0.28, 2.2, 12),
         trunkMat,
       );
       trunk.position.y = 1.1;
@@ -480,7 +499,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         [-0.2, 4.3, -0.1, 0.85],
       ];
       for (const [lx, ly, lz, lr] of layers) {
-        const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 8, 6), leafMat);
+        const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 12, 9), leafMat);
         leaf.scale.y = 0.78;
         leaf.position.set(lx, ly, lz);
         leaf.castShadow = true;
@@ -578,7 +597,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       neck.position.set(0, 1.02, 0);
       group.add(neck);
       // Head
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 10, 8), skinMat);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 16, 12), skinMat);
       head.position.set(0, 1.23, 0);
       group.add(head);
       // Hair cap
@@ -686,11 +705,10 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         group.position.set(x, y, z);
         root = group;
       } else if (shape === "hill") {
-        // Rounded hill — upper hemisphere dome.
-        // position.y = top of hill (peak); objects on the hill sit at this y.
         const hw = (obj.metadata.width  as number | undefined) ?? 10;
         const hh = (obj.metadata.height as number | undefined) ?? 4;
         const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
+        setupUv2(geo);
         const hillMat = makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75);
         const mesh = new THREE.Mesh(geo, hillMat);
         mesh.scale.set(hw, hh, hw);
@@ -700,30 +718,27 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         if (invalidate) applyTerrainPbr(hillMat, "aerial_grass_rock_02", 4, invalidate);
         root = mesh;
       } else if (shape === "cliff") {
-        // Sheer rock face — tall, narrow slab.
-        // position.y = top of cliff; base is buried underground.
         const cw = (obj.metadata.width  as number | undefined) ?? 12;
         const ch = (obj.metadata.height as number | undefined) ?? 8;
         const cd = (obj.metadata.depth  as number | undefined) ?? 3;
+        const cliffGeo = new THREE.BoxGeometry(cw, ch, cd, 4, 4, 2);
+        setupUv2(cliffGeo);
         const cliffMat = makeTerrainSlopeMat(0x908070, 0x5a4a3c, 0.7, 0.9);
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(cw, ch, cd),
-          cliffMat,
-        );
+        const mesh = new THREE.Mesh(cliffGeo, cliffMat);
         mesh.position.set(x, y - ch * 0.5 + 0.1, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(cliffMat, "rock_face", 3, invalidate);
+        if (invalidate) applyTerrainPbr(cliffMat, "aerial_grass_rock_02", 3, invalidate);
         root = mesh;
       } else if (shape === "platform") {
-        // Elevated flat slab (cliff-top, raised plaza, floating island tier).
-        // position.y = top surface where objects sit.
         const pw = (obj.metadata.width  as number | undefined) ?? 10;
         const ph = (obj.metadata.height as number | undefined) ?? 2;
         const pd = (obj.metadata.depth  as number | undefined) ?? 10;
+        const platformGeo = new THREE.BoxGeometry(pw, ph, pd, 4, 2, 4);
+        setupUv2(platformGeo);
         const platformMat = makeTerrainSlopeMat(0xb0a282, 0x7a6a58, 0.6, 0.85);
         const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(pw, ph, pd),
+          platformGeo,
           platformMat,
         );
         mesh.position.set(x, y - ph * 0.5, z);
@@ -747,15 +762,18 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
           ?? (isIndoor ? "light_wood_floor_02" : isStone ? "cobblestone_floor_08" : "aerial_grass_rock_02");
         const floorColor = isIndoor ? 0xd4b896 : isStone ? 0xb0a080 : 0xc8b89a;
         const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 1, metalness: 0 });
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(fw, 0.15, fd),
-          floorMat,
-        );
-        mesh.position.set(x, y + 0.075, z);
+        // Subdivide for displacement mapping (~2 unit quads, capped at 32 segs each axis)
+        const segsW = Math.min(Math.ceil(fw / 2), 32);
+        const segsD = Math.min(Math.ceil(fd / 2), 32);
+        const floorGeo = new THREE.PlaneGeometry(fw, fd, segsW, segsD);
+        setupUv2(floorGeo);
+        const mesh = new THREE.Mesh(floorGeo, floorMat);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(x, y + 0.002, z);
         mesh.receiveShadow = true;
-        // UV repeat: ~2m² texel density — finer than size/4 to improve close-up quality
         const repeat = Math.round(Math.max(fw, fd) / 2);
-        if (invalidate) applyTerrainPbr(floorMat, texId, repeat, invalidate);
+        const dispScale = isIndoor ? 0.02 : isStone ? 0.04 : 0.07;
+        if (invalidate) applyTerrainPbr(floorMat, texId, repeat, invalidate, dispScale);
         root = mesh;
       } else {
         const mesh = new THREE.Mesh(
@@ -770,7 +788,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
     }
 
     case "object": {
-      root = buildObjectByShape(obj, x, y, z);
+      root = buildObjectByShape(obj, x, y, z, invalidate);
       break;
     }
 
@@ -910,6 +928,8 @@ export class SceneRenderer {
   private treeInstances: THREE.InstancedMesh[] = [];
   // Group that owns everything added by sceneCode — cleared on every loadScene()
   private codeGroup = new THREE.Group();
+  // Ambient scatter props (rocks) regenerated per outdoor scene load
+  private scatterGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
   private animFrame = 0;
@@ -941,7 +961,7 @@ export class SceneRenderer {
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87ceeb);
-    this.scene.fog = new THREE.Fog(0x87ceeb, 40, 120);
+    this.scene.fog = new THREE.Fog(0x87ceeb, 30, 90);
 
     this.camera = new THREE.PerspectiveCamera(60, canvas.clientWidth / canvas.clientHeight, 0.1, 500);
     this.camera.position.set(0, 8, 20);
@@ -956,7 +976,7 @@ export class SceneRenderer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // softer shadow edges (R3F default)
     this.renderer.shadowMap.autoUpdate = false; // update only when invalidated
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.6;
+    this.renderer.toneMappingExposure = 0.65;
 
     // HDRI environment — baseline: RoomEnvironment (no network, immediate).
     // Per-scene: replaced by a Polyhaven 1k HDRI in loadScene() once loaded.
@@ -981,7 +1001,7 @@ export class SceneRenderer {
     this.sun = new THREE.DirectionalLight(0xfff4e0, 1.2);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.mapSize.set(4096, 4096);
     this.sun.shadow.camera.left = -40;
     this.sun.shadow.camera.right = 40;
     this.sun.shadow.camera.top = 40;
@@ -992,7 +1012,9 @@ export class SceneRenderer {
     this.scene.add(this.sun);
 
     this.setupGround();
+    this.setupWorldRidge();
     this.scene.add(this.codeGroup);
+    this.scene.add(this.scatterGroup);
 
     // Atmospheric sky (Preetham model) — always in scene; toggled per preset
     this.sky = new Sky();
@@ -1019,6 +1041,24 @@ export class SceneRenderer {
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
 
+    // SMAA anti-aliasing — applied after OutputPass (works on LDR/gamma-corrected output)
+    this.composer.addPass(new SMAAPass());
+
+    // Subtle vignette — darkens edges ~25%, adds cinematic depth
+    const vignettePass = new ShaderPass({
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        varying vec2 vUv;
+        void main() {
+          vec4 color = texture2D(tDiffuse, vUv);
+          float v = smoothstep(0.8, 0.15, length(vUv - 0.5) * 1.55);
+          gl_FragColor = vec4(color.rgb * (0.76 + 0.24 * v), color.a);
+        }`,
+    });
+    this.composer.addPass(vignettePass);
+
     this.setupResizeObserver(canvas);
     this.startLoop();
   }
@@ -1041,6 +1081,8 @@ export class SceneRenderer {
 
     // Remove all objects added by previous sceneCode execution
     this.codeGroup.clear();
+    // Clear per-scene ambient scatter (rocks, shrubs)
+    this.clearScatter();
 
     // Apply environment settings first (needed for bloom boost logic)
     const env = data.environment ?? {};
@@ -1162,6 +1204,9 @@ export class SceneRenderer {
     // Batch trees as InstancedMesh (R3F-inspired: reduces N×4 draw calls → 4)
     this.buildInstancedTrees(treeObjects);
 
+    // Ambient scatter: rocks + shrubs in the peripheral zone for outdoor scenes
+    this.scatterAmbientProps(data.objects);
+
     // NPC idle animation: gentle bob + sway for each npc object
     this.registerNpcIdleAnims();
 
@@ -1251,48 +1296,62 @@ export class SceneRenderer {
    * Uses MeshPhysicalMaterial + scrolling waternormals UV offset —
    * avoids the mirror-reflection artifacts of the full Water reflector shader.
    */
-  private buildWater(obj: SceneObject): THREE.Mesh {
+  private buildWater(obj: SceneObject): THREE.Group {
     const ww = (obj.metadata.width as number | undefined) ?? 20;
     const wd = (obj.metadata.depth as number | undefined) ?? 20;
+    const waterY = Math.max(obj.position.y, 0);
 
-    const geo = new THREE.PlaneGeometry(ww, wd, 1, 1);
+    const group = new THREE.Group();
+    group.position.set(obj.position.x, waterY, obj.position.z);
 
+    // ── Lake bed — sits 0.6 units below the surface ───────────────────────
+    // Dark sediment color shows through the semi-transparent water above,
+    // creating the visual illusion of depth without real geometry depth.
+    const bedMat = new THREE.MeshStandardMaterial({
+      color: 0x071a28,   // near-black muddy water floor
+      roughness: 1,
+      metalness: 0,
+    });
+    const bed = new THREE.Mesh(new THREE.PlaneGeometry(ww, wd), bedMat);
+    bed.rotation.x = -Math.PI / 2;
+    bed.position.y = -0.6;
+    bed.renderOrder = 0;
+    group.add(bed);
+
+    // ── Water surface — semi-transparent so the dark bed bleeds through ───
     const waterMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0a2e45,          // deep dark navy — looks like deep water not a puddle
+      color: 0x0a2e45,
       emissive: new THREE.Color(0x003355),
-      emissiveIntensity: 0.25,  // self-illuminated glow so it reads as water even in shadows
-      roughness: 0.02,          // mirror-smooth surface catches sky highlights
+      emissiveIntensity: 0.25,
+      roughness: 0.02,
       metalness: 0.15,
       transparent: true,
-      opacity: 0.93,            // nearly opaque so the dark color dominates over grass below
-      depthWrite: false,        // prevents z-fighting with underlying floor
-      envMapIntensity: 1.2,     // strong env map reflection
+      opacity: 0.78,            // reduced from 0.93 — bed shadow visible, gives water depth
+      depthWrite: false,
+      envMapIntensity: 1.2,
       side: THREE.FrontSide,
     });
 
-    // Load waternormals for ripple effect — scroll UV each frame
     const normalTex = new THREE.TextureLoader().load(
       "https://threejs.org/examples/textures/waternormals.jpg",
       (tex) => {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(4, 4);
         waterMat.normalMap = tex;
-        waterMat.normalScale.set(1.2, 1.2);  // stronger ripple visibility
+        waterMat.normalScale.set(1.2, 1.2);
         waterMat.needsUpdate = true;
         this.invalidate(2);
       },
     );
 
-    const mesh = new THREE.Mesh(geo, waterMat);
-    mesh.rotation.x = -Math.PI / 2;
-    // Lift 0.12 above the specified y so it always floats above the ground plane
-    // regardless of what y the LLM provides (floor top surface is at y+0.075)
-    mesh.position.set(obj.position.x, obj.position.y + 0.12, obj.position.z);
-    mesh.renderOrder = 1;       // render after opaque terrain so transparency composites correctly
+    const surface = new THREE.Mesh(new THREE.PlaneGeometry(ww, wd, 1, 1), waterMat);
+    surface.rotation.x = -Math.PI / 2;
+    surface.position.y = 0.005;   // just above group origin
+    surface.renderOrder = 1;
+    group.add(surface);
 
-    applyUserData(mesh, obj.objectId, obj.interactable);
+    applyUserData(group, obj.objectId, obj.interactable);
 
-    // Animate: dual-direction UV scroll for flowing ripple effect
     let t = 0;
     this.codeAnimCbs.push((delta) => {
       t += delta;
@@ -1300,7 +1359,7 @@ export class SceneRenderer {
       this.invalidate(1);
     });
 
-    return mesh;
+    return group;
   }
 
   private buildInstancedTrees(trees: SceneObject[]): void {
@@ -1314,7 +1373,7 @@ export class SceneRenderer {
     applyTerrainPbr(trunkMat, "bark_brown_02", 2, () => this.invalidate(2));
 
     // One InstancedMesh per part: trunk + 3 foliage layers
-    const trunkIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 8), trunkMat, count);
+    const trunkIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 12), trunkMat, count);
     trunkIM.castShadow = true;
 
     const foliageConfigs: [number, number, number, number, number][] = [
@@ -1324,7 +1383,7 @@ export class SceneRenderer {
       [-0.2, 4.3, -0.1, 0.85, 0.78],
     ];
     const foliageIMs = foliageConfigs.map(([, , , r]) =>
-      new THREE.InstancedMesh(new THREE.SphereGeometry(r, 8, 6), leafMat, count),
+      new THREE.InstancedMesh(new THREE.SphereGeometry(r, 12, 9), leafMat, count),
     );
     foliageIMs.forEach((im) => { im.castShadow = true; });
 
@@ -1495,13 +1554,163 @@ export class SceneRenderer {
   }
 
   private setupGround(): void {
-    const geo = new THREE.PlaneGeometry(200, 200);
+    // 64-segment subdivision so vertex displacement produces smooth hills
+    const segs = 64;
+    const geo = new THREE.PlaneGeometry(300, 300, segs, segs);
+
+    // Displace vertices: flat within 20 units of centre (safe for object placement),
+    // then gently undulate outward — breaks the "tabletop" flatness.
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const px = pos.getX(i);
+      const py = pos.getY(i);                            // Y = depth axis before rotation
+      const r  = Math.sqrt(px * px + py * py);
+      const blend = THREE.MathUtils.smoothstep(20, 65, r);
+      const h =
+        Math.sin(px * 0.08) * Math.cos(py * 0.06) * 1.8 +
+        Math.sin(px * 0.15 + 1.3) * Math.sin(py * 0.12 + 0.8) * 0.9 +
+        Math.cos(px * 0.04 - 0.7) * Math.sin(py * 0.05) * 1.2;
+      pos.setZ(i, h * blend);                            // Z → world Y after -PI/2 rotation
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    setupUv2(geo);
+
     const mat = new THREE.MeshStandardMaterial({ color: 0x5a7a3a, roughness: 1 });
     const ground = new THREE.Mesh(geo, mat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.02; // slightly below y=0 to avoid z-fighting with terrain objects
+    ground.position.y = -0.02;
     ground.receiveShadow = true;
     this.scene.add(ground);
+    applyTerrainPbr(mat, "aerial_grass_rock_02", 50, () => this.invalidate(2), 0.06);
+  }
+
+  /**
+   * Permanent horizon backdrop: 6 hills in a broad arc at z = -42 to -55.
+   * At typical camera position z ≈ 14, these are 56–69 units away — well inside
+   * the fog range (near=30, far=90) so they appear as soft atmospheric silhouettes.
+   * Never cleared between scene loads; always present to give the world an "edge".
+   */
+  private setupWorldRidge(): void {
+    // [x, z, width, height]
+    const configs: [number, number, number, number][] = [
+      [-52, -48, 38, 18],
+      [-18, -52, 32, 14],
+      [ 16, -55, 36, 16],
+      [ 50, -50, 30, 12],
+      [-34, -42, 26, 10],
+      [ 34, -44, 28, 11],
+    ];
+    for (const [rx, rz, rw, rh] of configs) {
+      const geo = new THREE.SphereGeometry(1, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
+      setupUv2(geo);
+      const mat = makeTerrainSlopeMat(0x3d6630, 0x5a4830, 0.3, 0.7);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.scale.set(rw, rh, rw * 0.72);   // slightly shallower depth = realistic ridge shape
+      mesh.position.set(rx, -rh * 0.05, rz);
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      applyTerrainPbr(mat, "aerial_grass_rock_02", 4, () => this.invalidate(2));
+    }
+  }
+
+  /** Dispose GPU resources of everything in scatterGroup, then clear it. */
+  private clearScatter(): void {
+    this.scatterGroup.traverse((child) => {
+      const im = child as THREE.InstancedMesh;
+      if (!im.isInstancedMesh) return;
+      im.geometry.dispose();
+      const mats = Array.isArray(im.material) ? im.material : [im.material];
+      mats.forEach((m) => m.dispose());
+    });
+    this.scatterGroup.clear();
+  }
+
+  /**
+   * Scatter ambient rocks in an annular zone (r = 18–50) around the scene.
+   * Skips indoor scenes (detected by presence of a wall terrain object).
+   * Uses a seeded RNG so placement is deterministic per-scene.
+   */
+  private scatterAmbientProps(objects: SceneObject[]): void {
+    this.clearScatter();
+
+    const isIndoor = objects.some(
+      (o) => o.type === "terrain" && (o.metadata.shape as string) === "wall",
+    );
+    if (isIndoor) return;
+
+    // Collect floor footprints — avoid placing rocks on top of them
+    const floors = objects.filter(
+      (o) => o.type === "terrain" && (o.metadata.shape as string) === "floor",
+    );
+    const onFloor = (px: number, pz: number): boolean =>
+      floors.some((f) => {
+        const hw = ((f.metadata.width as number) ?? 20) / 2 + 2;
+        const hd = ((f.metadata.depth as number) ?? 20) / 2 + 2;
+        return Math.abs(px - f.position.x) < hw && Math.abs(pz - f.position.z) < hd;
+      });
+
+    // Deterministic pseudo-random from scene hash
+    const hash = objects.reduce((a, o) => a + o.objectId.charCodeAt(0), 0);
+    const rng  = (n: number): number =>
+      Math.abs(Math.sin(n * 9301 + hash * 49297 + 233280) % 1);
+
+    // ── Rocks ──────────────────────────────────────────────────────────────
+    const ROCK_N = 35;
+    const rockGeo = new THREE.IcosahedronGeometry(1, 1);
+    const rockMat = makeTerrainSlopeMat(0x7a7868, 0x5a5248, 0.5, 0.82, 0.95);
+    applyTerrainPbr(rockMat, "aerial_grass_rock_02", 2, () => this.invalidate(2));
+    const rockIM = new THREE.InstancedMesh(rockGeo, rockMat, ROCK_N);
+    rockIM.receiveShadow = true;
+
+    const dummy = new THREE.Object3D();
+    let placed = 0;
+    for (let i = 0; placed < ROCK_N && i < ROCK_N * 6; i++) {
+      const angle  = rng(i * 2) * Math.PI * 2;
+      const radius = 18 + rng(i * 3) * 32;
+      const px = Math.cos(angle) * radius;
+      const pz = Math.sin(angle) * radius;
+      if (onFloor(px, pz)) continue;
+
+      const s = 0.15 + rng(i * 5) * 0.55;
+      dummy.position.set(px, s * 0.15, pz);
+      dummy.rotation.set(rng(i) * 4, rng(i * 7) * 6, rng(i * 11) * 3);
+      dummy.scale.set(s, s * 0.6, s * 1.1);
+      dummy.updateMatrix();
+      rockIM.setMatrixAt(placed, dummy.matrix);
+      placed++;
+    }
+    rockIM.count = placed;
+    rockIM.instanceMatrix.needsUpdate = true;
+    this.scatterGroup.add(rockIM);
+
+    // ── Low shrubs ──────────────────────────────────────────────────────────
+    const SHRUB_N = 20;
+    const shrubGeo = new THREE.SphereGeometry(1, 6, 5);
+    const shrubMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.95 });
+    const shrubIM  = new THREE.InstancedMesh(shrubGeo, shrubMat, SHRUB_N);
+    shrubIM.receiveShadow = true;
+    shrubIM.castShadow = true;
+
+    placed = 0;
+    for (let i = 0; placed < SHRUB_N && i < SHRUB_N * 6; i++) {
+      const angle  = rng(i * 13) * Math.PI * 2;
+      const radius = 20 + rng(i * 17) * 28;
+      const px = Math.cos(angle) * radius;
+      const pz = Math.sin(angle) * radius;
+      if (onFloor(px, pz)) continue;
+
+      const s = 0.3 + rng(i * 19) * 0.5;
+      dummy.position.set(px, s * 0.55, pz);
+      dummy.rotation.set(0, rng(i * 23) * Math.PI * 2, 0);
+      dummy.scale.set(s * 1.2, s, s);
+      dummy.updateMatrix();
+      shrubIM.setMatrixAt(placed, dummy.matrix);
+      placed++;
+    }
+    shrubIM.count = placed;
+    shrubIM.instanceMatrix.needsUpdate = true;
+    this.scatterGroup.add(shrubIM);
   }
 
   private setupResizeObserver(canvas: HTMLCanvasElement): void {

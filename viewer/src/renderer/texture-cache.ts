@@ -3,18 +3,14 @@
  *
  * Lazy, per-session cache for Polyhaven PBR textures (1k JPG, CC0).
  *
- * Usage:
- *   applyTerrainPbr(mat, "aerial_grass_rock_02", 4, () => invalidate(2))
+ * Maps loaded per material (each independently — one failure doesn't block others):
+ *   diff    — diffuse / albedo color map
+ *   nor_gl  — OpenGL normal map
+ *   rough   — roughness map
+ *   ao      — ambient occlusion (requires UV2 on geometry — call setupUv2() first)
+ *   disp    — displacement / height map (requires subdivided geometry)
  *
- * Polyhaven CDN pattern:
- *   https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/{id}/{id}_{map}_1k.jpg
- *
- * Maps loaded per terrain shape:
- *   nor_gl  — OpenGL-convention normal map (compatible with Three.js)
- *   rough   — roughness map (R channel used by roughnessMap)
- *
- * Strategy: fire-and-forget.  Slope-blend color material renders immediately;
- * normal + roughness maps are applied once downloaded (~50–150 KB each).
+ * Polyhaven CDN: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/{id}/{id}_{map}_1k.jpg
  */
 
 import * as THREE from "three";
@@ -52,35 +48,91 @@ function loadTex(id: string, map: string): Promise<THREE.Texture> {
 }
 
 /**
- * Async-upgrade a MeshStandardMaterial with Polyhaven normal + roughness maps.
+ * Copy the primary UV channel to uv1/uv2 so Three.js aoMap and lightMap work.
+ * Call this immediately after creating a geometry, before mesh construction.
+ */
+export function setupUv2(geo: THREE.BufferGeometry): void {
+  const uv = geo.attributes.uv;
+  if (!uv) return;
+  // Set both uv1 (Three.js r152+) and uv2 (legacy) for broad compatibility
+  if (!geo.attributes.uv1) geo.setAttribute("uv1", uv.clone());
+  if (!geo.attributes.uv2) geo.setAttribute("uv2", uv.clone());
+}
+
+/**
+ * Async-upgrade a MeshStandardMaterial with Polyhaven PBR maps.
+ * Each map loads independently.
  *
- * @param mat        - The material to upgrade in-place
- * @param textureId  - Polyhaven asset ID (e.g. "aerial_grass_rock_02")
- * @param repeat     - UV tiling (applied to both maps)
- * @param onUpdate   - Called after maps are applied; use to queue a render frame
+ * @param mat               Material to upgrade in-place
+ * @param textureId         Polyhaven asset ID (e.g. "aerial_grass_rock_02")
+ * @param repeat            UV tiling applied to all maps
+ * @param onUpdate          Called after each map applies — use to queue a render frame
+ * @param displacementScale Optional displacement height (world units). Only effective
+ *                          if the geometry has enough vertex subdivisions (≥16×16).
+ *                          Default 0 = no displacement.
  */
 export function applyTerrainPbr(
   mat: THREE.MeshStandardMaterial,
   textureId: string,
   repeat: number,
   onUpdate: () => void,
+  displacementScale = 0,
 ): void {
-  Promise.all([
-    loadTex(textureId, "nor_gl"),
-    loadTex(textureId, "rough").catch(() => null), // rough is optional — not all assets have it
-  ])
-    .then(([nor, rough]) => {
-      nor.repeat.set(repeat, repeat);
-      mat.normalMap = nor;
-      mat.normalScale.set(0.7, 0.7); // moderate strength — doesn't override slope-blend color
-      if (rough !== null) {
-        rough.repeat.set(repeat, repeat);
-        mat.roughnessMap = rough;
-      }
+  // Diffuse / albedo
+  loadTex(textureId, "diff")
+    .then((diff) => {
+      diff.repeat.set(repeat, repeat);
+      mat.map = diff;
       mat.needsUpdate = true;
       onUpdate();
     })
-    .catch(() => {
-      // Network failure — slope-blend color material stays unchanged
-    });
+    .catch(() => {});
+
+  // Normal map
+  loadTex(textureId, "nor_gl")
+    .then((nor) => {
+      nor.repeat.set(repeat, repeat);
+      mat.normalMap = nor;
+      mat.normalScale.set(0.85, 0.85);
+      mat.needsUpdate = true;
+      onUpdate();
+    })
+    .catch(() => {});
+
+  // Roughness map
+  loadTex(textureId, "rough")
+    .then((rough) => {
+      rough.repeat.set(repeat, repeat);
+      mat.roughnessMap = rough;
+      mat.needsUpdate = true;
+      onUpdate();
+    })
+    .catch(() => {});
+
+  // Ambient occlusion — adds contact shadows in crevices
+  // Requires geometry to have uv1/uv2 attribute (call setupUv2 beforehand)
+  loadTex(textureId, "ao")
+    .then((ao) => {
+      ao.repeat.set(repeat, repeat);
+      mat.aoMap = ao;
+      mat.aoMapIntensity = 1.2;
+      mat.needsUpdate = true;
+      onUpdate();
+    })
+    .catch(() => {});
+
+  // Displacement map — real geometric surface detail
+  // Only meaningful with subdivided geometry; scale=0 skips it
+  if (displacementScale > 0) {
+    loadTex(textureId, "disp")
+      .then((disp) => {
+        disp.repeat.set(repeat, repeat);
+        mat.displacementMap = disp;
+        mat.displacementScale = displacementScale;
+        mat.displacementBias  = -displacementScale * 0.5; // centre around original surface
+        mat.needsUpdate = true;
+        onUpdate();
+      })
+      .catch(() => {});
+  }
 }

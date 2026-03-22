@@ -12,12 +12,15 @@
 
 - 按需帧循环（demand frameloop）
 - 自适应像素比（adaptive DPR）
-- 多通道后期处理（SSAO + Bloom）
+- 多通道后期处理（SSAO + Bloom + **SMAA** + **Vignette**）
 - 大气天空模型（Preetham Sky shader）
-- Polyhaven HDRI 环境光（IBL）
-- PBR 纹理异步加载（Polyhaven CDN）
-- 坡面混色地形材质（onBeforeCompile GLSL 注入）
-- 水面动画（MeshPhysicalMaterial + 流动法线贴图）
+- Polyhaven HDRI 环境光（IBL，**2k 分辨率**）
+- PBR 纹理异步加载（Polyhaven CDN，**diff + nor + rough + ao + disp 五通道**）
+- 坡面混色地形材质（onBeforeCompile GLSL 注入，**支持漫反射贴图亮度混合**）
+- 地面顶点位移（64 段细分 + 正弦波起伏，中心平坦边缘隆起）
+- 永久地平线山脊（6 座固定远景山丘，z=-42 ~ -55，定义世界边界）
+- 环境散布系统（每次加载户外场景自动散布岩石 + 灌木）
+- 水面动画（MeshPhysicalMaterial + 流动法线贴图，湖床深色层产生水深感）
 - GLTF 模型加载（Path A）
 - 代码沙箱（Path C，自定义 Three.js 代码执行）
 - NPC 待机动画
@@ -73,7 +76,7 @@ SceneData (JSON)
 | `renderer` | `WebGLRenderer` | antialias=false（与 EffectComposer 不兼容） |
 | `controls` | `OrbitControls` | 阻尼系数 0.05，滚轮缩放 2–200 |
 | `hemi` | `HemisphereLight` | 天光/地光，由 env preset 驱动 |
-| `sun` | `DirectionalLight` | 主定向光，2048px PCFSoft 阴影 |
+| `sun` | `DirectionalLight` | 主定向光，**4096px** PCFSoft 阴影 |
 | `composer` | `EffectComposer` | 后期处理链 |
 | `bloomPass` | `UnrealBloomPass` | 全局辉光 |
 | `ssaoPass` | `SSAOPass` | 环境遮蔽 |
@@ -84,6 +87,7 @@ SceneData (JSON)
 | `framesDue` | `number` | 按需帧计数器 |
 | `treeInstances` | `InstancedMesh[]` | 树木实例化批次，loadScene 时重建 |
 | `codeGroup` | `THREE.Group` | sceneCode 创建的对象容器，loadScene 时清空 |
+| `scatterGroup` | `THREE.Group` | 环境散布（岩石/灌木）容器，每次加载室外场景重建 |
 
 ---
 
@@ -135,7 +139,9 @@ EffectComposer
     ├─ RenderPass          — 将场景渲染到离屏 FBO
     ├─ SSAOPass            — 屏幕空间环境遮蔽（接触阴影）
     ├─ UnrealBloomPass     — 虚幻引擎辉光（仅对超亮像素生效）
-    └─ OutputPass          — 色调映射 + gamma 写入 canvas
+    ├─ OutputPass          — 色调映射 + gamma 写入 canvas
+    ├─ SMAAPass            — 形态学抗锯齿（在 LDR 输出后处理）
+    └─ VignetteShader      — 边角暗化 ~24%（电影感）
 ```
 
 **注意：** WebGLRenderer 的 `antialias: false` 是必须的。启用 MSAA 时，
@@ -168,10 +174,10 @@ bloomPass.threshold = 0.9   // 最低值；防止普通表面因 bloom 过曝
 
 ```typescript
 renderer.toneMapping         = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.6;
+renderer.toneMappingExposure = 0.65;  // 提升自 0.6，色彩更鲜艳
 ```
 
-ACES Filmic 提供类电影的高光压缩和阴影细节保留。曝光 0.6 在
+ACES Filmic 提供类电影的高光压缩和阴影细节保留。曝光 0.65 在
 户外场景中保持合适亮度，避免 HDR 天空过曝。
 
 ---
