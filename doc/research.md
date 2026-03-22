@@ -148,3 +148,108 @@ renderer.setAnimationLoop(() => renderer.render(scene, camera));
 ### 建议
 
 当前阶段优先路径 B（渐进接入）：先验证 `SplatMesh` 与现有 EffectComposer 的兼容性，再决定是否深入集成。路径 A 留待 splat 素材生成链路成熟后再评估。
+
+---
+
+## SimWorld
+
+- **仓库**: https://github.com/SimWorld-AI/SimWorld
+- **论文**: arXiv 2512.01078，NeurIPS 2025 Spotlight
+- **Stars**: 515
+- **许可**: Apache 2.0
+- **调研日期**: 2026-03-23
+
+### 项目定位
+
+基于 Unreal Engine 5 的 **Embodied AI 仿真平台**，面向 LLM/VLM Agent 的训练与评测。Python 控制层通过 UnrealCV 与 UE5 后端通信，提供 Gym-like 接口。
+
+> **与 scratch-world 的本质差异**：SimWorld 是科研用 Python 控制的 UE5 仿真器；scratch-world 是浏览器实时 Three.js 世界生成引擎。技术栈几乎无重叠，但有三个模块的**算法逻辑**值得移植。
+
+### 三层架构
+
+```
+UE5 后端          — 物理仿真、资产渲染、传感器（RGB/深度/分割图）
+Environment 层    — 程序化城市生成、语言驱动场景编辑、Gym API、交通仿真
+Agent 层          — LLM/VLM 多模态感知 + 自然语言动作规划
+```
+
+### 值得借鉴的模块
+
+#### 1. 程序化城市生成（`simworld/citygen/`）⭐ 最有价值
+
+纯数学算法，与 UE5 完全解耦，可直接移植。
+
+**道路生成（`RoadGenerator`）**：
+- 基于优先队列的增量式道路扩展——从初始线段出发递归生长
+- 支持高速路 / 普通路分级，交叉口自动检测与插入
+- 支持从 JSON 文件加载预定义路网，也支持程序化随机生成
+
+**建筑放置（`BuildingGenerator`）**：
+- 沿道路两侧按间距依次排列，垂直于道路方向偏移
+- 用 **QuadTree** 做空间碰撞检测，防止建筑重叠
+- 按建筑类型配额（`num_limit`）控制密度，从最大到最小降级填充空隙
+- 建筑朝向自动计算为面向道路
+
+**数据结构**：`Point / Segment / Intersection / Bounds / Building / MetaInfo` — 一套自洽的城市几何类型系统。
+
+**对 scratch-world 的意义**：
+当前 LLM 生成场景是逐对象手工布局，缺乏城市级连贯性。引入 citygen 算法后，AI 只需给出"主题 + 规模"，自动生成道路骨架和建筑分布，再由 LLM 填充对象描述和 metadata。
+
+```
+用户: "生成一个有商业街的小城镇"
+  → citygen 生成路网 + 建筑 footprint
+  → LLM 为每栋建筑生成 name/description/metadata
+  → loadScene() 渲染
+```
+
+#### 2. 自然语言资产检索放置（`simworld/assets_rp/`）⭐ 直接对口
+
+**流程**：
+```
+自然语言输入
+  → LLM 结构化提取（asset_to_place / reference_asset / relation / surrounding_assets）
+  → SentenceTransformer embedding 对场景节点做相似度排序
+  → 几何关系计算（front/back/left/right）确定放置坐标
+  → 在 UE5 中 spawn 资产
+```
+
+**LLM 解析的 prompt 结构**（直接可复用）：
+```
+从自然语言中提取四个字段：
+1. asset_to_place: 要放置的资产列表
+2. reference_asset: 参考建筑（带描述词）
+3. relation: front/back/left/right
+4. surrounding_assets: 周边环境关键词（用于 embedding 相似度匹配）
+```
+
+**对 scratch-world 的意义**：
+`update_scene` 的场景编辑目前依赖 LLM 直接修改 JSON，无法精确表达"在某物旁边放"这类相对位置语义。移植此模式（用 Claude 解析 + `objectMeta` 做 embedding 匹配）可大幅提升场景编辑精度。
+
+#### 3. Gym-like Agent 接口理念（远期参考）
+
+SimWorld 将仿真抽象为标准 `reset() / step(action) → observation` 接口，Agent 只关注感知-决策，执行细节封装在 Environment 内。
+
+scratch-world NPC 系统若将来支持 LLM 驱动的自主行为，可借鉴此范式：
+
+```typescript
+// 未来方向
+interface NpcEnvironment {
+  observe(npcId: string): NpcObservation;   // 位置、视野内对象、可交互物
+  step(npcId: string, action: NpcAction): void;
+}
+```
+
+### 不适合借鉴的部分
+
+| 模块 | 原因 |
+|---|---|
+| UE5 后端 / UnrealCV 通信层 | 完全不同的渲染技术栈 |
+| Python 控制层整体 | scratch-world 是前端 TypeScript |
+| 物理仿真（碰撞/刚体） | 依赖 UE5 物理引擎 |
+| RL 训练管线 | 目标场景不同 |
+
+### 建议优先级
+
+1. **近期**：精读 `citygen/road/road_generator.py` 和 `citygen/building/building_generator.py`，评估将 QuadTree + 道路生长算法移植为 TypeScript 的工作量，用于生成更大规模连贯场景。
+2. **中期**：将 AssetsRP 的"LLM 解析 → embedding 匹配 → 相对位置放置"流程移植到 `update_scene` 场景编辑 API，替代当前纯 LLM JSON 修改的方式。
+3. **远期**：NPC 行为从随机游走升级到 LLM 驱动时，参考 Gym 接口设计 `NpcEnvironment`。
