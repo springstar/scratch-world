@@ -7,6 +7,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { BokehPass } from "three/addons/postprocessing/BokehPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { loadEnvMap } from "./hdri-cache.js";
 import { applyTerrainPbr, setupUv2 } from "./texture-cache.js";
@@ -1012,6 +1013,9 @@ export class SceneRenderer {
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
   private ssaoPass: SSAOPass;
+  private dofPass: BokehPass;
+  private godraysPass: ShaderPass;
+  private sunDir = new THREE.Vector3(0, 1, 0); // updated per scene
   private sky: Sky;
   private gltfLoader = new GLTFLoader();
   // InstancedMesh batches for trees (cleared on each loadScene)
@@ -1123,6 +1127,15 @@ export class SceneRenderer {
     this.ssaoPass.minDistance = 0.002;
     this.ssaoPass.maxDistance = 0.08;
     this.composer.addPass(this.ssaoPass);
+    // Depth of field — blurs near/far objects; focus auto-updates on viewpoint transitions.
+    // Placed before Bloom so bokeh discs on bright objects still receive glow.
+    const initFocusDist = this.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
+    this.dofPass = new BokehPass(this.scene, this.camera, {
+      focus:    initFocusDist,
+      aperture: 0.00015,
+      maxblur:  0.008,
+    });
+    this.composer.addPass(this.dofPass);
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
       0.4,   // strength
@@ -1130,6 +1143,46 @@ export class SceneRenderer {
       0.85,  // threshold
     );
     this.composer.addPass(this.bloomPass);
+    // God rays — radial light scatter from sun position.
+    // Placed after Bloom so already-bloomed sky/sun areas feed the scatter.
+    this.godraysPass = new ShaderPass({
+      uniforms: {
+        tDiffuse: { value: null },
+        uSunPos:  { value: new THREE.Vector2(0.5, 0.8) },
+        uVisible: { value: 1.0 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform vec2  uSunPos;
+        uniform float uVisible;
+        varying vec2  vUv;
+        const int   SAMPLES   = 40;
+        const float DENSITY   = 0.90;
+        const float WEIGHT    = 0.055;
+        const float DECAY     = 0.965;
+        const float EXPOSURE  = 0.40;
+        const float THRESHOLD = 0.60;
+        void main() {
+          vec2 tc    = vUv;
+          vec2 delta = (tc - uSunPos) / float(SAMPLES) * DENSITY;
+          float illum = 1.0;
+          vec3  rays  = vec3(0.0);
+          for (int i = 0; i < SAMPLES; i++) {
+            tc -= delta;
+            vec3 s = texture2D(tDiffuse, clamp(tc, 0.0, 1.0)).rgb;
+            float lum = dot(s, vec3(0.299, 0.587, 0.114));
+            s *= max(0.0, lum - THRESHOLD) / (1.0 - THRESHOLD + 0.001);
+            rays  += s * illum * WEIGHT;
+            illum *= DECAY;
+          }
+          vec4 base = texture2D(tDiffuse, vUv);
+          gl_FragColor = vec4(base.rgb + rays * EXPOSURE * uVisible, base.a);
+        }`,
+    });
+    this.composer.addPass(this.godraysPass);
     this.composer.addPass(new OutputPass());
 
     // SMAA anti-aliasing — applied after OutputPass (works on LDR/gamma-corrected output)
@@ -1216,14 +1269,16 @@ export class SceneRenderer {
       const sunDir = new THREE.Vector3();
       sunDir.setFromSphericalCoords(1, phi, theta);
       skyUniforms["sunPosition"].value.copy(sunDir);
+      this.sunDir.copy(sunDir);  // save for god-ray projection
 
       // Position the directional light to match the sky sun
       this.sun.position.copy(sunDir.clone().multiplyScalar(100));
     } else {
-      // Night / indoor — hide sky mesh, show flat background colour
+      // Night / indoor — hide sky mesh, show flat background colour; disable god rays
       this.sky.visible = false;
       this.scene.background = new THREE.Color(preset.skyColor);
       this.sun.position.set(...preset.sunPosition);
+      this.sunDir.set(0, -1, 0); // below horizon → uVisible will be 0
     }
 
     // Apply bloom settings from environment.effects
@@ -1311,6 +1366,17 @@ export class SceneRenderer {
 
     // NPC mob system: random walk / patrol + idle animation + chatter bubbles
     this.setupNpcSystem();
+
+    // God rays: project sun direction to screen space each frame, update pass uniforms
+    this.registerSystem(SystemOrder.Render, () => {
+      const sunScreen = this.sunDir.clone().multiplyScalar(1000).project(this.camera);
+      const sunU = (sunScreen.x + 1) / 2;
+      const sunV = (sunScreen.y + 1) / 2;
+      // Visible only when sun is in front of camera (z < 1) and above the horizon on screen
+      const visible = sunScreen.z < 1.0 && sunV > -0.2 && sunV < 1.5 ? 1.0 : 0.0;
+      this.godraysPass.uniforms["uSunPos"].value.set(sunU, sunV);
+      this.godraysPass.uniforms["uVisible"].value = visible;
+    });
 
     // Wait for all GLTF loads (errors are caught inside loadGltfModel)
     await Promise.all(loadPromises);
@@ -2007,7 +2073,12 @@ export class SceneRenderer {
         const eased = 1 - Math.pow(1 - t, 3);
         this.camera.position.lerpVectors(this.transitionFrom.pos, this.transitionTo.pos, eased);
         this.controls.target.lerpVectors(this.transitionFrom.target, this.transitionTo.target, eased);
-        if (t >= 1) this.transitioning = false;
+        if (t >= 1) {
+          this.transitioning = false;
+          // Update DoF focus to final camera-to-target distance
+          const focusDist = this.camera.position.distanceTo(this.controls.target);
+          (this.dofPass.uniforms as Record<string, THREE.IUniform>)["focus"].value = focusDist;
+        }
         this.invalidate(1);
       }
 
