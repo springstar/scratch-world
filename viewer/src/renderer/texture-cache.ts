@@ -13,9 +13,26 @@
  * Polyhaven CDN: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/{id}/{id}_{map}_1k.jpg
  */
 
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 
 const CDN = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k";
+
+/**
+ * Normalize legacy / shorthand texture IDs to the actual Polyhaven asset ID.
+ * Agent-generated scenes may use abbreviated names; this map resolves them.
+ */
+const TEXTURE_ALIASES: Record<string, string> = {
+  marble:          "marble_01",
+  cobblestone:     "cobblestone_floor_01",
+  cobblestone_01:  "cobblestone_floor_01",
+  red_brick:       "red_brick_03",
+  wood_floor_02:   "wood_floor",
+  aerial_grass:    "aerial_grass_rock",
+};
+
+function resolveId(id: string): string {
+  return TEXTURE_ALIASES[id] ?? id;
+}
 
 function texUrl(id: string, map: string): string {
   return `${CDN}/${id}/${id}_${map}_1k.jpg`;
@@ -26,12 +43,13 @@ const inFlight  = new Map<string, Promise<THREE.Texture>>();
 const texLoader = new THREE.TextureLoader();
 
 function loadTex(id: string, map: string): Promise<THREE.Texture> {
-  const key = `${id}__${map}`;
+  const resolved = resolveId(id);
+  const key = `${resolved}__${map}`;
   if (texCache.has(key))  return Promise.resolve(texCache.get(key)!);
   if (inFlight.has(key))  return inFlight.get(key)!;
 
   const p = texLoader
-    .loadAsync(texUrl(id, map))
+    .loadAsync(texUrl(resolved, map))
     .then((tex) => {
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
       texCache.set(key, tex);

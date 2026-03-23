@@ -13,6 +13,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
   const rendererRef = useRef<SceneRenderer | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [fading, setFading] = useState(false);
+  const [gpuSupported] = useState(() => !!navigator.gpu);
   // Drag detection: skip click if mouse moved more than threshold pixels
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
   const DRAG_THRESHOLD = 5;
@@ -20,13 +21,15 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
   // Init renderer once
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    rendererRef.current = new SceneRenderer(canvas);
+    if (!canvas || !gpuSupported) return;
+    const r = new SceneRenderer(canvas);
+    rendererRef.current = r;
+    r.init().catch(console.error);
     return () => {
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
-  }, []);
+  }, [gpuSupported]);
 
   // Reload scene when data changes — fade out → load → fade in
   useEffect(() => {
@@ -100,13 +103,24 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <canvas
-        ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: "block", cursor: hovered ? "pointer" : "default" }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onClick={handleClick}
-      />
+      {!gpuSupported ? (
+        <div style={{
+          position: "absolute", inset: 0, display: "flex", alignItems: "center",
+          justifyContent: "center", background: "#111", color: "#fff", fontSize: 16,
+          textAlign: "center", padding: 24,
+        }}>
+          WebGPU is not supported in this browser.<br />
+          Please use Chrome 113+ or another browser with WebGPU enabled.
+        </div>
+      ) : (
+        <canvas
+          ref={canvasRef}
+          style={{ width: "100%", height: "100%", display: "block", cursor: hovered ? "pointer" : "default" }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onClick={handleClick}
+        />
+      )}
       {/* Scene transition overlay — fades in when a new scene loads, then fades out */}
       <div
         style={{

@@ -5,6 +5,10 @@ can render when generating sceneData — the richer the sceneData, the better th
 
 Source: [Dexploarer/threejs-scene-builder](https://smithery.ai/skills/Dexploarer/threejs-scene-builder)
 
+> **Renderer**: `WebGPURenderer` (requires Chrome 113+ / WebGPU-enabled browser).
+> `sceneCode` sandbox now includes `tsl` variable (all TSL exports from `three/tsl`) and `WaterMesh` (WebGPU-native water).
+> Use `MeshStandardNodeMaterial` + TSL for custom materials. See `webgpu-threejs-tsl` skill.
+
 ---
 
 ## What the Viewer Can Render

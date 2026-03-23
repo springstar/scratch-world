@@ -79,6 +79,12 @@ const BUILT_IN_SKILLS: SkillManifest[] = [
 		description: "GLTFLoader, DRACOLoader, FBXLoader, asset management",
 		version: "1.0.0",
 	},
+	{
+		name: "webgpu-threejs-tsl",
+		category: "threejs",
+		description: "WebGPU renderer + TSL node materials, compute shaders, TSL post-processing",
+		version: "1.0.0",
+	},
 ];
 
 export class SkillLoader {

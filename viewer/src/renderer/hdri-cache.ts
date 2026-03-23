@@ -14,7 +14,7 @@
  * All assets are CC0 licensed — no attribution required.
  */
 
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
 import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 
 // Map each skybox preset to a Polyhaven HDRI asset ID.
@@ -26,16 +26,25 @@ const SKYBOX_HDRI_ID: Record<string, string> = {
   overcast:  "overcast_soil_puresky",
 };
 
-const CDN = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k";
+const HDR_CDN  = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k";
+const JPEG_CDN = "https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG";
 
 function hdriUrl(id: string): string {
-  return `${CDN}/${id}_2k.hdr`;
+  return `${HDR_CDN}/${id}_2k.hdr`;
+}
+
+function jpegUrl(id: string): string {
+  return `${JPEG_CDN}/${id}.jpg`;
 }
 
 // In-memory cache: skybox preset key → ready PMREM texture
 const envCache = new Map<string, THREE.Texture>();
 // Track in-flight promises to avoid duplicate requests for the same skybox
 const inFlight = new Map<string, Promise<THREE.Texture>>();
+
+// Cache for equirectangular JPEG backgrounds
+const bgCache   = new Map<string, THREE.Texture>();
+const bgInFlight = new Map<string, Promise<THREE.Texture>>();
 
 const rgbeLoader = new RGBELoader();
 
@@ -48,7 +57,7 @@ const rgbeLoader = new RGBELoader();
  */
 export async function loadEnvMap(
   skybox: string,
-  renderer: THREE.WebGLRenderer,
+  renderer: THREE.WebGPURenderer,
 ): Promise<THREE.Texture> {
   const key = skybox;
 
@@ -64,8 +73,8 @@ export async function loadEnvMap(
       equirect.mapping = THREE.EquirectangularReflectionMapping;
 
       const pmrem   = new THREE.PMREMGenerator(renderer);
-      pmrem.compileEquirectangularShader();
-      const envMap  = pmrem.fromEquirectangular(equirect).texture;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const envMap  = (pmrem as any).fromEquirectangular(equirect).texture as THREE.Texture;
       pmrem.dispose();
       equirect.dispose();
 
@@ -80,5 +89,34 @@ export async function loadEnvMap(
     });
 
   inFlight.set(key, promise);
+  return promise;
+}
+
+/**
+ * Load (or return cached) equirectangular JPEG texture for use as scene.background.
+ * Smaller and faster than the HDR — suitable for visible sky, not for IBL.
+ */
+export async function loadSkyBackground(skybox: string): Promise<THREE.Texture> {
+  if (bgCache.has(skybox)) return bgCache.get(skybox)!;
+  if (bgInFlight.has(skybox)) return bgInFlight.get(skybox)!;
+
+  const hdriId = SKYBOX_HDRI_ID[skybox] ?? SKYBOX_HDRI_ID["clear_day"];
+  const url = jpegUrl(hdriId);
+
+  const promise = new THREE.TextureLoader()
+    .loadAsync(url)
+    .then((tex) => {
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      bgCache.set(skybox, tex);
+      bgInFlight.delete(skybox);
+      return tex;
+    })
+    .catch((err) => {
+      bgInFlight.delete(skybox);
+      throw err;
+    });
+
+  bgInFlight.set(skybox, promise);
   return promise;
 }

@@ -3,6 +3,8 @@ name: threejs-shaders
 description: Three.js shaders - GLSL, ShaderMaterial, uniforms, custom effects. Use when creating custom visual effects, modifying vertices, writing fragment shaders, or extending built-in materials.
 ---
 
+> **WebGPU Note**: The viewer now uses `WebGPURenderer`. Use `MeshStandardNodeMaterial` + TSL instead of `onBeforeCompile` or `ShaderMaterial`. See the `webgpu-threejs-tsl` skill for TSL node patterns.
+
 # Three.js Shaders
 
 ## Quick Start

@@ -3,6 +3,32 @@ name: threejs-materials
 description: Three.js materials - PBR, basic, phong, shader materials, material properties. Use when styling meshes, working with textures, creating custom shaders, or optimizing material performance.
 ---
 
+## NodeMaterial — WebGPU Native Materials
+
+The viewer uses `WebGPURenderer`. Prefer `MeshStandardNodeMaterial` and `MeshPhysicalNodeMaterial`
+for custom effects using TSL nodes instead of `onBeforeCompile`.
+
+```javascript
+import * as THREE from "three/webgpu";
+import { color, normalLocal, mix, uniform, time, oscSine } from "three/tsl";
+
+// Slope-blended terrain
+const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.95, metalness: 0 });
+const blend = normalLocal.y.smoothstep(0.35, 0.75);
+mat.colorNode = mix(color(0x6e5030), color(0x4a7a3a), blend);
+
+// Animated emissive glow
+const neonMat = new THREE.MeshStandardNodeMaterial({ roughness: 0.2, metalness: 0.9 });
+neonMat.emissiveNode = color(0xff00ff).mul(oscSine(time.mul(2.0)));
+
+// Physical glass
+const glassMat = new THREE.MeshPhysicalNodeMaterial({
+  roughness: 0.05, metalness: 0, transmission: 0.95, ior: 1.5,
+});
+```
+
+See `webgpu-threejs-tsl` skill for full TSL node reference.
+
 # Three.js Materials
 
 ## Quick Start

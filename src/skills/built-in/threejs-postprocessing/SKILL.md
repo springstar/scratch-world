@@ -1,7 +1,61 @@
 ---
 name: threejs-postprocessing
-description: Three.js post-processing - EffectComposer, bloom, DOF, screen effects. Use when adding visual effects, color grading, blur, glow, or creating custom screen-space shaders.
+description: Three.js post-processing - TSL PostProcessing, bloom, AO, DOF, SMAA. Use when adding visual effects, color grading, blur, glow, or creating custom screen-space shaders.
 ---
+
+## TSL PostProcessing (WebGPU)
+
+The viewer uses `THREE.PostProcessing` with TSL nodes — replacing `EffectComposer`.
+The full pipeline (GTAO → bloom → DoF → SMAA → vignette) is built in `scene-renderer.ts`.
+
+```javascript
+import * as THREE from "three/webgpu";
+import { pass, mrt, output, normalView, uniform, float, uv } from "three/tsl";
+import { bloom }  from "three/addons/tsl/display/BloomNode.js";
+import { ao }     from "three/addons/tsl/display/GTAONode.js";
+import { dof }    from "three/addons/tsl/display/DepthOfFieldNode.js";
+import { smaa }   from "three/addons/tsl/display/SMAANode.js";
+
+// Scene pass with MRT for GTAO normals
+const scenePass = pass(scene, camera);
+scenePass.setMRT(mrt({ output, normal: normalView }));
+
+const sceneColor  = scenePass.getTextureNode("output");
+const sceneNormal = scenePass.getTextureNode("normal");
+const sceneDepth  = scenePass.getTextureNode("depth");
+
+// GTAO ambient occlusion
+const aoNode  = ao(sceneDepth, sceneNormal, camera);
+const withAo  = sceneColor.mul(aoNode.x);
+
+// Bloom
+const bloomStrength  = uniform(0.4);
+const bloomRadius    = uniform(0.3);
+const bloomThreshold = uniform(0.85);
+const bloomNode  = bloom(withAo, bloomStrength, bloomRadius, bloomThreshold);
+const withBloom  = withAo.add(bloomNode);
+
+// Depth of field
+const dofFocus = uniform(20.0);
+const dofNode  = dof(withBloom, sceneDepth, dofFocus, float(0.00015), float(0.008));
+
+// SMAA + vignette
+const smaaNode  = smaa(dofNode);
+const dist      = uv().sub(0.5).length().mul(1.55);
+const vignette  = dist.smoothstep(0.8, 0.15).mul(0.24).add(0.76);
+
+const pp = new THREE.PostProcessing(renderer);
+pp.outputNode = smaaNode.mul(vignette);
+
+// Render loop
+renderer.setAnimationLoop(() => {
+  pp.render();           // sync; avoids async ordering issues in RAF
+});
+
+// Update bloom dynamically
+bloomStrength.value = 0.8;  // e.g. for night scenes
+dofFocus.value = camera.position.distanceTo(controls.target);
+```
 
 # Three.js Post-Processing
 

@@ -1,20 +1,15 @@
-import * as THREE from "three";
+import * as THREE from "three/webgpu";
+import * as TSL from "three/tsl";
+import { color, normalLocal, mix, uv, pass } from "three/tsl";
+import { bloom }  from "three/addons/tsl/display/BloomNode.js";
+import { smaa }   from "three/addons/tsl/display/SMAANode.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
-import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-import { BokehPass } from "three/addons/postprocessing/BokehPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { loadEnvMap } from "./hdri-cache.js";
+import { loadEnvMap, loadSkyBackground } from "./hdri-cache.js";
 import { applyTerrainPbr, setupUv2 } from "./texture-cache.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { Sky } from "three/addons/objects/Sky.js";
-import { Water } from "three/addons/objects/Water.js";
-import { Reflector } from "three/addons/objects/Reflector.js";
+import { SkyMesh }   from "three/addons/objects/SkyMesh.js";
+import { WaterMesh } from "three/addons/objects/WaterMesh.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
 
 // Colour palette keyed by object type
@@ -37,13 +32,10 @@ function makeMat(color: number, rough = 0.8, metal = 0.1): THREE.MeshStandardMat
 }
 
 /**
- * Slope-blended terrain material using onBeforeCompile GLSL injection.
+ * Slope-blended terrain material using TSL NodeMaterial.
  *
- * Passes objectNormal.y (object-space normal y) as a varying from the
- * vertex shader to the fragment shader.  smoothstep(lo, hi, y) blends
- * between sideColor (cliffs / earth) and topColor (grass / stone top).
- *
- * Works with THREE.WebGLRenderer — no TSL / WebGPURenderer required.
+ * normalLocal.y blends between sideColor (cliffs / earth) and topColor (grass / stone top)
+ * via smoothstep(lo, hi). WebGPU-native — no onBeforeCompile needed.
  */
 function makeTerrainSlopeMat(
   topColor: number,
@@ -51,55 +43,10 @@ function makeTerrainSlopeMat(
   lo = 0.35,
   hi = 0.75,
   roughness = 0.95,
-): THREE.MeshStandardMaterial {
-  const mat = new THREE.MeshStandardMaterial({ roughness, metalness: 0 });
-
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTopColor  = { value: new THREE.Color(topColor) };
-    shader.uniforms.uSideColor = { value: new THREE.Color(sideColor) };
-    shader.uniforms.uSlopeLo   = { value: lo };
-    shader.uniforms.uSlopeHi   = { value: hi };
-
-    // Vertex: declare varying and compute objectNormal.y after normals are set up
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <common>",
-      `#include <common>\nvarying float vSlopeY;`,
-    );
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <beginnormal_vertex>",
-      `#include <beginnormal_vertex>\nvSlopeY = objectNormal.y;`,
-    );
-
-    // Fragment: declare uniforms + varying, then replace diffuse color after base color
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <common>",
-      `#include <common>
-uniform vec3 uTopColor;
-uniform vec3 uSideColor;
-uniform float uSlopeLo;
-uniform float uSlopeHi;
-varying float vSlopeY;`,
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <color_fragment>",
-      `#include <color_fragment>
-float slopeBlend = smoothstep(uSlopeLo, uSlopeHi, vSlopeY);
-vec3 slopeColor = mix(uSideColor, uTopColor, slopeBlend);
-// When a diffuse map is loaded, use its luminance as a detail modulator
-// (preserves surface variation like dark soil crevices and bright grass tips)
-// rather than discarding it entirely with a plain assignment.
-#ifdef USE_MAP
-  float luma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-  diffuseColor.rgb = slopeColor * (luma * 1.8 + 0.1);
-#else
-  diffuseColor.rgb = slopeColor;
-#endif`,
-    );
-  };
-
-  // Unique cache key so Three.js doesn't share this program with plain MeshStandardMaterial
-  mat.customProgramCacheKey = () => `terrain-slope-${topColor}-${sideColor}`;
-
+): THREE.MeshStandardNodeMaterial {
+  const mat = new THREE.MeshStandardNodeMaterial({ roughness, metalness: 0 });
+  const blend = normalLocal.y.smoothstep(lo, hi);
+  mat.colorNode = mix(color(sideColor), color(topColor), blend);
   return mat;
 }
 
@@ -217,7 +164,7 @@ function buildObjectByShape(
       top.position.y = 0.76;
       top.castShadow = true;
       top.receiveShadow = true;
-      if (invalidate) applyTerrainPbr(topMat, "light_wood_floor_02", 2, invalidate);
+      if (invalidate) applyTerrainPbr(topMat, "wood_floor", 2, invalidate);
       group.add(top);
       for (const [lx, lz] of [[-0.55, -0.3], [0.55, -0.3], [-0.55, 0.3], [0.55, 0.3]] as [number, number][]) {
         const leg = new THREE.Mesh(
@@ -235,7 +182,7 @@ function buildObjectByShape(
     case "stool": {
       const group = new THREE.Group();
       const woodMat = makeMat(0xb08050, 0.8, 0);
-      if (invalidate) applyTerrainPbr(woodMat, "light_wood_floor_02", 2, invalidate);
+      if (invalidate) applyTerrainPbr(woodMat, "wood_floor", 2, invalidate);
       const seat = new THREE.Mesh(
         new THREE.BoxGeometry(0.45, 0.05, 0.45),
         woodMat,
@@ -343,7 +290,7 @@ function buildObjectByShape(
     case "bookcase": {
       const group = new THREE.Group();
       const woodMat = makeMat(0xb8864e, 0.75, 0);
-      if (invalidate) applyTerrainPbr(woodMat, "light_wood_floor_02", 3, invalidate);
+      if (invalidate) applyTerrainPbr(woodMat, "wood_floor", 3, invalidate);
       // Back panel
       const back = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.0, 0.05), woodMat);
       back.position.set(0, 1.0, -0.15);
@@ -390,7 +337,7 @@ function buildObjectByShape(
         new THREE.CylinderGeometry(0.25, 0.25, 3, 8),
         pillarMat,
       );
-      if (invalidate) applyTerrainPbr(pillarMat, "cobblestone_floor_08", 2, invalidate);
+      if (invalidate) applyTerrainPbr(pillarMat, "cobblestone_floor_01", 2, invalidate);
       mesh.position.set(x, y + 1.5, z);
       return mesh;
     }
@@ -522,7 +469,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       const wallColors = [0xb5472a, 0x8a7560, 0xd4c4a8, 0x7a6050, 0xb89070];
       const roofColors = [0x6b3a2a, 0x4a3020, 0x5a4a30, 0x3a2a20, 0x7a5535];
       const wallMat = makeMat(wallColors[colorSeed], 0.85, 0.05);
-      if (invalidate) applyTerrainPbr(wallMat, "red_brick_04", 3, invalidate);
+      if (invalidate) applyTerrainPbr(wallMat, "red_brick_03", 3, invalidate);
       const roofMat = makeMat(roofColors[colorSeed], 0.8, 0);
 
       // Building dimensions from citygen metadata
@@ -755,7 +702,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         mesh.position.set(x, y - hh * 0.05, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(hillMat, "aerial_grass_rock_02", 4, invalidate);
+        if (invalidate) applyTerrainPbr(hillMat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 4, invalidate);
         root = mesh;
       } else if (shape === "cliff") {
         const cw = (obj.metadata.width  as number | undefined) ?? 12;
@@ -768,7 +715,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         mesh.position.set(x, y - ch * 0.5 + 0.1, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(cliffMat, "aerial_grass_rock_02", 3, invalidate);
+        if (invalidate) applyTerrainPbr(cliffMat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 3, invalidate);
         root = mesh;
       } else if (shape === "platform") {
         const pw = (obj.metadata.width  as number | undefined) ?? 10;
@@ -784,7 +731,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         mesh.position.set(x, y - ph * 0.5, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(platformMat, "cobblestone_floor_08", 4, invalidate);
+        if (invalidate) applyTerrainPbr(platformMat as unknown as THREE.MeshStandardMaterial, "cobblestone_floor_01", 4, invalidate);
         root = mesh;
       } else if (shape === "floor") {
         const fw = (obj.metadata.width as number | undefined) ?? 20;
@@ -799,7 +746,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
           || nameStr.includes("plaza") || nameStr.includes("广场");
         // metadata.texture overrides auto-detection
         const texId = (obj.metadata.texture as string | undefined)
-          ?? (isIndoor ? "light_wood_floor_02" : isStone ? "cobblestone_floor_08" : "aerial_grass_rock_02");
+          ?? (isIndoor ? "wood_floor" : isStone ? "cobblestone_floor_01" : "aerial_grass_rock");
         const floorColor = isIndoor ? 0xd4b896 : isStone ? 0xb0a080 : 0xc8b89a;
         const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 1, metalness: 0 });
         // Subdivide for displacement mapping (~2 unit quads, capped at 32 segs each axis)
@@ -1024,17 +971,18 @@ const TRANSITION_DURATION = 800; // ms
 export class SceneRenderer {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
-  private renderer: THREE.WebGLRenderer;
+  private renderer: THREE.WebGPURenderer;
   private controls: OrbitControls;
   private hemi: THREE.HemisphereLight;
   private sun: THREE.DirectionalLight;
-  private composer: EffectComposer;
-  private bloomPass: UnrealBloomPass;
-  private ssaoPass: SSAOPass;
-  private dofPass: BokehPass;
-  private godraysPass: ShaderPass;
+  private postProcessing!: THREE.PostProcessing;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private bloomNode!: any; // BloomNode — access .strength.value / .radius.value / .threshold.value
   private sunDir = new THREE.Vector3(0, 1, 0); // updated per scene
-  private sky: Sky;
+  private sky: SkyMesh;
+  private canvas: HTMLCanvasElement;
+  private initPromise: Promise<void> | null = null;
+  private disposed = false;
   private gltfLoader = new GLTFLoader();
   // InstancedMesh batches for trees (cleared on each loadScene)
   private treeInstances: THREE.InstancedMesh[] = [];
@@ -1046,7 +994,7 @@ export class SceneRenderer {
   private objectMeta = new Map<string, SceneObject>();
   private lodObjects: THREE.LOD[] = [];               // buildings — need lod.update() each frame
   private npcMobStates: NpcMobState[] = [];
-  private animFrame = 0;
+  private loopRunning = false;
   private animSystems: AnimSystem[] = [];
   private raycaster = new THREE.Raycaster();
   private lastFrameTime = 0;
@@ -1073,6 +1021,7 @@ export class SceneRenderer {
   private readonly frameBudgetMs = 50; // ~20 fps threshold
 
   constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87ceeb);
     this.scene.fog = new THREE.Fog(0x87ceeb, 30, 90);
@@ -1081,23 +1030,15 @@ export class SceneRenderer {
     this.camera.position.set(0, 8, 20);
     this.camera.lookAt(0, 0, 0);
 
-    // antialias disabled: EffectComposer uses its own non-MSAA render targets;
-    // combining antialias:true with composer causes MSAA framebuffer conflicts.
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    // WebGPU has native MSAA — antialias:true works fine without EffectComposer conflict
+    this.renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+    // Guard against zero-size canvas at construction (happens before CSS layout finishes)
+    this.renderer.setSize(Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // softer shadow edges (R3F default)
-    this.renderer.shadowMap.autoUpdate = false; // update only when invalidated
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.65;
-
-    // HDRI environment — baseline: RoomEnvironment (no network, immediate).
-    // Per-scene: replaced by a Polyhaven 1k HDRI in loadScene() once loaded.
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    pmrem.compileEquirectangularShader();
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment()).texture;
-    pmrem.dispose();
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -1105,7 +1046,6 @@ export class SceneRenderer {
     this.controls.dampingFactor = 0.05;
     this.controls.minDistance = 2;
     this.controls.maxDistance = 200;
-    // Demand rendering: each controls change (including damping) queues a frame
     this.controls.addEventListener("change", () => this.invalidate(1));
 
     // Lights — will be overridden by loadScene() env settings
@@ -1131,99 +1071,58 @@ export class SceneRenderer {
     this.scene.add(this.scatterGroup);
 
     // Atmospheric sky (Preetham model) — always in scene; toggled per preset
-    this.sky = new Sky();
+    this.sky = new SkyMesh();
     this.sky.scale.setScalar(450000);
     this.sky.visible = false; // hidden until loadScene() activates it
     this.scene.add(this.sky);
+  }
 
-    // Post-processing: EffectComposer + SSAO + bloom + output
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // SSAO (R3F-inspired): soft contact shadows from ambient occlusion.
-    // Inserted before bloom so AO-darkened crevices don't get boosted by bloom.
-    this.ssaoPass = new SSAOPass(this.scene, this.camera, canvas.clientWidth, canvas.clientHeight);
-    this.ssaoPass.kernelRadius = 8;
-    this.ssaoPass.minDistance = 0.002;
-    this.ssaoPass.maxDistance = 0.08;
-    this.composer.addPass(this.ssaoPass);
-    // Depth of field — blurs near/far objects; focus auto-updates on viewpoint transitions.
-    // Placed before Bloom so bokeh discs on bright objects still receive glow.
-    const initFocusDist = this.camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-    this.dofPass = new BokehPass(this.scene, this.camera, {
-      focus:    initFocusDist,
-      aperture: 0.00015,
-      maxblur:  0.008,
-    });
-    this.composer.addPass(this.dofPass);
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
-      0.4,   // strength
-      0.3,   // radius
-      0.85,  // threshold
-    );
-    this.composer.addPass(this.bloomPass);
-    // God rays — radial light scatter from sun position.
-    // Placed after Bloom so already-bloomed sky/sun areas feed the scatter.
-    this.godraysPass = new ShaderPass({
-      uniforms: {
-        tDiffuse: { value: null },
-        uSunPos:  { value: new THREE.Vector2(0.5, 0.8) },
-        uVisible: { value: 1.0 },
-      },
-      vertexShader: `
-        varying vec2 vUv;
-        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `
-        uniform sampler2D tDiffuse;
-        uniform vec2  uSunPos;
-        uniform float uVisible;
-        varying vec2  vUv;
-        const int   SAMPLES   = 40;
-        const float DENSITY   = 0.90;
-        const float WEIGHT    = 0.055;
-        const float DECAY     = 0.965;
-        const float EXPOSURE  = 0.40;
-        const float THRESHOLD = 0.60;
-        void main() {
-          vec2 tc    = vUv;
-          vec2 delta = (tc - uSunPos) / float(SAMPLES) * DENSITY;
-          float illum = 1.0;
-          vec3  rays  = vec3(0.0);
-          for (int i = 0; i < SAMPLES; i++) {
-            tc -= delta;
-            vec3 s = texture2D(tDiffuse, clamp(tc, 0.0, 1.0)).rgb;
-            float lum = dot(s, vec3(0.299, 0.587, 0.114));
-            s *= max(0.0, lum - THRESHOLD) / (1.0 - THRESHOLD + 0.001);
-            rays  += s * illum * WEIGHT;
-            illum *= DECAY;
-          }
-          vec4 base = texture2D(tDiffuse, vUv);
-          gl_FragColor = vec4(base.rgb + rays * EXPOSURE * uVisible, base.a);
-        }`,
-    });
-    this.composer.addPass(this.godraysPass);
-    this.composer.addPass(new OutputPass());
+  /** Must be called after construction. Initialises WebGPU, environment, post-processing, and starts the loop. */
+  async init(): Promise<void> {
+    this.initPromise = (async () => {
+      await this.renderer.init();
+      if (this.disposed) return; // React Strict Mode cleanup may have run during await
 
-    // SMAA anti-aliasing — applied after OutputPass (works on LDR/gamma-corrected output)
-    this.composer.addPass(new SMAAPass());
+      // After the async wait, CSS layout has completed — set the real canvas dimensions
+      const w = Math.max(1, this.canvas.clientWidth);
+      const h = Math.max(1, this.canvas.clientHeight);
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setPixelRatio(window.devicePixelRatio);
+      this.renderer.setSize(w, h);
 
-    // Subtle vignette — darkens edges ~25%, adds cinematic depth
-    const vignettePass = new ShaderPass({
-      uniforms: { tDiffuse: { value: null } },
-      vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `
-        uniform sampler2D tDiffuse;
-        varying vec2 vUv;
-        void main() {
-          vec4 color = texture2D(tDiffuse, vUv);
-          float v = smoothstep(0.8, 0.15, length(vUv - 0.5) * 1.55);
-          gl_FragColor = vec4(color.rgb * (0.76 + 0.24 * v), color.a);
-        }`,
-    });
-    this.composer.addPass(vignettePass);
+      // HDRI environment — baseline: RoomEnvironment (no network, immediate).
+      // Per-scene: replaced by a Polyhaven 1k HDRI in loadScene() once loaded.
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.scene.environment = pmrem.fromScene(new RoomEnvironment()).texture;
+      pmrem.dispose();
 
-    this.setupResizeObserver(canvas);
-    this.startLoop();
+      this.setupPostProcessing();
+      this.setupResizeObserver(this.canvas);
+      this.startLoop();
+    })();
+    return this.initPromise;
+  }
+
+  private setupPostProcessing(): void {
+    const scenePass  = pass(this.scene, this.camera);
+    const sceneColor = scenePass.getTextureNode("output");
+
+    // BloomNode internally wraps strength/radius/threshold in uniform() —
+    // pass literal numbers here and update via .strength.value / .radius.value / .threshold.value
+    this.bloomNode = bloom(sceneColor, 0.4, 0.3, 0.85);
+    const withBloom = sceneColor.add(this.bloomNode);
+
+    // SMAA anti-aliasing
+    const smaaNode = smaa(withBloom);
+
+    // Subtle screen-space vignette (pure TSL — no extra pass)
+    const dist     = uv().sub(0.5).length().mul(1.55);
+    const vignette = dist.smoothstep(0.8, 0.15).mul(0.24).add(0.76);
+
+    const pp = new THREE.PostProcessing(this.renderer);
+    pp.outputNode = smaaNode.mul(vignette);
+    this.postProcessing = pp;
   }
 
   /** Register a per-frame system. Systems are kept sorted by priority (ascending). */
@@ -1238,6 +1137,9 @@ export class SceneRenderer {
   }
 
   async loadScene(data: SceneData): Promise<void> {
+    // Ensure WebGPU renderer is fully initialized before touching post-processing uniforms
+    if (this.initPromise) await this.initPromise;
+
     // Remove JSON-built objects
     for (const obj of this.objects.values()) {
       this.scene.remove(obj);
@@ -1272,24 +1174,38 @@ export class SceneRenderer {
     this.sun.color.set(preset.sunColor);
     this.sun.intensity = preset.sunIntensity;
 
-    if (preset.sky !== null) {
+    if (env.skyboxUrl) {
+      // Equirectangular panorama from Matrix-3D or similar — highest priority, replaces procedural sky
+      this.sky.visible = false;
+      this.scene.background = null;
+      this.sunDir.set(0, -1, 0); // disable god rays (panorama supplies its own lighting)
+      this.sun.position.set(...preset.sunPosition);
+      const panoUrl = env.skyboxUrl;
+      new THREE.TextureLoader().load(panoUrl, (tex) => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        this.scene.background = tex;
+        this.scene.environment = tex; // IBL from the panorama
+        this.invalidate(2);
+      });
+    } else if (preset.sky !== null) {
       // Outdoor / atmospheric sky — activate Three.Sky shader
       this.sky.visible = true;
       this.scene.background = null;
 
-      const skyUniforms = (this.sky.material as THREE.ShaderMaterial).uniforms;
-      skyUniforms["turbidity"].value = preset.sky.turbidity;
-      skyUniforms["rayleigh"].value = preset.sky.rayleigh;
-      skyUniforms["mieCoefficient"].value = preset.sky.mieCoefficient;
-      skyUniforms["mieDirectionalG"].value = preset.sky.mieDirectionalG;
+      const skyUniforms = (this.sky as unknown as { turbidity: { value: number }; rayleigh: { value: number }; mieCoefficient: { value: number }; mieDirectionalG: { value: number }; sunPosition: { value: THREE.Vector3 } });
+      skyUniforms.turbidity.value        = preset.sky.turbidity;
+      skyUniforms.rayleigh.value         = preset.sky.rayleigh;
+      skyUniforms.mieCoefficient.value   = preset.sky.mieCoefficient;
+      skyUniforms.mieDirectionalG.value  = preset.sky.mieDirectionalG;
 
       // Compute sun direction from elevation + azimuth angles
       const phi = THREE.MathUtils.degToRad(90 - preset.sky.elevation);
       const theta = THREE.MathUtils.degToRad(preset.sky.azimuth);
       const sunDir = new THREE.Vector3();
       sunDir.setFromSphericalCoords(1, phi, theta);
-      skyUniforms["sunPosition"].value.copy(sunDir);
-      this.sunDir.copy(sunDir);  // save for god-ray projection
+      skyUniforms.sunPosition.value.copy(sunDir);
+      this.sunDir.copy(sunDir);  // save for sun direction tracking
 
       // Position the directional light to match the sky sun
       this.sun.position.copy(sunDir.clone().multiplyScalar(100));
@@ -1305,18 +1221,19 @@ export class SceneRenderer {
     const bloomCfg = env.effects?.bloom;
     const baseStrength = bloomCfg?.strength ?? 0.4;
     const isNight = env.skybox === "night" || env.timeOfDay === "night";
-    this.bloomPass.strength = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
-    this.bloomPass.radius = bloomCfg?.radius ?? 0.3;
+    this.bloomNode.strength.value  = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
+    this.bloomNode.radius.value    = bloomCfg?.radius ?? 0.3;
     // Clamp threshold to minimum 0.9 — prevents scene-specified low thresholds
     // from blooming ordinary lit surfaces and washing out the image.
-    this.bloomPass.threshold = Math.max(bloomCfg?.threshold ?? 0.9, 0.9);
+    this.bloomNode.threshold.value = Math.max(bloomCfg?.threshold ?? 0.9, 0.9);
 
     // Upgrade scene.environment from RoomEnvironment baseline to a real Polyhaven
     // HDRI matched to the skybox preset.  Fire-and-forget: the baseline keeps
     // things looking reasonable while the ~200 KB 1k .hdr downloads.
-    // Skip for sceneCode scenes — they control their own lighting.
-    if (!data.sceneCode && env.skybox) {
+    // Skip for sceneCode scenes and panorama-URL scenes (they set their own environment).
+    if (!data.sceneCode && env.skybox && !env.skyboxUrl) {
       const skyboxKey = env.skybox;
+      // IBL: upgrade reflections / shading quality with PMREM HDR
       loadEnvMap(skyboxKey, this.renderer)
         .then((envMap) => {
           this.scene.environment = envMap;
@@ -1325,6 +1242,19 @@ export class SceneRenderer {
         .catch(() => {
           // Network unavailable — RoomEnvironment baseline remains active
         });
+      // Background: replace procedural Sky shader with photorealistic JPEG panorama.
+      // Sky shader shows instantly; JPEG swaps in when loaded (typically < 1 s cached).
+      if (preset.sky !== null) {
+        loadSkyBackground(skyboxKey)
+          .then((bgTex) => {
+            this.sky.visible = false;
+            this.scene.background = bgTex;
+            this.invalidate(2);
+          })
+          .catch(() => {
+            // Network unavailable — procedural Sky shader remains visible
+          });
+      }
     }
 
     // Path C: execute sceneCode if present.
@@ -1394,17 +1324,6 @@ export class SceneRenderer {
         for (const lod of this.lodObjects) lod.update(this.camera);
       });
     }
-
-    // God rays: project sun direction to screen space each frame, update pass uniforms
-    this.registerSystem(SystemOrder.Render, () => {
-      const sunScreen = this.sunDir.clone().multiplyScalar(1000).project(this.camera);
-      const sunU = (sunScreen.x + 1) / 2;
-      const sunV = (sunScreen.y + 1) / 2;
-      // Visible only when sun is in front of camera (z < 1) and above the horizon on screen
-      const visible = sunScreen.z < 1.0 && sunV > -0.2 && sunV < 1.5 ? 1.0 : 0.0;
-      this.godraysPass.uniforms["uSunPos"].value.set(sunU, sunV);
-      this.godraysPass.uniforms["uVisible"].value = visible;
-    });
 
     // Wait for all GLTF loads (errors are caught inside loadGltfModel)
     await Promise.all(loadPromises);
@@ -1648,8 +1567,8 @@ export class SceneRenderer {
   }
 
   /**
-   * Build an animated water surface using a planar Reflector with
-   * two-layer scrolling normal-map distortion applied to the reflection UV.
+   * Build an animated water surface using WaterMesh (WebGPU-native).
+   * Built-in TSL time node drives the normal-map animation — no registerSystem needed.
    * The dark lake bed below gives the illusion of depth.
    */
   private buildWater(obj: SceneObject): THREE.Group {
@@ -1660,94 +1579,31 @@ export class SceneRenderer {
     const group = new THREE.Group();
     group.position.set(obj.position.x, waterY, obj.position.z);
 
-    // ── Lake bed ─────────────────────────────────────────────────────────
-    const bedMat = new THREE.MeshStandardMaterial({ color: 0x071a28, roughness: 1, metalness: 0 });
-    const bed = new THREE.Mesh(new THREE.PlaneGeometry(ww, wd), bedMat);
+    // Lake bed
+    const bed = new THREE.Mesh(
+      new THREE.PlaneGeometry(ww, wd),
+      new THREE.MeshStandardMaterial({ color: 0x071a28, roughness: 1, metalness: 0 }),
+    );
     bed.rotation.x = -Math.PI / 2;
     bed.position.y = -0.6;
-    bed.renderOrder = 0;
     group.add(bed);
 
-    // ── Reflector surface with normal-map wave distortion ────────────────
-    const reflectorShader = {
-      uniforms: {
-        color:         { value: new THREE.Color(0x4a8fa8) }, // water tint
-        tDiffuse:      { value: null as THREE.Texture | null },
-        textureMatrix: { value: null as THREE.Matrix4 | null },
-        tNormal:       { value: null as THREE.Texture | null },
-        time:          { value: 0 },
-      },
-      vertexShader: /* glsl */`
-        uniform mat4 textureMatrix;
-        varying vec4 vUvRefl;
-        varying vec3 vWorldPos;
-        #include <common>
-        #include <logdepthbuf_pars_vertex>
-        void main() {
-          vUvRefl  = textureMatrix * vec4(position, 1.0);
-          vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          #include <logdepthbuf_vertex>
-        }`,
-      fragmentShader: /* glsl */`
-        uniform vec3 color;
-        uniform sampler2D tDiffuse;
-        uniform sampler2D tNormal;
-        uniform float time;
-        varying vec4 vUvRefl;
-        varying vec3 vWorldPos;
-        #include <logdepthbuf_pars_fragment>
-        float blendOverlay(float base, float blend) {
-          return base < 0.5 ? 2.0*base*blend : 1.0 - 2.0*(1.0-base)*(1.0-blend);
-        }
-        vec3 blendOverlay(vec3 base, vec3 blend) {
-          return vec3(blendOverlay(base.r,blend.r), blendOverlay(base.g,blend.g), blendOverlay(base.b,blend.b));
-        }
-        void main() {
-          #include <logdepthbuf_fragment>
-          // Two scrolling normal layers for organic ripple
-          vec2 uv  = vWorldPos.xz * 0.08;
-          vec2 n1  = texture2D(tNormal, uv + time * vec2( 0.030,  0.015)).xy * 2.0 - 1.0;
-          vec2 n2  = texture2D(tNormal, uv * 0.7 + time * vec2(-0.015,  0.025)).xy * 2.0 - 1.0;
-          vec2 distort = (n1 + n2) * 0.006;
-          // Distort projective reflection coords
-          vec4 uvD = vUvRefl;
-          uvD.xy  += distort * uvD.w;
-          vec4 refl = texture2DProj(tDiffuse, uvD);
-          gl_FragColor = vec4(blendOverlay(refl.rgb, color), 1.0);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-        }`,
-    };
-
-    const reflector = new Reflector(
-      new THREE.PlaneGeometry(ww, wd),
-      { clipBias: 0.003, textureWidth: 512, textureHeight: 512, shader: reflectorShader },
+    // WaterMesh — built-in reflection + normal-map animation via TSL time node
+    const waterNormalsTex = new THREE.TextureLoader().load(
+      "https://threejs.org/examples/textures/waternormals.jpg",
+      (tex) => { tex.wrapS = tex.wrapT = THREE.RepeatWrapping; this.invalidate(2); },
     );
-    reflector.rotation.x = -Math.PI / 2;
-    reflector.position.y = 0.005;
-    reflector.renderOrder = 1;
-    group.add(reflector);
+    const water = new WaterMesh(new THREE.PlaneGeometry(ww, wd), {
+      waterNormals: waterNormalsTex,
+      waterColor:   0x4a8fa8,
+      distortionScale: 4,
+    });
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = 0.005;
+    group.add(water);
 
     applyUserData(group, obj.objectId, obj.interactable);
-
-    // Load waternormals and wire into reflector material
-    const mat = reflector.material as THREE.ShaderMaterial;
-    new THREE.TextureLoader().load(
-      "https://threejs.org/examples/textures/waternormals.jpg",
-      (tex) => {
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        mat.uniforms["tNormal"].value = tex;
-        this.invalidate(2);
-      },
-    );
-
-    // Animate time uniform each frame
-    this.registerSystem(SystemOrder.Render, (delta) => {
-      mat.uniforms["time"].value += delta;
-      this.invalidate(1);
-    });
-
+    // No registerSystem needed — WaterMesh animates via built-in TSL time node
     return group;
   }
 
@@ -1837,17 +1693,18 @@ export class SceneRenderer {
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const fn = new Function(
-        "THREE", "scene", "camera", "renderer", "controls", "animate", "Water",
+        "THREE", "tsl", "scene", "camera", "renderer", "controls", "animate", "WaterMesh",
         code,
       );
       fn(
         THREE,
+        TSL,
         sceneProxy,
         this.camera,
         this.renderer,
         this.controls,
         (cb: (delta: number) => void) => { this.registerSystem(SystemOrder.Render, cb); },
-        Water,
+        WaterMesh,
       );
     } catch (err) {
       console.error("[SceneRenderer] sceneCode execution error:", err);
@@ -1909,11 +1766,12 @@ export class SceneRenderer {
   }
 
   dispose(): void {
-    cancelAnimationFrame(this.animFrame);
+    if (this.disposed) return;
+    this.disposed = true;
+    try { this.renderer.setAnimationLoop(null); } catch (_) { /* not yet initialized */ }
     if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
     this.controls.dispose();
-    this.composer.dispose();
-    this.renderer.dispose();
+    try { this.renderer.dispose(); } catch (_) { /* backend may be uninitialized */ }
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
@@ -1928,16 +1786,12 @@ export class SceneRenderer {
     const el = this.renderer.domElement;
     this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
     this.renderer.setSize(el.clientWidth, el.clientHeight, false);
-    this.ssaoPass.setSize(el.clientWidth, el.clientHeight);
-    this.composer.setSize(el.clientWidth, el.clientHeight);
     if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
     this.perfRestoreTimer = setTimeout(() => {
       this.perfRestoreTimer = null;
       this.perfCurrent = this.perfMax;
       this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
       this.renderer.setSize(el.clientWidth, el.clientHeight, false);
-      this.ssaoPass.setSize(el.clientWidth, el.clientHeight);
-      this.composer.setSize(el.clientWidth, el.clientHeight);
       this.invalidate(2);
     }, this.perfDebounce);
   }
@@ -1971,7 +1825,7 @@ export class SceneRenderer {
     ground.position.y = -0.02;
     ground.receiveShadow = true;
     this.scene.add(ground);
-    applyTerrainPbr(mat, "aerial_grass_rock_02", 50, () => this.invalidate(2), 0.06);
+    applyTerrainPbr(mat, "aerial_grass_rock", 50, () => this.invalidate(2), 0.06);
   }
 
   /**
@@ -1999,7 +1853,7 @@ export class SceneRenderer {
       mesh.position.set(rx, -rh * 0.05, rz);
       mesh.receiveShadow = true;
       this.scene.add(mesh);
-      applyTerrainPbr(mat, "aerial_grass_rock_02", 4, () => this.invalidate(2));
+      applyTerrainPbr(mat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 4, () => this.invalidate(2));
     }
   }
 
@@ -2048,7 +1902,7 @@ export class SceneRenderer {
     const ROCK_N = 35;
     const rockGeo = new THREE.IcosahedronGeometry(1, 1);
     const rockMat = makeTerrainSlopeMat(0x7a7868, 0x5a5248, 0.5, 0.82, 0.95);
-    applyTerrainPbr(rockMat, "aerial_grass_rock_02", 2, () => this.invalidate(2));
+    applyTerrainPbr(rockMat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 2, () => this.invalidate(2));
     const rockIM = new THREE.InstancedMesh(rockGeo, rockMat, ROCK_N);
     rockIM.receiveShadow = true;
 
@@ -2110,17 +1964,17 @@ export class SceneRenderer {
       this.camera.updateProjectionMatrix();
       this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
       this.renderer.setSize(w, h, false);
-      this.ssaoPass.setSize(w, h);
-      this.composer.setSize(w, h);
+      // PostProcessing resizes automatically with renderer.setSize()
       this.invalidate(2);
     });
     observer.observe(canvas);
   }
 
   private startLoop(): void {
-    const loop = (now: number) => {
-      this.animFrame = requestAnimationFrame(loop);
+    if (this.loopRunning) return;
+    this.loopRunning = true;
 
+    this.renderer.setAnimationLoop(async (now: number) => {
       const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
       this.lastFrameTime = now;
 
@@ -2136,9 +1990,6 @@ export class SceneRenderer {
         this.controls.target.lerpVectors(this.transitionFrom.target, this.transitionTo.target, eased);
         if (t >= 1) {
           this.transitioning = false;
-          // Update DoF focus to final camera-to-target distance
-          const focusDist = this.camera.position.distanceTo(this.controls.target);
-          (this.dofPass.uniforms as Record<string, THREE.IUniform>)["focus"].value = focusDist;
         }
         this.invalidate(1);
       }
@@ -2158,17 +2009,19 @@ export class SceneRenderer {
       if (hasSystems) this.invalidate(1);
 
       // ── Demand render ─────────────────────────────────────────────────────
-      // Only call composer.render() when work is queued.
+      // Only call renderAsync when work is queued.
       if (this.framesDue <= 0) return;
       this.framesDue--;
 
-      // Adaptive DPR: measure JS frame time; regress on overrun
+      // Adaptive DPR: measure frame time; regress on overrun
       const frameStart = performance.now();
-      this.renderer.shadowMap.needsUpdate = true;
-      this.composer.render();
+      try {
+        await this.postProcessing.renderAsync();
+      } catch (err) {
+        console.error("[SceneRenderer] render error:", err);
+      }
       const frameMs = performance.now() - frameStart;
       if (frameMs > this.frameBudgetMs) this.regress();
-    };
-    loop(0);
+    });
   }
 }
