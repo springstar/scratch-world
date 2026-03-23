@@ -14,6 +14,7 @@ import { applyTerrainPbr, setupUv2 } from "./texture-cache.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { Water } from "three/addons/objects/Water.js";
+import { Reflector } from "three/addons/objects/Reflector.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
 
 // Colour palette keyed by object type
@@ -1620,70 +1621,103 @@ export class SceneRenderer {
   }
 
   /**
-   * Build an animated water surface for terrain/water objects.
-   * Uses MeshPhysicalMaterial + scrolling waternormals UV offset —
-   * avoids the mirror-reflection artifacts of the full Water reflector shader.
+   * Build an animated water surface using a planar Reflector with
+   * two-layer scrolling normal-map distortion applied to the reflection UV.
+   * The dark lake bed below gives the illusion of depth.
    */
   private buildWater(obj: SceneObject): THREE.Group {
-    const ww = (obj.metadata.width as number | undefined) ?? 20;
-    const wd = (obj.metadata.depth as number | undefined) ?? 20;
+    const ww = (obj.metadata.width  as number | undefined) ?? 20;
+    const wd = (obj.metadata.depth  as number | undefined) ?? 20;
     const waterY = Math.max(obj.position.y, 0);
 
     const group = new THREE.Group();
     group.position.set(obj.position.x, waterY, obj.position.z);
 
-    // ── Lake bed — sits 0.6 units below the surface ───────────────────────
-    // Dark sediment color shows through the semi-transparent water above,
-    // creating the visual illusion of depth without real geometry depth.
-    const bedMat = new THREE.MeshStandardMaterial({
-      color: 0x071a28,   // near-black muddy water floor
-      roughness: 1,
-      metalness: 0,
-    });
+    // ── Lake bed ─────────────────────────────────────────────────────────
+    const bedMat = new THREE.MeshStandardMaterial({ color: 0x071a28, roughness: 1, metalness: 0 });
     const bed = new THREE.Mesh(new THREE.PlaneGeometry(ww, wd), bedMat);
     bed.rotation.x = -Math.PI / 2;
     bed.position.y = -0.6;
     bed.renderOrder = 0;
     group.add(bed);
 
-    // ── Water surface — semi-transparent so the dark bed bleeds through ───
-    const waterMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0a2e45,
-      emissive: new THREE.Color(0x003355),
-      emissiveIntensity: 0.25,
-      roughness: 0.02,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.78,            // reduced from 0.93 — bed shadow visible, gives water depth
-      depthWrite: false,
-      envMapIntensity: 1.2,
-      side: THREE.FrontSide,
-    });
+    // ── Reflector surface with normal-map wave distortion ────────────────
+    const reflectorShader = {
+      uniforms: {
+        color:         { value: new THREE.Color(0x4a8fa8) }, // water tint
+        tDiffuse:      { value: null as THREE.Texture | null },
+        textureMatrix: { value: null as THREE.Matrix4 | null },
+        tNormal:       { value: null as THREE.Texture | null },
+        time:          { value: 0 },
+      },
+      vertexShader: /* glsl */`
+        uniform mat4 textureMatrix;
+        varying vec4 vUvRefl;
+        varying vec3 vWorldPos;
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        void main() {
+          vUvRefl  = textureMatrix * vec4(position, 1.0);
+          vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader: /* glsl */`
+        uniform vec3 color;
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tNormal;
+        uniform float time;
+        varying vec4 vUvRefl;
+        varying vec3 vWorldPos;
+        #include <logdepthbuf_pars_fragment>
+        float blendOverlay(float base, float blend) {
+          return base < 0.5 ? 2.0*base*blend : 1.0 - 2.0*(1.0-base)*(1.0-blend);
+        }
+        vec3 blendOverlay(vec3 base, vec3 blend) {
+          return vec3(blendOverlay(base.r,blend.r), blendOverlay(base.g,blend.g), blendOverlay(base.b,blend.b));
+        }
+        void main() {
+          #include <logdepthbuf_fragment>
+          // Two scrolling normal layers for organic ripple
+          vec2 uv  = vWorldPos.xz * 0.08;
+          vec2 n1  = texture2D(tNormal, uv + time * vec2( 0.030,  0.015)).xy * 2.0 - 1.0;
+          vec2 n2  = texture2D(tNormal, uv * 0.7 + time * vec2(-0.015,  0.025)).xy * 2.0 - 1.0;
+          vec2 distort = (n1 + n2) * 0.006;
+          // Distort projective reflection coords
+          vec4 uvD = vUvRefl;
+          uvD.xy  += distort * uvD.w;
+          vec4 refl = texture2DProj(tDiffuse, uvD);
+          gl_FragColor = vec4(blendOverlay(refl.rgb, color), 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+    };
 
-    const normalTex = new THREE.TextureLoader().load(
+    const reflector = new Reflector(
+      new THREE.PlaneGeometry(ww, wd),
+      { clipBias: 0.003, textureWidth: 512, textureHeight: 512, shader: reflectorShader },
+    );
+    reflector.rotation.x = -Math.PI / 2;
+    reflector.position.y = 0.005;
+    reflector.renderOrder = 1;
+    group.add(reflector);
+
+    applyUserData(group, obj.objectId, obj.interactable);
+
+    // Load waternormals and wire into reflector material
+    const mat = reflector.material as THREE.ShaderMaterial;
+    new THREE.TextureLoader().load(
       "https://threejs.org/examples/textures/waternormals.jpg",
       (tex) => {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(4, 4);
-        waterMat.normalMap = tex;
-        waterMat.normalScale.set(1.2, 1.2);
-        waterMat.needsUpdate = true;
+        mat.uniforms["tNormal"].value = tex;
         this.invalidate(2);
       },
     );
 
-    const surface = new THREE.Mesh(new THREE.PlaneGeometry(ww, wd, 1, 1), waterMat);
-    surface.rotation.x = -Math.PI / 2;
-    surface.position.y = 0.005;   // just above group origin
-    surface.renderOrder = 1;
-    group.add(surface);
-
-    applyUserData(group, obj.objectId, obj.interactable);
-
-    let t = 0;
+    // Animate time uniform each frame
     this.registerSystem(SystemOrder.Render, (delta) => {
-      t += delta;
-      normalTex.offset.set(t * 0.03, t * 0.015);
+      mat.uniforms["time"].value += delta;
       this.invalidate(1);
     });
 
