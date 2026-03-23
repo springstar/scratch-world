@@ -172,6 +172,30 @@ export function cityDataToSceneData(cityData: CityData, theme: Theme = "medieval
 		});
 	}
 
+	// ── Roads ───────────────────────────────────────────────────────────────
+	for (const seg of cityData.segments) {
+		const mx = (seg.start.x + seg.end.x) / 2;
+		const mz = (seg.start.y + seg.end.y) / 2; // citygen y == scene z
+		const dx = seg.end.x - seg.start.x;
+		const dz = seg.end.y - seg.start.y;
+		const len = Math.sqrt(dx * dx + dz * dz);
+		if (len < 0.5) continue;
+		objects.push({
+			objectId: nextId("road"),
+			name: seg.highway ? "Highway" : "Road",
+			type: "road",
+			position: { x: mx, y: 0, z: mz },
+			description: seg.highway ? "A main road." : "A cobblestone road.",
+			interactable: false,
+			metadata: {
+				length: len,
+				width: seg.highway ? 3.5 : 2.0,
+				highway: seg.highway,
+				rotationY: Math.atan2(dz, dx),
+			},
+		});
+	}
+
 	// ── Trees (10 scattered near perimeter) ────────────────────────────────
 	const treePositions = perimeter10(minX, maxX, minZ, maxZ);
 	for (const [tx, tz] of treePositions) {

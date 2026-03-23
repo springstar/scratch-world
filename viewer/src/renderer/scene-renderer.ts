@@ -516,9 +516,13 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
 
     case "building": {
       const group = new THREE.Group();
-      const wallMat = makeMat(colorFor("building"), 0.85, 0.05);
+      // Seeded color variation — deterministic per building position
+      const colorSeed = Math.abs(Math.round(x * 3.7 + z * 5.3)) % 5;
+      const wallColors = [0xb5472a, 0x8a7560, 0xd4c4a8, 0x7a6050, 0xb89070];
+      const roofColors = [0x6b3a2a, 0x4a3020, 0x5a4a30, 0x3a2a20, 0x7a5535];
+      const wallMat = makeMat(wallColors[colorSeed], 0.85, 0.05);
       if (invalidate) applyTerrainPbr(wallMat, "red_brick_04", 3, invalidate);
-      const roofMat = makeMat(0x6b3a2a, 0.8, 0);
+      const roofMat = makeMat(roofColors[colorSeed], 0.8, 0);
       const glassMat = new THREE.MeshStandardMaterial({
         color: 0x88bbdd, roughness: 0.05, metalness: 0.2,
         transparent: true, opacity: 0.6,
@@ -804,6 +808,20 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       break;
     }
 
+    case "road": {
+      const rlen   = (meta?.length   as number  | undefined) ?? 8;
+      const rw     = (meta?.width    as number  | undefined) ?? 2;
+      const rotY   = (meta?.rotationY as number | undefined) ?? 0;
+      const isHwy  = (meta?.highway  as boolean | undefined) ?? false;
+      const roadMat = makeMat(isHwy ? 0x2e2e2e : 0x3d3828, 0.92, 0);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(rlen, 0.06, rw), roadMat);
+      mesh.position.set(x, y + 0.03, z);
+      mesh.rotation.y = rotY;
+      mesh.receiveShadow = true;
+      root = mesh;
+      break;
+    }
+
     case "object": {
       root = buildObjectByShape(obj, x, y, z, invalidate);
       break;
@@ -823,8 +841,8 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
 
   applyUserData(root, objectId, interactable);
 
-  // Random Y rotation for organic look (skip terrain, npcs, and indoor objects)
-  if (type !== "terrain" && type !== "npc" && type !== "object") {
+  // Random Y rotation for organic look (skip terrain, npcs, road, and indoor objects)
+  if (type !== "terrain" && type !== "npc" && type !== "object" && type !== "road" && type !== "building") {
     root.rotation.y = Math.random() * Math.PI * 2;
   }
   // Scale jitter ±15% for trees only
@@ -1481,7 +1499,7 @@ export class SceneRenderer {
   private updateDistanceCulling(): void {
     const cam = this.camera.position;
     const thresh: Record<string, number> = {
-      npc: 55, tree: 70, building: 80, item: 40, object: 50,
+      npc: 55, tree: 70, building: 80, item: 40, object: 50, road: 100,
     };
     for (const [id, root] of this.objects) {
       const meta = this.objectMeta.get(id);
