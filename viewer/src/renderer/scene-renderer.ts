@@ -517,7 +517,6 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
     }
 
     case "building": {
-      const group = new THREE.Group();
       // Seeded color variation — deterministic per building position
       const colorSeed = Math.abs(Math.round(x * 3.7 + z * 5.3)) % 5;
       const wallColors = [0xb5472a, 0x8a7560, 0xd4c4a8, 0x7a6050, 0xb89070];
@@ -525,60 +524,78 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       const wallMat = makeMat(wallColors[colorSeed], 0.85, 0.05);
       if (invalidate) applyTerrainPbr(wallMat, "red_brick_04", 3, invalidate);
       const roofMat = makeMat(roofColors[colorSeed], 0.8, 0);
-      const glassMat = new THREE.MeshStandardMaterial({
-        color: 0x88bbdd, roughness: 0.05, metalness: 0.2,
-        transparent: true, opacity: 0.6,
-        emissive: 0x224466, emissiveIntensity: 0.15,
-      });
-      // Read optional citygen metadata for variable-size buildings
+
+      // Building dimensions from citygen metadata
       const bw     = (meta?.buildingWidth  as number | undefined) ?? 5;
       const bd     = (meta?.buildingDepth  as number | undefined) ?? 5;
       const bh     = (meta?.buildingHeight as number | undefined) ?? 4;
       const bStyle = (meta?.buildingStyle  as string | undefined) ?? "house";
       const rotY   = (meta?.rotationY      as number | undefined) ?? 0;
-      // Main body — scaled to citygen footprint
-      const body = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), wallMat);
-      body.position.y = bh / 2;
-      body.castShadow = true;
-      body.receiveShadow = true;
-      group.add(body);
-      // Roof — proportional, taller for towers
-      const roofR = Math.max(bw, bd) * 0.55;
-      const roofH = bStyle === "tower" ? bh * 0.6 : 1.8;
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(roofR, roofH, 4), roofMat);
-      roof.position.y = bh + roofH / 2;
-      roof.rotation.y = Math.PI / 4;
-      roof.castShadow = true;
-      group.add(roof);
-      // Windows/door — only if building is large enough (≥ 2 units)
+      const roofR  = Math.max(bw, bd) * 0.55;
+      const roofH  = bStyle === "tower" ? bh * 0.6 : 1.8;
+
+      // ── LOD Level 0 — full detail (< 20 u): body + roof + windows + door ──
+      const full = new THREE.Group();
+      const body0 = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), wallMat);
+      body0.position.y = bh / 2;
+      body0.castShadow = true;
+      body0.receiveShadow = true;
+      full.add(body0);
+      const roof0 = new THREE.Mesh(new THREE.ConeGeometry(roofR, roofH, 4), roofMat);
+      roof0.position.y = bh + roofH / 2;
+      roof0.rotation.y = Math.PI / 4;
+      roof0.castShadow = true;
+      full.add(roof0);
       if (bw >= 2 && bd >= 2 && bh >= 2) {
-        const sw = bw / 5;  // scale ratios vs original 5×4×5
-        const sd = bd / 5;
+        const sw = bw / 5;
         const sh = bh / 4;
-        // Windows — 2×2 grid on front and back faces
+        const glassMat = new THREE.MeshStandardMaterial({
+          color: 0x88bbdd, roughness: 0.05, metalness: 0.2,
+          transparent: true, opacity: 0.6,
+          emissive: 0x224466, emissiveIntensity: 0.15,
+        });
         const winPositions: [number, number, number][] = [
-          [-1.2 * sw, 2.8 * sh, (bd / 2 + 0.01)], [1.2 * sw, 2.8 * sh, (bd / 2 + 0.01)],
-          [-1.2 * sw, 1.2 * sh, (bd / 2 + 0.01)], [1.2 * sw, 1.2 * sh, (bd / 2 + 0.01)],
-          [-1.2 * sw, 2.8 * sh, -(bd / 2 + 0.01)], [1.2 * sw, 2.8 * sh, -(bd / 2 + 0.01)],
-          [-1.2 * sw, 1.2 * sh, -(bd / 2 + 0.01)], [1.2 * sw, 1.2 * sh, -(bd / 2 + 0.01)],
+          [-1.2*sw, 2.8*sh,  bd/2+0.01], [1.2*sw, 2.8*sh,  bd/2+0.01],
+          [-1.2*sw, 1.2*sh,  bd/2+0.01], [1.2*sw, 1.2*sh,  bd/2+0.01],
+          [-1.2*sw, 2.8*sh, -bd/2-0.01], [1.2*sw, 2.8*sh, -bd/2-0.01],
+          [-1.2*sw, 1.2*sh, -bd/2-0.01], [1.2*sw, 1.2*sh, -bd/2-0.01],
         ];
         for (const [wx, wy, wz] of winPositions) {
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9 * sw, 0.8 * sh), glassMat);
+          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9*sw, 0.8*sh), glassMat);
           win.position.set(wx, wy, wz);
           if (wz < 0) win.rotation.y = Math.PI;
-          group.add(win);
+          full.add(win);
         }
-        // Door on front face
         const door = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.7 * sw, 1.6 * sh),
-          makeMat(0x5a3318, 0.9, 0),
+          new THREE.PlaneGeometry(0.7*sw, 1.6*sh), makeMat(0x5a3318, 0.9, 0),
         );
-        door.position.set(0, 0.8 * sh, bd / 2 + 0.02);
-        group.add(door);
+        door.position.set(0, 0.8*sh, bd/2+0.02);
+        full.add(door);
       }
-      group.rotation.y = rotY;  // road-facing rotation from citygen
-      group.position.set(x, y, z);
-      root = group;
+
+      // ── LOD Level 1 — medium (20–50 u): body + roof, no glass ────────────
+      const med = new THREE.Group();
+      const body1 = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), wallMat);
+      body1.position.y = bh / 2;
+      body1.receiveShadow = true;
+      med.add(body1);
+      const roof1 = new THREE.Mesh(new THREE.ConeGeometry(roofR, roofH, 4), roofMat);
+      roof1.position.y = bh + roofH / 2;
+      roof1.rotation.y = Math.PI / 4;
+      med.add(roof1);
+
+      // ── LOD Level 2 — low (50–80 u): single box silhouette ───────────────
+      const totalH = bh + roofH * 0.5;
+      const low = new THREE.Mesh(new THREE.BoxGeometry(bw, totalH, bd), wallMat);
+      low.position.y = totalH / 2;
+
+      const lod = new THREE.LOD();
+      lod.addLevel(full,  0);
+      lod.addLevel(med,  20);
+      lod.addLevel(low,  50);
+      lod.rotation.y = rotY;
+      lod.position.set(x, y, z);
+      root = lod;
       break;
     }
 
@@ -1027,6 +1044,7 @@ export class SceneRenderer {
   private scatterGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
+  private lodObjects: THREE.LOD[] = [];               // buildings — need lod.update() each frame
   private npcMobStates: NpcMobState[] = [];
   private animFrame = 0;
   private animSystems: AnimSystem[] = [];
@@ -1226,6 +1244,7 @@ export class SceneRenderer {
     }
     this.objects.clear();
     this.objectMeta.clear();
+    this.lodObjects = [];
     this.animSystems = [];
 
     // Dispose previous instanced tree batches
@@ -1356,6 +1375,7 @@ export class SceneRenderer {
         this.scene.add(node);
         this.objects.set(obj.objectId, node);
         this.objectMeta.set(obj.objectId, obj);
+        if (node instanceof THREE.LOD) this.lodObjects.push(node);
       }
     }
 
@@ -1367,6 +1387,13 @@ export class SceneRenderer {
 
     // NPC mob system: random walk / patrol + idle animation + chatter bubbles
     this.setupNpcSystem();
+
+    // LOD: update detail levels each frame before culling (priority 400)
+    if (this.lodObjects.length > 0) {
+      this.registerSystem(400, () => {
+        for (const lod of this.lodObjects) lod.update(this.camera);
+      });
+    }
 
     // God rays: project sun direction to screen space each frame, update pass uniforms
     this.registerSystem(SystemOrder.Render, () => {
