@@ -22,18 +22,19 @@ describe("SkillLoader", () => {
 	});
 
 	describe("listSkills", () => {
-		it("returns built-in generator-claude skill", () => {
+		it("includes built-in generator-claude skill", () => {
 			const skills = loader.listSkills();
-			expect(skills).toHaveLength(1);
-			expect(skills[0].name).toBe("generator-claude");
-			expect(skills[0].category).toBe("generator");
+			const gen = skills.find((s) => s.name === "generator-claude");
+			expect(gen).toBeDefined();
+			expect(gen?.category).toBe("generator");
 		});
 	});
 
 	describe("getActiveSkill", () => {
-		it("returns null when no active skill configured", () => {
+		it("returns the default skill when no active skill configured", () => {
 			const skill = loader.getActiveSkill("generator");
-			expect(skill).toBeNull();
+			// generator-claude is the built-in default — always returns a skill
+			expect(skill?.name).toBe("generator-claude");
 		});
 
 		it("returns the active skill after activation", () => {
@@ -44,9 +45,10 @@ describe("SkillLoader", () => {
 	});
 
 	describe("getActivePromptMarkdown", () => {
-		it("returns null when no active skill", () => {
+		it("returns markdown for the default skill when no explicit activation", () => {
 			const md = loader.getActivePromptMarkdown("generator");
-			expect(md).toBeNull();
+			expect(md).toBeTypeOf("string");
+			expect(md).toContain("SceneData");
 		});
 
 		it("returns markdown string when generator-claude is active", () => {

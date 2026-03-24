@@ -761,7 +761,29 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         const cw = (obj.metadata.width  as number | undefined) ?? 12;
         const ch = (obj.metadata.height as number | undefined) ?? 8;
         const cd = (obj.metadata.depth  as number | undefined) ?? 3;
-        const cliffGeo = new THREE.BoxGeometry(cw, ch, cd, 4, 4, 2);
+        // Subdivided box with per-vertex noise jitter for natural rock-face silhouette.
+        const cliffGeo = new THREE.BoxGeometry(cw, ch, cd, 8, 10, 3);
+        // Jitter vertices — keep top and bottom rows pinned to preserve clean edges.
+        const cliffPos = cliffGeo.attributes.position;
+        const jitterAmp = Math.min(cw, cd) * 0.06;
+        // Simple deterministic noise: hash on vertex index
+        for (let vi = 0; vi < cliffPos.count; vi++) {
+          const vy = cliffPos.getY(vi);
+          const edgeFade = Math.min(
+            Math.abs(vy - ch * 0.5) / (ch * 0.12),   // top edge
+            Math.abs(vy + ch * 0.5) / (ch * 0.12),   // bottom edge
+            1,
+          );
+          if (edgeFade < 0.01) continue;
+          const hx = Math.sin(vi * 127.1) * 43758.5453;
+          const hz = Math.sin(vi * 311.7) * 43758.5453;
+          const hy = Math.sin(vi * 591.3) * 43758.5453;
+          cliffPos.setX(vi, cliffPos.getX(vi) + (hx - Math.floor(hx) - 0.5) * jitterAmp * edgeFade);
+          cliffPos.setY(vi, cliffPos.getY(vi) + (hy - Math.floor(hy) - 0.5) * jitterAmp * 0.4 * edgeFade);
+          cliffPos.setZ(vi, cliffPos.getZ(vi) + (hz - Math.floor(hz) - 0.5) * jitterAmp * edgeFade);
+        }
+        cliffPos.needsUpdate = true;
+        cliffGeo.computeVertexNormals();
         setupUv2(cliffGeo);
         const cliffMat = makeTerrainSlopeMat(0x908070, 0x5a4a3c, 0.7, 0.9);
         const mesh = new THREE.Mesh(cliffGeo, cliffMat);

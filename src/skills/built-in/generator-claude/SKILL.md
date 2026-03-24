@@ -543,6 +543,74 @@ scene.fog = new THREE.FogExp2(0xb8cce0, 0.004);
 
 **Example: Animated particle system**
 
+**Example: Falling snow (add to any mountain/winter scene)**
+
+```javascript
+// Falling snow — 80 particles, precomputed randoms, animate() loop
+const N = 80;
+const snowPos = new Float32Array(N * 3);
+const vy = new Float32Array(N), dx = new Float32Array(N), dz = new Float32Array(N);
+for (let i = 0; i < N; i++) {
+  snowPos[i*3]   = (Math.random() - 0.5) * 120;  // x spread (match scene width)
+  snowPos[i*3+1] = Math.random() * 50;            // initial y (0..50)
+  snowPos[i*3+2] = (Math.random() - 0.5) * 120;  // z spread
+  vy[i] = 1.5 + Math.random() * 2.5;             // fall speed (units/sec)
+  dx[i] = (Math.random() - 0.5) * 0.6;           // horizontal drift x
+  dz[i] = (Math.random() - 0.5) * 0.4;           // horizontal drift z
+}
+const snowGeo = new THREE.BufferGeometry();
+const attr = new THREE.BufferAttribute(snowPos, 3);
+attr.setUsage(THREE.DynamicDrawUsage);
+snowGeo.setAttribute('position', attr);
+scene.add(new THREE.Points(snowGeo,
+  new THREE.PointsMaterial({ color: 0xeef4ff, size: 0.35, transparent: true, opacity: 0.82, depthWrite: false })
+));
+animate((delta) => {
+  const p = snowGeo.attributes.position;
+  for (let i = 0; i < N; i++) {
+    p.setY(i, p.getY(i) - vy[i] * delta);
+    p.setX(i, p.getX(i) + dx[i] * delta);
+    p.setZ(i, p.getZ(i) + dz[i] * delta);
+    if (p.getY(i) < -1) { p.setY(i, 48 + Math.random() * 8); }
+  }
+  p.needsUpdate = true;
+});
+// Tune: N ≤ 100 (perf limit) | size 0.2–0.5 | spread matches scene floor width
+```
+
+**Example: Falling rain**
+
+```javascript
+// Falling rain — 90 streaks rendered as thin vertical points
+const N = 90;
+const rainPos = new Float32Array(N * 3);
+const vy = new Float32Array(N), dx = new Float32Array(N);
+for (let i = 0; i < N; i++) {
+  rainPos[i*3]   = (Math.random() - 0.5) * 80;
+  rainPos[i*3+1] = Math.random() * 40;
+  rainPos[i*3+2] = (Math.random() - 0.5) * 80;
+  vy[i] = 18 + Math.random() * 10;   // rain falls fast
+  dx[i] = (Math.random() - 0.5) * 1.5; // slight wind angle
+}
+const rainGeo = new THREE.BufferGeometry();
+const rAttr = new THREE.BufferAttribute(rainPos, 3);
+rAttr.setUsage(THREE.DynamicDrawUsage);
+rainGeo.setAttribute('position', rAttr);
+scene.add(new THREE.Points(rainGeo,
+  new THREE.PointsMaterial({ color: 0x8ab4cc, size: 0.12, transparent: true, opacity: 0.55, depthWrite: false })
+));
+animate((delta) => {
+  const p = rainGeo.attributes.position;
+  for (let i = 0; i < N; i++) {
+    p.setY(i, p.getY(i) - vy[i] * delta);
+    p.setX(i, p.getX(i) + dx[i] * delta);
+    if (p.getY(i) < 0) { p.setY(i, 38 + Math.random() * 6); }
+  }
+  p.needsUpdate = true;
+});
+// Tune: vy 18–28 for heavy rain, 8–14 for drizzle | color 0x8ab4cc (grey-blue)
+```
+
 Pass `sceneCode` in your tool call (alongside a minimal `sceneData` with viewpoints):
 
 ```javascript
