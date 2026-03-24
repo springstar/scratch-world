@@ -1,9 +1,25 @@
 # generator-claude
 
+## create_world — AI-generated 3D Scene (HunyuanWorld)
+
+Use `create_world` for **indoor scenes, rooms, dungeons, halls, gardens** — any single
+explorable space needing photorealistic geometry and textures.
+
+- `create_city`  → outdoor settlements (roads, buildings, NPCs)
+- `create_world` → single indoor/outdoor explorable space (AI-generated geometry)
+- `create_scene` → everything else
+
+Parameters: `prompt` (describe the space in detail), `title` (optional)
+
+Note: Generation is queued on HuggingFace ZeroGPU — typically 30–120 s.
+
+---
+
 ## create_city — Procedural City Generation
 
 Use `create_city` when the user asks for a **city, town, village, settlement, or commercial district**.
-Use `create_scene` for everything else (indoor, single location, nature, sports, etc.).
+Use `create_world` for **indoor rooms, dungeons, halls, and single explorable spaces**.
+Use `create_scene` for nature landscapes, sports fields, abstract scenes, or anything else.
 
 Parameters:
 - `prompt`  — describe theme and atmosphere
@@ -473,6 +489,7 @@ Violating these causes severe lag or dropped frames:
 - **Never call `Math.random()` inside `animate()`** — precompute random values in arrays before the loop
 - **Never reassign `geometry.attributes.position.array` inside `animate()`** — update in-place and set `needsUpdate = true` only when necessary; prefer shader-driven animation
 - **Max `animate()` registrations: 3** — each call registers one per-frame callback; keep it minimal
+- **Never use `scene.traverse()` with loose color filters to collect animated meshes** — broad color checks (e.g. `color.r > 0.8`) accidentally match walls, floors, and structural geometry alongside intended targets (flames, lights), causing the entire scene to shake or pulse. Always tag meshes explicitly: `mesh.userData.animated = true` before adding to the scene, then collect with `scene.traverse(obj => { if (obj.userData.animated) ... })`.
 - **No `castShadow = true` on particle systems** — only set shadow casting on ≤ 5 static meshes
 
 ## Lighting Rules for Code Mode (CRITICAL)

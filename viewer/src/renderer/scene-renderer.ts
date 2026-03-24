@@ -6,7 +6,7 @@ import { smaa }   from "three/addons/tsl/display/SMAANode.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { loadEnvMap, loadSkyBackground } from "./hdri-cache.js";
-import { applyTerrainPbr, setupUv2 } from "./texture-cache.js";
+import { applyTerrainPbr, applyTerrainPbrNode, setupUv2 } from "./texture-cache.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { SkyMesh }   from "three/addons/objects/SkyMesh.js";
 import { WaterMesh } from "three/addons/objects/WaterMesh.js";
@@ -537,6 +537,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       low.position.y = totalH / 2;
 
       const lod = new THREE.LOD();
+      lod.autoUpdate = false; // disable built-in per-frame update; our hysteresis system manages levels
       lod.addLevel(full,  0);
       lod.addLevel(med,  20);
       lod.addLevel(low,  50);
@@ -702,7 +703,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         mesh.position.set(x, y - hh * 0.05, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(hillMat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 4, invalidate);
+        if (invalidate) applyTerrainPbrNode(hillMat, "aerial_grass_rock", 4, 0x4a7a3a, 0x6e5030, 0.35, 0.75, invalidate);
         root = mesh;
       } else if (shape === "cliff") {
         const cw = (obj.metadata.width  as number | undefined) ?? 12;
@@ -715,7 +716,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         mesh.position.set(x, y - ch * 0.5 + 0.1, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(cliffMat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 3, invalidate);
+        if (invalidate) applyTerrainPbrNode(cliffMat, "aerial_grass_rock", 3, 0x908070, 0x5a4a3c, 0.7, 0.9, invalidate);
         root = mesh;
       } else if (shape === "platform") {
         const pw = (obj.metadata.width  as number | undefined) ?? 10;
@@ -731,7 +732,7 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         mesh.position.set(x, y - ph * 0.5, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbr(platformMat as unknown as THREE.MeshStandardMaterial, "cobblestone_floor_01", 4, invalidate);
+        if (invalidate) applyTerrainPbrNode(platformMat, "cobblestone_floor_01", 4, 0xb0a282, 0x7a6a58, 0.6, 0.85, invalidate);
         root = mesh;
       } else if (shape === "floor") {
         const fw = (obj.metadata.width as number | undefined) ?? 20;
@@ -992,7 +993,8 @@ export class SceneRenderer {
   private scatterGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
-  private lodObjects: THREE.LOD[] = [];               // buildings — need lod.update() each frame
+  private lodObjects: THREE.LOD[] = [];               // buildings — custom hysteresis update each frame
+  private lodCurrentLevel: Map<THREE.LOD, number> = new Map(); // tracks committed level per LOD
   private npcMobStates: NpcMobState[] = [];
   private loopRunning = false;
   private animSystems: AnimSystem[] = [];
@@ -1004,6 +1006,11 @@ export class SceneRenderer {
   private transitionFrom = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
   private transitionTo   = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
   private transitioning  = false;
+  // Set to true by OrbitControls "start" event (user begins interaction).
+  // Reset to false once controls.update() returns false (damping fully settled).
+  // Prevents controls.update() from running every frame in demand-render mode,
+  // which accumulates floating-point residual and causes continuous camera drift.
+  private controlsNeedsUpdate = false;
 
   // ── Demand rendering (R3F-style frameloop:"demand") ──────────────────────
   // framesDue > 0 → render this frame and decrement.
@@ -1038,15 +1045,19 @@ export class SceneRenderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.65;
+    this.renderer.toneMappingExposure = 0.5;
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.05;
+    this.controls.dampingFactor = 0.18;
     this.controls.minDistance = 2;
     this.controls.maxDistance = 200;
     this.controls.addEventListener("change", () => this.invalidate(1));
+    // Mark controls as needing update when user starts interacting, so update() runs
+    // each frame until damping fully settles. Without this guard, update() runs every
+    // frame in the demand-render loop and accumulated float residual causes camera drift.
+    this.controls.addEventListener("start",  () => { this.controlsNeedsUpdate = true; });
 
     // Lights — will be overridden by loadScene() env settings
     this.hemi = new THREE.HemisphereLight(0x87ceeb, 0x4a7c59, 0.6);
@@ -1147,6 +1158,7 @@ export class SceneRenderer {
     this.objects.clear();
     this.objectMeta.clear();
     this.lodObjects = [];
+    this.lodCurrentLevel.clear();
     this.animSystems = [];
 
     // Dispose previous instanced tree batches
@@ -1165,14 +1177,30 @@ export class SceneRenderer {
     const env = data.environment ?? {};
     const preset = resolveEnvPreset(env.skybox, env.timeOfDay);
 
-    (this.scene.fog as THREE.Fog).color.set(preset.fogColor);
+    // Detect enclosed/indoor scenes: ceiling object present → fog should not be visible
+    const isIndoor = (data.objects ?? []).some(
+      o => (o.metadata?.shape === "ceiling") ||
+           (o.name ?? "").toLowerCase().includes("ceiling") ||
+           (o.name ?? "").toLowerCase().includes("indoor") ||
+           (o.name ?? "").toLowerCase().includes("interior"),
+    );
+
+    const fog = this.scene.fog as THREE.Fog;
+    fog.color.set(preset.fogColor);
+    // Indoor scenes: push fog far beyond any visible geometry so it never fires.
+    // Outdoor scenes: standard atmospheric distance (30–90 u).
+    fog.near = isIndoor ? 300 : 30;
+    fog.far  = isIndoor ? 600 : 90;
 
     this.hemi.color.set(preset.skyColor);
     this.hemi.groundColor.set(preset.groundColor);
-    this.hemi.intensity = preset.ambientIntensity;
+    // Indoor: drastically reduce ambient to prevent over-lighting enclosed geometry.
+    this.hemi.intensity = isIndoor ? preset.ambientIntensity * 0.3 : preset.ambientIntensity;
 
     this.sun.color.set(preset.sunColor);
-    this.sun.intensity = preset.sunIntensity;
+    // Indoor: sun at 5% — prevents directional light from flooding wall/ceiling surfaces
+    // and pushing their linear output above the bloom threshold (causing the glow-box effect).
+    this.sun.intensity = isIndoor ? preset.sunIntensity * 0.05 : preset.sunIntensity;
 
     if (env.skyboxUrl) {
       // Equirectangular panorama from Matrix-3D or similar — highest priority, replaces procedural sky
@@ -1222,10 +1250,14 @@ export class SceneRenderer {
     const baseStrength = bloomCfg?.strength ?? 0.4;
     const isNight = env.skybox === "night" || env.timeOfDay === "night";
     this.bloomNode.strength.value  = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
-    this.bloomNode.radius.value    = bloomCfg?.radius ?? 0.3;
-    // Clamp threshold to minimum 0.9 — prevents scene-specified low thresholds
-    // from blooming ordinary lit surfaces and washing out the image.
-    this.bloomNode.threshold.value = Math.max(bloomCfg?.threshold ?? 0.9, 0.9);
+    // Indoor: tight glow (radius 0.12) so chandelier/candle lights don't spread across the room.
+    // Outdoor/night: standard radius (0.3) for wide atmospheric glow.
+    this.bloomNode.radius.value    = bloomCfg?.radius ?? (isIndoor ? 0.12 : 0.3);
+    // Clamp threshold: minimum 1.5 in linear HDR space.
+    // White wall (albedo 0.9) under sun intensity 1.2 → linear ≈ 1.1 — stays below threshold.
+    // Emissive chandelier/candle (emissiveIntensity ≥ 2) → linear ≥ 2.0 — still blooms.
+    // Prevents the "glowing box" effect where entire lit surfaces trigger bloom.
+    this.bloomNode.threshold.value = Math.max(bloomCfg?.threshold ?? 1.5, 1.5);
 
     // Upgrade scene.environment from RoomEnvironment baseline to a real Polyhaven
     // HDRI matched to the skybox preset.  Fire-and-forget: the baseline keeps
@@ -1318,10 +1350,56 @@ export class SceneRenderer {
     // NPC mob system: random walk / patrol + idle animation + chatter bubbles
     this.setupNpcSystem();
 
-    // LOD: update detail levels each frame before culling (priority 400)
+    // LOD: hysteresis update — only switch level when distance exceeds threshold
+    // by 12% beyond the switch-in point, preventing ping-pong at boundaries.
     if (this.lodObjects.length > 0) {
+      // Initialise every LOD to the correct level immediately (no hysteresis on first frame).
+      // Three.js creates all child objects as visible=true, so without this step all three
+      // detail levels would be visible simultaneously, causing the "shaking/scaling" artefact.
+      for (const lod of this.lodObjects) {
+        const dist = this.camera.position.distanceTo(lod.position);
+        const levels = lod.levels;
+        let initialLevel = levels.length - 1;
+        for (let i = 1; i < levels.length; i++) {
+          if (dist < levels[i].distance) { initialLevel = i - 1; break; }
+        }
+        levels.forEach((l, i) => { l.object.visible = i === initialLevel; });
+        this.lodCurrentLevel.set(lod, initialLevel);
+      }
+
       this.registerSystem(400, () => {
-        for (const lod of this.lodObjects) lod.update(this.camera);
+        const HYSTERESIS = 0.12;
+        for (const lod of this.lodObjects) {
+          const dist   = this.camera.position.distanceTo(lod.position);
+          const levels = lod.levels;
+          if (levels.length === 0) continue;
+
+          // Find the ideal level for this distance (same logic as THREE.LOD.update)
+          let targetLevel = levels.length - 1;
+          for (let i = 1; i < levels.length; i++) {
+            if (dist < levels[i].distance) { targetLevel = i - 1; break; }
+          }
+
+          const current = this.lodCurrentLevel.get(lod) ?? 0;
+          if (targetLevel === current) continue;
+
+          // Use the boundary between current and target levels for hysteresis.
+          // When moving farther (targetLevel > current): boundary = start of the next level.
+          // When moving closer (targetLevel < current): boundary = start of current level.
+          const boundary = targetLevel > current
+            ? levels[targetLevel].distance   // the threshold we just crossed going out
+            : levels[current].distance;      // the threshold we'd need to cross coming back in
+          const hysteresisDist = boundary * HYSTERESIS;
+
+          const crossedClearly = targetLevel > current
+            ? dist > boundary + hysteresisDist
+            : dist < boundary - hysteresisDist;
+
+          if (crossedClearly) {
+            levels.forEach((l, i) => { l.object.visible = i === targetLevel; });
+            this.lodCurrentLevel.set(lod, targetLevel);
+          }
+        }
       });
     }
 
@@ -1511,13 +1589,21 @@ export class SceneRenderer {
 
   private updateDistanceCulling(): void {
     const cam = this.camera.position;
-    const thresh: Record<string, number> = {
+    // Per-type cull distances. "terrain" is intentionally absent — walls, floors,
+    // and ceilings form the scene structure and must never be culled by distance.
+    const showThresh: Record<string, number> = {
       npc: 55, tree: 70, building: 80, item: 40, object: 50, road: 100,
     };
+    // Hide threshold is 20% larger than show threshold to prevent rapid toggling
+    // when the camera hovers near the boundary (OrbitControls damping micro-jitter).
     for (const [id, root] of this.objects) {
       const meta = this.objectMeta.get(id);
       if (!meta) continue;
-      root.visible = root.position.distanceTo(cam) < (thresh[meta.type] ?? 50);
+      const show = showThresh[meta.type];
+      if (show === undefined) continue; // terrain and unrecognised types: never cull
+      const dist = root.position.distanceTo(cam);
+      if (root.visible  && dist > show * 1.2) root.visible = false;
+      if (!root.visible && dist < show)        root.visible = true;
     }
   }
 
@@ -1853,7 +1939,7 @@ export class SceneRenderer {
       mesh.position.set(rx, -rh * 0.05, rz);
       mesh.receiveShadow = true;
       this.scene.add(mesh);
-      applyTerrainPbr(mat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 4, () => this.invalidate(2));
+      applyTerrainPbrNode(mat, "aerial_grass_rock", 4, 0x3d6630, 0x5a4830, 0.3, 0.7, () => this.invalidate(2));
     }
   }
 
@@ -1902,7 +1988,7 @@ export class SceneRenderer {
     const ROCK_N = 35;
     const rockGeo = new THREE.IcosahedronGeometry(1, 1);
     const rockMat = makeTerrainSlopeMat(0x7a7868, 0x5a5248, 0.5, 0.82, 0.95);
-    applyTerrainPbr(rockMat as unknown as THREE.MeshStandardMaterial, "aerial_grass_rock", 2, () => this.invalidate(2));
+    applyTerrainPbrNode(rockMat, "aerial_grass_rock", 2, 0x7a7868, 0x5a5248, 0.5, 0.82, () => this.invalidate(2));
     const rockIM = new THREE.InstancedMesh(rockGeo, rockMat, ROCK_N);
     rockIM.receiveShadow = true;
 
@@ -1978,10 +2064,8 @@ export class SceneRenderer {
       const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
       this.lastFrameTime = now;
 
-      // Always update controls (needed for damping to progress every RAF tick)
-      this.controls.update();
-
-      // Smooth camera transition
+      // Smooth camera transition. Camera position is lerped directly, then
+      // controls.update() syncs OrbitControls' internal spherical state.
       if (this.transitioning) {
         const elapsed = performance.now() - this.transitionStart;
         const t = Math.min(elapsed / TRANSITION_DURATION, 1);
@@ -1990,9 +2074,24 @@ export class SceneRenderer {
         this.controls.target.lerpVectors(this.transitionFrom.target, this.transitionTo.target, eased);
         if (t >= 1) {
           this.transitioning = false;
+          // Two flush calls: first re-derives spherical from final camera position;
+          // second applies (near-zero) delta and fully settles internal state.
+          this.controls.update();
+          this.controls.update();
+        } else {
+          // Sync spherical state to the lerped camera position each in-progress frame.
+          this.controls.update();
         }
         this.invalidate(1);
+      } else if (this.controlsNeedsUpdate) {
+        // Apply damping after user input until OrbitControls fully settles.
+        // update() returns false once the camera stops moving — clear the flag then.
+        const moved = this.controls.update();
+        if (!moved) this.controlsNeedsUpdate = false;
       }
+      // No controls.update() outside the two branches above: calling it every frame
+      // in a demand-render loop lets floating-point residual accumulate and drift the
+      // camera continuously — visible as slow upward tilt even without user input.
 
       // Per-frame systems — run in ascending priority order
       const hasSystems = this.animSystems.length > 0;

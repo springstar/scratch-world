@@ -14,6 +14,7 @@
  */
 
 import * as THREE from "three/webgpu";
+import { texture, color, mix, normalMap, normalLocal, vec2 } from "three/tsl";
 
 const CDN = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k";
 
@@ -153,4 +154,80 @@ export function applyTerrainPbr(
       })
       .catch(() => {});
   }
+}
+
+/**
+ * Async-upgrade a MeshStandardNodeMaterial (TSL slope-blended terrain) with
+ * Polyhaven PBR maps via TSL nodes.
+ *
+ * Because the material uses a custom colorNode, the legacy mat.map property is
+ * ignored by the WebGPU renderer. This function wires each map in as a proper
+ * TSL node so all channels take effect:
+ *   colorNode  — diffuse albedo tinted by slope blend (top vs side colour)
+ *   normalNode — Polyhaven normal map
+ *   roughnessNode — roughness channel (red channel of roughness map)
+ *   aoNode     — ambient occlusion channel (red channel of AO map)
+ *
+ * @param mat        MeshStandardNodeMaterial to upgrade
+ * @param textureId  Polyhaven asset ID (e.g. "aerial_grass_rock")
+ * @param repeat     UV tiling applied to all maps
+ * @param topColor   Hex colour tint for flat (top) faces
+ * @param sideColor  Hex colour tint for steep (side) faces
+ * @param lo         smoothstep low edge for slope blend (normalLocal.y)
+ * @param hi         smoothstep high edge for slope blend
+ * @param onUpdate   Called after each map applies — use to queue a render frame
+ */
+export function applyTerrainPbrNode(
+  mat: THREE.MeshStandardNodeMaterial,
+  textureId: string,
+  repeat: number,
+  topColor: number,
+  sideColor: number,
+  lo: number,
+  hi: number,
+  onUpdate: () => void,
+): void {
+  const blend = normalLocal.y.smoothstep(lo, hi);
+
+  // Diffuse — albedo texture tinted by slope colours (mul×2 normalises dark hex tones)
+  loadTex(textureId, "diff")
+    .then((diff) => {
+      diff.repeat.set(repeat, repeat);
+      const albedo    = texture(diff);
+      const slopeTint = mix(color(sideColor), color(topColor), blend);
+      mat.colorNode   = albedo.mul(slopeTint).mul(1.4);
+      mat.needsUpdate = true;
+      onUpdate();
+    })
+    .catch(() => {});
+
+  // Normal map
+  loadTex(textureId, "nor_gl")
+    .then((nor) => {
+      nor.repeat.set(repeat, repeat);
+      mat.normalNode  = normalMap(texture(nor), vec2(0.85, 0.85));
+      mat.needsUpdate = true;
+      onUpdate();
+    })
+    .catch(() => {});
+
+  // Roughness — sample red channel
+  loadTex(textureId, "rough")
+    .then((rough) => {
+      rough.repeat.set(repeat, repeat);
+      mat.roughnessNode = texture(rough).r;
+      mat.needsUpdate   = true;
+      onUpdate();
+    })
+    .catch(() => {});
+
+  // Ambient occlusion — sample red channel
+  loadTex(textureId, "ao")
+    .then((ao) => {
+      ao.repeat.set(repeat, repeat);
+      mat.aoNode      = texture(ao).r;
+      mat.needsUpdate = true;
+      onUpdate();
+    })
+    .catch(() => {});
 }

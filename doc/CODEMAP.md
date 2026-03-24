@@ -113,9 +113,10 @@ Tool Execution                 Scene CRUD
 
 - **`loadScene(sceneData: SceneData)`** — Async; parses SceneData and populates Three.js scene
   - If `sceneData.sceneCode` present: calls `executeCode()` sandbox instead
-  - Otherwise: iterates `sceneData.objects`, calls `buildSceneObject()` for each
+  - Otherwise: iterates `sceneData.objects`, calls `buildObject()` for each
   - Configures environment (sky, lighting, fog) via `resolveEnvPreset()`
-  - Sets up `EffectComposer` + `UnrealBloomPass` for post-processing
+  - Detects indoor scenes (ceiling object present): adjusts fog, sun, ambient, bloom radius
+  - Initialises LOD visibility on load (all levels start visible=true; init sets correct one)
 
 - **`buildSceneObject(obj: SceneObject)`** — Returns THREE.Object3D for one object
   - Delegates to `buildGeometry()` for base shape
@@ -133,15 +134,44 @@ Tool Execution                 Scene CRUD
   - Supports: clear_day, sunset, night, overcast
   - Supports timeOfDay: dawn, noon, dusk, night
 
-- **`setupPostProcessing()`** — Initializes EffectComposer + passes
-  - Always-on: `RenderPass`, `UnrealBloomPass` (bloom)
+- **`setupPostProcessing()`** — Initializes WebGPU PostProcessing + BloomNode (TSL)
   - Bloom configurable via `environment.effects.bloom` (strength, radius, threshold)
-  - Night scenes auto-boost bloom to 0.8 minimum
+  - Bloom threshold clamped to minimum 1.5 in linear HDR space — prevents ordinary lit
+    surfaces (walls, floors) from triggering bloom; only emissive lights (intensity ≥ 2) glow
+  - Indoor scenes (detected by presence of ceiling object): bloom radius 0.12, sun at 5%,
+    fog pushed to 300–600 u, ambient reduced 70% — prevents the "glowing scene box" effect
 
 - **`executeCode(code: string, sandbox: SandboxContext)`** — Sandbox for custom code
-  - Available: THREE, scene, camera, renderer, controls, animate()
+  - Available: THREE, tsl, scene, camera, renderer, controls, animate(), WaterMesh
   - Used for particle systems, custom animations, procedural geometry
   - No network access, no DOM manipulation
+  - **Pitfall**: never use `scene.traverse()` with loose color-channel filters to collect
+    animated meshes — gold/stone/marble colors can match flame heuristics, causing unintended
+    objects to animate. Tag meshes explicitly: `mesh.userData.animated = true`, then collect
+    with `scene.traverse(obj => { if (obj.userData.animated) ... })`
+
+### Demand Rendering and OrbitControls
+
+The renderer uses a demand-render loop (`setAnimationLoop` + `framesDue` counter). Key invariants:
+
+- `controls.update()` is **not** called unconditionally every frame. It runs only during:
+  1. Active viewpoint transitions (syncs spherical state to lerped camera position)
+  2. After user interaction (`controlsNeedsUpdate = true` set by OrbitControls `"start"` event),
+     until `controls.update()` returns `false` (damping fully settled)
+- Calling `controls.update()` every frame in a demand-render loop causes floating-point damping
+  residual to accumulate, producing continuous slow camera drift with no user input.
+
+### LOD System
+
+Buildings use `THREE.LOD` with 3 detail levels (full / medium / low at 0 / 20 / 50 u).
+
+- **`lod.autoUpdate = false`** is set on every LOD object — the WebGPU renderer's built-in
+  `lod.update()` call is disabled. Our custom hysteresis system in `registerSystem(400, ...)`
+  is the sole authority on level switching.
+- Without `autoUpdate = false`, the renderer and our hysteresis system fight each other every
+  frame, causing all three detail levels to flicker simultaneously — the "shaking buildings" bug.
+- LOD visibility is also initialised immediately in `loadScene()` because Three.js creates all
+  levels as `visible=true` by default.
 
 ### Object Type and Shape Mapping
 
