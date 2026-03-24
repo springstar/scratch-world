@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import * as TSL from "three/tsl";
-import { color, normalLocal, mix, uv, pass } from "three/tsl";
+import { color, normalLocal, positionLocal, mix, uv, pass } from "three/tsl";
 import { bloom }  from "three/addons/tsl/display/BloomNode.js";
 import { smaa }   from "three/addons/tsl/display/SMAANode.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -47,6 +47,29 @@ function makeTerrainSlopeMat(
   const mat = new THREE.MeshStandardNodeMaterial({ roughness, metalness: 0 });
   const blend = normalLocal.y.smoothstep(lo, hi);
   mat.colorNode = mix(color(sideColor), color(topColor), blend);
+  return mat;
+}
+
+/**
+ * Elevation-blended mountain material using positionLocal.y (local space 0..1).
+ *
+ * Blends three zones from base to peak:
+ *   0.00–snowLo : baseColor  (rock / scree at the bottom)
+ *   snowLo–snowHi: transition zone
+ *   snowHi–1.00 : snowColor  (snow cap at the top)
+ *
+ * Use with geometry whose local Y spans 0 (base) to 1 (apex) before mesh.scale.
+ */
+function makeMountainMat(
+  snowColor = 0xf0f0ee,
+  rockColor = 0x5a5248,
+  snowLo = 0.52,
+  snowHi = 0.80,
+  roughness = 0.88,
+): THREE.MeshStandardNodeMaterial {
+  const mat = new THREE.MeshStandardNodeMaterial({ roughness, metalness: 0 });
+  const elevBlend = positionLocal.y.smoothstep(snowLo, snowHi);
+  mat.colorNode = mix(color(rockColor), color(snowColor), elevBlend);
   return mat;
 }
 
@@ -695,18 +718,44 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
       } else if (shape === "hill") {
         const hw = (obj.metadata.width  as number | undefined) ?? 10;
         const hh = (obj.metadata.height as number | undefined) ?? 4;
-        const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
-        setupUv2(geo);
-        const hillMat = makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75);
-        const mesh = new THREE.Mesh(geo, hillMat);
-        mesh.scale.set(hw, hh, hw);
-        // Anchor base of hill at position.y (ground level).
-        // Sphere bottom rim is at local y = cos(thetaLength) = cos(0.55π) ≈ -0.156.
-        // Center must sit at y - cos(0.55π)*hh so the rim touches position.y.
-        mesh.position.set(x, y - Math.cos(Math.PI * 0.55) * hh, z);
+        const radius = hw * 0.5;
+        const isMountain = hh / radius >= 1.2
+          || (obj.metadata.texture as string | undefined) === "snow";
+
+        let mesh: THREE.Mesh;
+        if (isMountain) {
+          // Pointed mountain peak via LatheGeometry.
+          // Profile in normalised coords (r, y): y 0=base, 1=apex; r 0=axis.
+          // After mesh.scale.set(hw, hh, 1) in XZ we set actual scale below.
+          const pts = [
+            new THREE.Vector2(0,     1.00),  // apex
+            new THREE.Vector2(0.05,  0.88),  // just below tip — very steep
+            new THREE.Vector2(0.14,  0.72),  // upper slope
+            new THREE.Vector2(0.28,  0.52),  // mid slope
+            new THREE.Vector2(0.42,  0.32),  // lower slope
+            new THREE.Vector2(0.50,  0.12),  // flare-out toward base
+            new THREE.Vector2(0.50,  0.00),  // base edge
+          ];
+          const geo = new THREE.LatheGeometry(pts, 20);
+          setupUv2(geo);
+          const mat = makeMountainMat();
+          mesh = new THREE.Mesh(geo, mat);
+          // LatheGeometry profile already spans y 0..1; scale to world size.
+          mesh.scale.set(hw, hh, hw);
+          mesh.position.set(x, y, z);  // base sits at position.y (profile y=0)
+        } else {
+          // Gentle hill — partial sphere dome. Bottom rim at local y ≈ cos(0.55π).
+          const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
+          setupUv2(geo);
+          const hillMat = makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75);
+          mesh = new THREE.Mesh(geo, hillMat);
+          mesh.scale.set(hw, hh, hw);
+          // Anchor bottom rim at position.y
+          mesh.position.set(x, y - Math.cos(Math.PI * 0.55) * hh, z);
+          if (invalidate) applyTerrainPbrNode(hillMat, "aerial_grass_rock", 4, 0x4a7a3a, 0x6e5030, 0.35, 0.75, invalidate);
+        }
         mesh.receiveShadow = true;
         mesh.castShadow = true;
-        if (invalidate) applyTerrainPbrNode(hillMat, "aerial_grass_rock", 4, 0x4a7a3a, 0x6e5030, 0.35, 0.75, invalidate);
         root = mesh;
       } else if (shape === "cliff") {
         const cw = (obj.metadata.width  as number | undefined) ?? 12;
