@@ -159,7 +159,7 @@ export class SkillLoader {
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
 	}
 
-	private readActive(): Record<string, string> {
+	private readActive(): Record<string, unknown> {
 		if (!existsSync(this.activeFile)) return {};
 		try {
 			return JSON.parse(readFileSync(this.activeFile, "utf-8")) as Record<string, string>;

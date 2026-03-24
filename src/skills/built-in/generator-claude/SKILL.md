@@ -105,7 +105,7 @@ The `sceneData` field must be a JSON object with this exact structure:
   - **Outdoor scene minimum specs (CRITICAL — undersized scenes feel like dioramas):**
     - `terrain/floor` width and depth: **≥ 80 × 60** units (anything smaller exposes bare edges and feels cramped)
     - Buildings/trees must be spread **8–15 units apart** — never cluster everything in a 10-unit zone
-    - Background layer (z = -15 to -25) must have **at least 2–3** `terrain/hill` objects (height 5–10) filling the horizon width
+    - Background layer (z = -15 to -25) must have **at least 2–3** `terrain/hill` objects filling the horizon width. Use `y=0` and set `metadata.height` to control dome height (5–10 for rolling hills, 20–45 for mountain ranges)
     - Foreground layer (z = +8 to +15) should have **loose scatter**: trees, rocks, or small items at varying x positions — the renderer also auto-scatters ambient rocks, but explicit foreground objects greatly help depth
     - Recommended viewpoint: z = 16–22, y = 1.7 (eye-level), lookAt toward scene center
     - `terrain/water` `position.y` should be `0` — **do NOT use negative values**
@@ -147,8 +147,8 @@ Divide the scene into three depth bands along the **z axis**:
 |---|---|---|
 | `terrain/floor` | top surface = `y + 0.002` | Flat plane, no visible edges at any angle |
 | `terrain/water` | animated water surface at this y | — (use `metadata.width/depth`) |
-| `terrain/hill` | **peak of the dome** | 3–8 units |
-| `terrain/cliff` | **top edge** of the rock face | 5–12 units |
+| `terrain/hill` | **ground elevation at the base of the dome** (use `y=0` for flat ground). Dome peak ≈ `y + metadata.height` | 5–45 units |
+| `terrain/cliff` | **top edge** of the rock face. Cliff base sits at `y - metadata.height` (ground). | 5–12 units |
 | `terrain/platform` | **top surface** where objects stand | 1–5 units |
 
 **CRITICAL: never place `npc`, `building`, or `tree` objects at the same position as a `terrain/water` object — they will stand on the water surface. Always place them on solid terrain (`floor`, `hill`, `platform`) away from the water area.**
@@ -158,9 +158,9 @@ Divide the scene into three depth bands along the **z axis**:
 **Rule: any object sitting ON elevated terrain uses the same `y` as the terrain's `position.y`.**
 
 ```
-terrain/hill at y=4    → trees on the hilltop: y=4
 terrain/platform at y=3 → buildings on the platform: y=3
-terrain/cliff at y=8   → (cliff walls have nothing on top in most cases)
+terrain/cliff at y=8    → (cliff walls have nothing on top in most cases)
+terrain/hill at y=0, height=7 → hill has no flat top; place NPCs/trees around the base at y=0
 ```
 
 ### Terrain shape catalog

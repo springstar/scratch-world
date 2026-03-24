@@ -700,7 +700,10 @@ function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D 
         const hillMat = makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75);
         const mesh = new THREE.Mesh(geo, hillMat);
         mesh.scale.set(hw, hh, hw);
-        mesh.position.set(x, y - hh * 0.05, z);
+        // Anchor base of hill at position.y (ground level).
+        // Sphere bottom rim is at local y = cos(thetaLength) = cos(0.55π) ≈ -0.156.
+        // Center must sit at y - cos(0.55π)*hh so the rim touches position.y.
+        mesh.position.set(x, y - Math.cos(Math.PI * 0.55) * hh, z);
         mesh.receiveShadow = true;
         mesh.castShadow = true;
         if (invalidate) applyTerrainPbrNode(hillMat, "aerial_grass_rock", 4, 0x4a7a3a, 0x6e5030, 0.35, 0.75, invalidate);
