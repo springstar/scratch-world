@@ -253,7 +253,7 @@ water at x=0, z=-10, width=24, depth=18 ← buried under the floor
 |---|---|---|
 | `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.002 (PlaneGeometry, no visible sides) |
 | `terrain/water` | desired **water level** (e.g. `0`, `-1`) | Animated reflective surface at this y |
-| `terrain/hill` | desired **peak height** (e.g. `4`) | Dome descends from this peak |
+| `terrain/hill` | desired **base ground elevation** (use `0` for flat terrain) | Dome rises from this base; peak ≈ y + metadata.height |
 | `terrain/cliff` | desired **top edge** height (e.g. `8`) | Rock face descends below |
 | `terrain/platform` | desired **top surface** height (e.g. `3`) | Slab hangs below this level |
 | `terrain/wall` | half wall height (e.g. `1.6`) | INDOOR only |
@@ -396,9 +396,15 @@ Use `sceneCode` ONLY for:
 Do NOT use `sceneCode` for:
 - **Any static scene** (classroom, office, park, street, shop — use JSON `objects` array)
 - **Indoor scenes** (rooms, halls, labs) — always JSON mode
-- **Outdoor scenes without animation** — use JSON mode with hill/cliff/platform terrain shapes
+- **Simple outdoor scenes** (parks, streets, sports fields, villages) — use JSON mode with hill/cliff/platform terrain shapes
 - Tile/grid floor patterns — use a single `terrain/floor` object instead
 - Adding more detail to walls, ceilings, or furniture — JSON shapes handle this
+
+**Use `sceneCode` for natural landscapes** (mountain ranges, canyons, coastlines, volcanic terrain, arctic tundra):
+- These require **procedural heightmap terrain** — simple `terrain/hill` sphere/cone shapes cannot produce realistic topography
+- Use multi-octave FBM + ridge noise for organic mountain silhouettes
+- Use vertex colors (elevation + slope) for natural snow/rock/scree coloring
+- Create a single large `PlaneGeometry` with high subdivisions rather than stacking individual hill objects
 
 If a scene has NPCs, furniture, buildings, or terrain but **no moving/animated elements**, use pure JSON mode (`sceneData` only, no `sceneCode`).
 
@@ -446,6 +452,94 @@ animate((delta) => {
   water.material.uniforms['time'].value += delta;
 });
 ```
+
+**Example: Procedural mountain terrain (use this pattern for snow mountains, canyons, highland scenes)**
+
+```javascript
+// Multi-octave FBM + ridge noise terrain — realistic alpine mountain range
+function hash(x, y) {
+  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+function smoothNoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash(ix, iy), b = hash(ix+1, iy), c = hash(ix, iy+1), d = hash(ix+1, iy+1);
+  return a*(1-ux)*(1-uy) + b*ux*(1-uy) + c*(1-ux)*uy + d*ux*uy;
+}
+function fbm(x, y, octaves) {
+  let v = 0, amp = 0.5, freq = 1, total = 0;
+  for (let i = 0; i < octaves; i++) {
+    v += amp * smoothNoise(x * freq, y * freq); total += amp; amp *= 0.5; freq *= 2.1;
+  }
+  return v / total;
+}
+function ridgeNoise(x, y, octaves) {
+  let v = 0, amp = 0.5, freq = 1, total = 0;
+  for (let i = 0; i < octaves; i++) {
+    const n = Math.abs(smoothNoise(x * freq, y * freq) - 0.5) * 2;
+    v += amp * (1 - n); total += amp; amp *= 0.55; freq *= 2.0;
+  }
+  return v / total;
+}
+
+const W = 220, D = 180;
+const geo = new THREE.PlaneGeometry(W, D, 180, 150);
+geo.rotateX(-Math.PI / 2);
+const pos = geo.attributes.position;
+const colors = new Float32Array(pos.count * 3);
+
+// Peak definitions: [worldX, worldZ, height, radiusX, radiusZ]
+const peaks = [
+  [0, -50, 55, 28, 32], [-32, -58, 40, 22, 26], [35, -55, 36, 20, 24],
+  [-68, -75, 30, 32, 38], [72, -72, 28, 30, 36], [8, -80, 38, 35, 40],
+];
+const snowC = new THREE.Color(0xeff2f5), rockC = new THREE.Color(0x5a5248),
+      baseC = new THREE.Color(0x3a3230), cx = new THREE.Color();
+
+for (let i = 0; i < pos.count; i++) {
+  const wx = pos.getX(i), wz = pos.getZ(i);
+  let h = fbm(wx * 0.012, wz * 0.012, 4) * 3;
+  for (const [px, pz, ph, rx, rz] of peaks) {
+    const dist2 = ((wx-px)/rx)**2 + ((wz-pz)/rz)**2;
+    if (dist2 > 2.5) continue;
+    const ridge = ridgeNoise(wx * 0.035 + px * 0.01, wz * 0.035 + pz * 0.01, 5);
+    const t = Math.max(0, 1 - dist2 / 2.25);
+    const falloff = t*t*t*(t*(6*t-15)+10);
+    h += ph * ridge * falloff;
+  }
+  h += fbm(wx * 0.18, wz * 0.18, 3) * 1.2;
+  pos.setY(i, h);
+  const tSnow = Math.min(1, Math.max(0, (h - 16) / 12));
+  const tRock = Math.min(1, Math.max(0, (h - 6) / 8));
+  cx.lerpColors(baseC, rockC, tRock);
+  cx.lerpColors(cx, snowC, tSnow);
+  colors[i*3] = cx.r; colors[i*3+1] = cx.g; colors[i*3+2] = cx.b;
+}
+
+pos.needsUpdate = true;
+geo.computeVertexNormals();
+geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
+terrain.receiveShadow = true; terrain.castShadow = true;
+scene.add(terrain);
+
+// Snow valley floor
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(220, 70).rotateX(-Math.PI/2),
+  new THREE.MeshStandardMaterial({ color: 0xdde8f0, roughness: 0.95 })
+);
+ground.position.set(0, 0.05, 45); ground.receiveShadow = true; scene.add(ground);
+
+scene.fog = new THREE.FogExp2(0xb8cce0, 0.004);
+```
+
+**Key parameters to adjust per scene:**
+- `W × D` — terrain footprint (220×180 = large mountain range)
+- `peaks[]` array — add/remove/reposition peaks with custom height and influence radius
+- Snow line: `(h - 16) / 12` — lower `16` to start snow earlier; set to `8` for all-white alpine
+- `scene.fog` density: `0.004` light haze; `0.008` heavy clouds; `0.0` no fog
 
 **Example: Animated particle system**
 
