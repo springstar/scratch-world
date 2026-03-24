@@ -6,9 +6,9 @@
  * and provides a can_place_segment check to avoid near-duplicate roads.
  */
 
-import type { Segment, Bounds } from "./types.js";
-import { QuadTree } from "./quad-tree.js";
 import { MathUtils } from "./math-utils.js";
+import { QuadTree } from "./quad-tree.js";
+import type { Bounds, Segment } from "./types.js";
 
 function segmentBounds(seg: Segment): Bounds {
 	const minX = Math.min(seg.start.x, seg.end.x);

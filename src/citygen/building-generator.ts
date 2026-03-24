@@ -11,10 +11,10 @@
  *   5. If ok → place; else → try smaller type or skip.
  */
 
-import type { Building, BuildingType, Bounds, Segment } from "./types.js";
 import { BuildingManager } from "./building-manager.js";
-import { QuadTree } from "./quad-tree.js";
 import { MathUtils } from "./math-utils.js";
+import type { QuadTree } from "./quad-tree.js";
+import type { Bounds, Building, BuildingType, Segment } from "./types.js";
 
 export interface BuildingGeneratorConfig {
 	/** World bounds for the spatial index */
@@ -65,15 +65,6 @@ export class BuildingGenerator {
 		const unlimited = this.sortedTypes.filter((b) => b.numLimit === -1);
 		if (unlimited.length > 0) return unlimited[Math.floor(Math.random() * unlimited.length)];
 		return this.sortedTypes[this.sortedTypes.length - 1];
-	}
-
-	/** Smallest available type that hasn't hit its limit. */
-	private smallestAvailable(): BuildingType | null {
-		for (let i = this.sortedTypes.length - 1; i >= 0; i--) {
-			const bt = this.sortedTypes[i];
-			if (bt.numLimit === -1 || (this.counts.get(bt) ?? 0) < bt.numLimit) return bt;
-		}
-		return null;
 	}
 
 	/** Place buildings along one segment. Call for every road segment. */

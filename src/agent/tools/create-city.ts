@@ -1,9 +1,9 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
-import type { SceneManager } from "../../scene/scene-manager.js";
 import { CityGenerator, DEFAULT_CITY_CONFIG } from "../../citygen/city-generator.js";
 import { cityDataToSceneData } from "../../citygen/scene-adapter.js";
+import type { SceneManager } from "../../scene/scene-manager.js";
 
 const parameters = Type.Object({
 	prompt: Type.String({ description: "Describe the city's theme and atmosphere" }),

@@ -3,9 +3,9 @@
  * Port of SimWorld simworld/citygen/building/building_manager.py + bbox_utils.py.
  */
 
-import type { Building, Bounds } from "./types.js";
-import { QuadTree } from "./quad-tree.js";
 import { MathUtils } from "./math-utils.js";
+import { QuadTree } from "./quad-tree.js";
+import type { Bounds, Building } from "./types.js";
 
 /** Check overlap between two (possibly rotated) bounding boxes using SAT-lite. */
 function bboxOverlap(a: Bounds, b: Bounds): boolean {

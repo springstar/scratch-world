@@ -3,8 +3,8 @@
  * that the scene renderer can display.
  */
 
-import type { CityData } from "./types.js";
 import type { SceneData, SceneObject, Viewpoint } from "../scene/types.js";
+import type { CityData } from "./types.js";
 
 // ── Naming vocabulary (round-robin per building type) ────────────────────────
 
@@ -121,7 +121,7 @@ export function cityDataToSceneData(cityData: CityData, theme: Theme = "medieval
 		maxZ = Math.max(maxZ, cz + b.bounds.height / 2);
 	}
 	// Fallback if no buildings
-	if (!isFinite(minX)) {
+	if (!Number.isFinite(minX)) {
 		minX = -50;
 		maxX = 50;
 		minZ = -50;
@@ -284,7 +284,7 @@ function perimeter10(minX: number, maxX: number, minZ: number, maxZ: number): [n
 	const pad = 4;
 	const positions: [number, number][] = [];
 	// Simple deterministic scatter using golden-angle-like distribution
-	const angles = [0, 0.628, 1.257, 1.885, 2.513, 3.142, 3.77, 4.398, 5.027, 5.655];
+	const angles = [0, 0.628, 1.257, 1.885, 2.513, Math.PI, 3.77, 4.398, 5.027, 5.655];
 	const cx = (minX + maxX) / 2;
 	const cz = (minZ + maxZ) / 2;
 	const rx = (maxX - minX) / 2 + pad;

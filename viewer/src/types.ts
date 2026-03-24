@@ -27,6 +27,7 @@ export interface SceneObject {
 
 export interface EnvironmentConfig {
   skybox?: string;
+  skyboxUrl?: string; // equirectangular panorama URL — overrides procedural sky
   ambientLight?: string;
   weather?: string;
   timeOfDay?: string;

@@ -29,6 +29,9 @@ export const EffectsSchema = Type.Object({
 
 export const EnvironmentConfigSchema = Type.Object({
 	skybox: Type.Optional(Type.String()),
+	skyboxUrl: Type.Optional(
+		Type.String({ description: "Equirectangular panorama URL — overrides the procedural sky" }),
+	),
 	ambientLight: Type.Optional(Type.String()),
 	weather: Type.Optional(Type.String()),
 	timeOfDay: Type.Optional(Type.String()),

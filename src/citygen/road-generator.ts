@@ -11,9 +11,8 @@
  *   4. Collision / angle checks via RoadManager.
  */
 
-import type { Point, Segment, Intersection } from "./types.js";
 import { RoadManager } from "./road-manager.js";
-import { MathUtils } from "./math-utils.js";
+import type { Intersection, Point, Segment } from "./types.js";
 
 export interface RoadGeneratorConfig {
 	/** Width / height of the world space (square) */

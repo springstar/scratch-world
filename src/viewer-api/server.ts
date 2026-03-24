@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import type { IncomingMessage } from "http";
 import { WebSocketServer } from "ws";
@@ -28,7 +29,8 @@ export interface ViewerApiServer {
 }
 
 export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
-	const { port, sceneManager, sessionManager, skillLoader, providerRegistryRef, narratorRegistryRef } = opts;
+	const { port, sceneManager, sessionManager, skillLoader, providerRegistryRef, narratorRegistryRef, projectRoot } =
+		opts;
 	const bus = new RealtimeBus();
 
 	const app = new Hono();
@@ -43,7 +45,10 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 
 	app.options("*", (c) => c.body(null, 204));
 
-	app.route("/scenes", scenesRoute(sceneManager));
+	// Static file serving for uploaded panoramas
+	app.use("/uploads/*", serveStatic({ root: projectRoot }));
+
+	app.route("/scenes", scenesRoute(sceneManager, projectRoot));
 	app.route("/interact", interactRoute(sessionManager, bus));
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
