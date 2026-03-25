@@ -8,6 +8,10 @@ export interface SceneRepository {
 	findByOwner(ownerId: string): Promise<Scene[]>;
 	delete(sceneId: string): Promise<void>;
 
+	// Sharing
+	share(sceneId: string, shareToken: string): Promise<void>;
+	findByShareToken(shareToken: string): Promise<Scene | null>;
+
 	// Version snapshots — written before every update, never mutated
 	saveVersion(version: SceneVersion): Promise<void>;
 	findVersions(sceneId: string): Promise<SceneVersion[]>;

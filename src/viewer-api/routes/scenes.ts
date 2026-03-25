@@ -7,10 +7,27 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string): Ho
 	const app = new Hono();
 
 	// GET /scenes/:sceneId — viewer fetches scene data on mount
+	// Access granted if:  is_public=true  OR  ?token=<share_token>  OR  called by the owner (no auth on viewer — open by token only)
 	app.get("/:sceneId", async (c) => {
 		const { sceneId } = c.req.param();
-		const scene = await sceneManager.getScene(sceneId);
-		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		const tokenParam = c.req.query("token");
+
+		let scene = tokenParam ? await sceneManager.getSceneByShareToken(tokenParam) : null;
+
+		// Fall back to looking up by sceneId (respects is_public)
+		if (!scene) {
+			const byId = await sceneManager.getScene(sceneId);
+			if (!byId) return c.json({ error: "Scene not found" }, 404);
+			// Allow access if the scene is public, or if a valid share token was provided
+			if (!byId.isPublic && !tokenParam) return c.json({ error: "Forbidden" }, 403);
+			if (!byId.isPublic && tokenParam && byId.shareToken !== tokenParam) {
+				return c.json({ error: "Forbidden" }, 403);
+			}
+			scene = byId;
+		}
+
+		// Verify the fetched scene matches the requested sceneId (token lookup may differ)
+		if (scene.sceneId !== sceneId) return c.json({ error: "Scene not found" }, 404);
 		return c.json({
 			sceneId: scene.sceneId,
 			title: scene.title,

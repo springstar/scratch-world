@@ -28,6 +28,7 @@ export class SceneManager {
 				version: 1,
 				createdAt: now,
 				updatedAt: now,
+				isPublic: false,
 			};
 		} else {
 			// Provider path
@@ -42,6 +43,7 @@ export class SceneManager {
 				version: 1,
 				createdAt: now,
 				updatedAt: now,
+				isPublic: false,
 			};
 		}
 
@@ -108,6 +110,18 @@ export class SceneManager {
 
 	async listScenes(ownerId: string): Promise<Scene[]> {
 		return this.repo.findByOwner(ownerId);
+	}
+
+	async shareScene(sceneId: string): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		// Reuse existing token if already shared
+		const token = scene.shareToken ?? randomUUID().replace(/-/g, "");
+		await this.repo.share(sceneId, token);
+		return { ...scene, isPublic: true, shareToken: token };
+	}
+
+	async getSceneByShareToken(shareToken: string): Promise<Scene | null> {
+		return this.repo.findByShareToken(shareToken);
 	}
 
 	async navigateTo(sceneId: string, viewpointName: string): Promise<NavigationResult> {

@@ -9,6 +9,7 @@ import { getSceneTool } from "./tools/get-scene.js";
 import { interactWithObjectTool } from "./tools/interact-with-object.js";
 import { listScenesTool } from "./tools/list-scenes.js";
 import { navigateToTool } from "./tools/navigate-to.js";
+import { shareSceneTool } from "./tools/share-scene.js";
 import { updateSceneTool } from "./tools/update-scene.js";
 
 const BASE_SYSTEM_PROMPT = `\
@@ -22,10 +23,12 @@ When a user wants to look around, go somewhere, or change their viewpoint, call 
 When a user tries to interact with an object (touch, open, examine, pick up, etc.), call interact_with_object.
 When a user asks what scenes they have, call list_scenes.
 When you need the current state of a scene, call get_scene.
+When a user asks to share a scene, get a link, or make a scene public, call share_scene.
 
 After each tool call, respond naturally in character — describe what the user sees, hears, or experiences as if they are present in the world. Be vivid and immersive. Keep responses concise unless the user asks for more detail.
 
 When sharing a scene link, format it as: [View scene](url)
+When sharing a public scene link, format it as: [Share link](url) — anyone with this link can view the scene.
 `.trim();
 
 export function createAgent(
@@ -64,6 +67,7 @@ export function createAgent(
 				listScenesTool(sceneManager, ownerId),
 				navigateToTool(sceneManager, viewerUrl),
 				interactWithObjectTool(sceneManager),
+				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 			],
 		},
 		transformContext: async (messages) => trimContext(messages),

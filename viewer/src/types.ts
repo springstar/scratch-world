@@ -59,6 +59,7 @@ export type RealtimeEvent =
   | { type: "connected"; sessionId: string }
   | { type: "text_delta"; delta: string }
   | { type: "text_done"; text: string }
+  | { type: "scene_created"; sceneId: string; title: string; viewUrl: string }
   | { type: "scene_updated"; sceneId: string; version: number }
   | { type: "interaction_result"; outcome: string; sceneChanged: boolean }
   | { type: "error"; message: string };

@@ -12,6 +12,8 @@ interface SceneRow {
 	version: number;
 	created_at: number;
 	updated_at: number;
+	is_public: number; // SQLite boolean: 0 | 1
+	share_token: string | null;
 }
 
 interface SceneVersionRow {
@@ -33,6 +35,8 @@ function rowToScene(row: SceneRow): Scene {
 		version: row.version,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
+		isPublic: row.is_public === 1,
+		shareToken: row.share_token ?? undefined,
 	};
 }
 
@@ -61,7 +65,9 @@ export class SqliteSceneRepo implements SceneRepository {
 				provider_ref TEXT NOT NULL,
 				version     INTEGER NOT NULL DEFAULT 1,
 				created_at  INTEGER NOT NULL,
-				updated_at  INTEGER NOT NULL
+				updated_at  INTEGER NOT NULL,
+				is_public   INTEGER NOT NULL DEFAULT 0,
+				share_token TEXT UNIQUE
 			);
 
 			CREATE INDEX IF NOT EXISTS idx_scenes_owner ON scenes(owner_id);
@@ -75,20 +81,32 @@ export class SqliteSceneRepo implements SceneRepository {
 				PRIMARY KEY (scene_id, version)
 			);
 		`);
+
+		// Migration: add columns if table already exists without them
+		const cols = this.db.prepare("PRAGMA table_info(scenes)").all() as Array<{ name: string }>;
+		const names = new Set(cols.map((c) => c.name));
+		if (!names.has("is_public")) {
+			this.db.exec("ALTER TABLE scenes ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0");
+		}
+		if (!names.has("share_token")) {
+			this.db.exec("ALTER TABLE scenes ADD COLUMN share_token TEXT");
+		}
 	}
 
 	async save(scene: Scene): Promise<void> {
 		this.db
-			.prepare<[string, string, string, string, string, string, number, number, number]>(`
-				INSERT INTO scenes (scene_id, owner_id, title, description, scene_data, provider_ref, version, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			.prepare<[string, string, string, string, string, string, number, number, number, number, string | null]>(`
+				INSERT INTO scenes (scene_id, owner_id, title, description, scene_data, provider_ref, version, created_at, updated_at, is_public, share_token)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(scene_id) DO UPDATE SET
 					title        = excluded.title,
 					description  = excluded.description,
 					scene_data   = excluded.scene_data,
 					provider_ref = excluded.provider_ref,
 					version      = excluded.version,
-					updated_at   = excluded.updated_at
+					updated_at   = excluded.updated_at,
+					is_public    = excluded.is_public,
+					share_token  = excluded.share_token
 			`)
 			.run(
 				scene.sceneId,
@@ -100,6 +118,8 @@ export class SqliteSceneRepo implements SceneRepository {
 				scene.version,
 				scene.createdAt,
 				scene.updatedAt,
+				scene.isPublic ? 1 : 0,
+				scene.shareToken ?? null,
 			);
 	}
 
@@ -117,6 +137,17 @@ export class SqliteSceneRepo implements SceneRepository {
 
 	async delete(sceneId: string): Promise<void> {
 		this.db.prepare<[string]>("DELETE FROM scenes WHERE scene_id = ?").run(sceneId);
+	}
+
+	async share(sceneId: string, shareToken: string): Promise<void> {
+		this.db
+			.prepare<[string, string]>("UPDATE scenes SET share_token = ?, is_public = 1 WHERE scene_id = ?")
+			.run(shareToken, sceneId);
+	}
+
+	async findByShareToken(shareToken: string): Promise<Scene | null> {
+		const row = this.db.prepare<[string], SceneRow>("SELECT * FROM scenes WHERE share_token = ?").get(shareToken);
+		return row ? rowToScene(row) : null;
 	}
 
 	async saveVersion(version: SceneVersion): Promise<void> {

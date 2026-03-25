@@ -58,6 +58,8 @@ export interface Scene {
 	version: number; // incremented on every update
 	createdAt: number;
 	updatedAt: number;
+	isPublic: boolean; // true = anyone with the share link can view
+	shareToken?: string; // opaque token appended to viewer URL for access
 }
 
 export interface SceneVersion {

@@ -38,6 +38,10 @@ export class SessionManager {
 		return this.enqueue(sessionId, () => this._dispatchViewerInteraction(sessionId, sceneId, text, bus));
 	}
 
+	dispatchWebChat(sessionId: string, userId: string, text: string, bus: RealtimeBus): Promise<void> {
+		return this.enqueue(sessionId, () => this._dispatchWebChat(sessionId, userId, text, bus));
+	}
+
 	// ── Private helpers ──────────────────────────────────────────────────────
 
 	/** Serialize tasks for a session; errors in one task don't block the next. */
@@ -91,6 +95,64 @@ export class SessionManager {
 		for (const { sceneId, title } of updatedScenes) {
 			const viewerUrl = `${this.viewerBaseUrl}/scene/${sceneId}?session=${msg.sessionId}`;
 			await this.gateway.presentScene(msg.channelId, msg.userId, title, viewerUrl);
+		}
+
+		await this.saveSession(msg, agent, activeSceneId);
+	}
+
+	private async _dispatchWebChat(sessionId: string, userId: string, text: string, bus: RealtimeBus): Promise<void> {
+		// Upsert session record — web sessions may not exist yet
+		const existing = await this.sessionRepo.findById(sessionId);
+		if (!existing) {
+			await this.sessionRepo.save({
+				sessionId,
+				userId,
+				channelId: "web",
+				activeSceneId: null,
+				agentMessages: "[]",
+				updatedAt: Date.now(),
+			});
+		}
+
+		const msg: ChatMessage = {
+			sessionId,
+			userId,
+			channelId: "web",
+			text,
+			timestamp: Date.now(),
+		};
+
+		const agent = await this.getOrCreateAgent(msg);
+		await this.hydrateActiveScene(agent, sessionId);
+		this.hydrateActiveSkills(agent);
+
+		let fullText = "";
+		let activeSceneId: string | null = existing?.activeSceneId ?? null;
+		const unsub = agent.subscribe((event) => {
+			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+				const delta = event.assistantMessageEvent.delta;
+				fullText += delta;
+				bus.publish(sessionId, { type: "text_delta", delta });
+			} else if (event.type === "tool_execution_end" && !event.isError) {
+				const details = event.result?.details as { sceneId?: string; title?: string } | undefined;
+				if (details?.sceneId) {
+					activeSceneId = details.sceneId;
+					const viewUrl = `${this.viewerBaseUrl}/scene/${details.sceneId}?session=${sessionId}`;
+					bus.publish(sessionId, {
+						type: "scene_created",
+						sceneId: details.sceneId,
+						title: details.title ?? details.sceneId,
+						viewUrl,
+					});
+				}
+			}
+		});
+
+		try {
+			await agent.prompt(text);
+			bus.publish(sessionId, { type: "text_done", text: fullText });
+		} finally {
+			unsub();
 		}
 
 		await this.saveSession(msg, agent, activeSceneId);

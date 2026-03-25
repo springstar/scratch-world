@@ -21,7 +21,7 @@ describe("GET /scenes/:sceneId", () => {
 
 	beforeEach(() => {
 		sceneManager = makeManager();
-		app = scenesRoute(sceneManager);
+		app = scenesRoute(sceneManager, "/tmp");
 	});
 
 	it("returns 404 for unknown sceneId", async () => {
@@ -31,9 +31,16 @@ describe("GET /scenes/:sceneId", () => {
 		expect(body.error).toBe("Scene not found");
 	});
 
+	it("returns 403 for private scene without token", async () => {
+		const scene = await sceneManager.createScene("user-1", "a fortress");
+		const res = await app.request(`/${scene.sceneId}`);
+		expect(res.status).toBe(403);
+	});
+
 	it("returns scene data for a known sceneId", async () => {
 		const scene = await sceneManager.createScene("user-1", "a forest");
-		const res = await app.request(`/${scene.sceneId}`);
+		const shared = await sceneManager.shareScene(scene.sceneId);
+		const res = await app.request(`/${scene.sceneId}?token=${shared.shareToken}`);
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.sceneId).toBe(scene.sceneId);
@@ -44,7 +51,8 @@ describe("GET /scenes/:sceneId", () => {
 
 	it("includes providerRef.viewUrl but omits editToken", async () => {
 		const scene = await sceneManager.createScene("user-1", "a cave");
-		const res = await app.request(`/${scene.sceneId}`);
+		const shared = await sceneManager.shareScene(scene.sceneId);
+		const res = await app.request(`/${scene.sceneId}?token=${shared.shareToken}`);
 		const body = await res.json();
 		expect(body.providerRef.viewUrl).toBeDefined();
 		expect(body.providerRef.editToken).toBeUndefined();
@@ -53,7 +61,8 @@ describe("GET /scenes/:sceneId", () => {
 	it("returns updated version after scene edit", async () => {
 		const scene = await sceneManager.createScene("user-1", "a desert");
 		await sceneManager.updateScene(scene.sceneId, "add an oasis");
-		const res = await app.request(`/${scene.sceneId}`);
+		const shared = await sceneManager.shareScene(scene.sceneId);
+		const res = await app.request(`/${scene.sceneId}?token=${shared.shareToken}`);
 		const body = await res.json();
 		expect(body.version).toBe(2);
 	});

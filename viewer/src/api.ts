@@ -2,8 +2,9 @@ import type { SceneResponse, RealtimeEvent } from "./types.js";
 
 const BASE = import.meta.env.DEV ? "" : (import.meta.env.VITE_API_BASE ?? "");
 
-export async function fetchScene(sceneId: string): Promise<SceneResponse> {
-  const res = await fetch(`${BASE}/scenes/${sceneId}`);
+export async function fetchScene(sceneId: string, token?: string): Promise<SceneResponse> {
+  const url = token ? `${BASE}/scenes/${sceneId}?token=${encodeURIComponent(token)}` : `${BASE}/scenes/${sceneId}`;
+  const res = await fetch(url);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
@@ -18,6 +19,22 @@ export async function postInteract(payload: {
   action: string;
 }): Promise<void> {
   const res = await fetch(`${BASE}/interact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+}
+
+export async function postChat(payload: {
+  sessionId: string;
+  userId: string;
+  text: string;
+}): Promise<void> {
+  const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
