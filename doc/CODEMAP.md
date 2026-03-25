@@ -1,18 +1,21 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-22
+**Last Updated:** 2026-03-25
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
 ## Architecture Overview
 
 ```
-User Message (Telegram/stdin)
-    ↓
-Channel Gateway (normalizes to ChatMessage)
-    ↓
-Session Manager (per-user state)
-    ↓
+User Message (Telegram/stdin)          Web Browser (Chat UI)
+    ↓                                         ↓
+Channel Gateway                        POST /chat  (Viewer API)
+(normalizes to ChatMessage)                   ↓
+    ↓                                  dispatchWebChat()
+    └────────────┬────────────────────────────┘
+                 ↓
+         Session Manager (per-user state)
+                 ↓
 Agent Core (Claude + tools) ←→ Scene Manager ←→ 3D Provider (Marble/Stub)
     ↓                              ↓
 Tool Execution                 Scene CRUD
@@ -22,7 +25,11 @@ Tool Execution                 Scene CRUD
   - list_scenes         Viewer API (HTTP + WebSocket)
   - navigate_to                  ↓
   - interact_with           Three.js Viewer
-                            (scene-renderer.ts)
+  - share_scene             (scene-renderer.ts)
+                                  ↓
+                          Web Chat: WS events
+                          (text_delta, text_done,
+                           scene_created)
 ```
 
 ## Entry Points
@@ -39,20 +46,36 @@ Tool Execution                 Scene CRUD
 | **Telegram Adapter** | `src/channels/telegram/adapter.ts` | Telegram bot integration | `TelegramAdapter` |
 | **Session Manager** | `src/session/session-manager.ts` | Maintains per-user state, dispatches to agent | `SessionManager` |
 | **Agent Factory** | `src/agent/agent-factory.ts` | Wires Claude with scene tools | `createAgent()` |
-| **Scene Tools** | `src/agent/tools/*.ts` | Tool implementations (create, update, get, list, navigate, interact) | Tool functions |
-| **Scene Manager** | `src/scene/scene-manager.ts` | Scene CRUD, orchestrates provider calls | `SceneManager` |
+| **Scene Tools** | `src/agent/tools/*.ts` | Tool implementations (create, update, get, list, navigate, interact, share) | Tool functions |
+| **Scene Manager** | `src/scene/scene-manager.ts` | Scene CRUD, orchestrates provider calls, scene sharing | `SceneManager` |
 | **Scene Types** | `src/scene/types.ts` | Core domain interfaces (Scene, SceneData, SceneObject, etc.) | Type definitions |
 | **Scene Schema** | `src/scene/schema.ts` | Typebox validation schemas for API | Schema validators |
 | **Marble Provider** | `src/providers/marble/provider.ts` | WorldLabs Marble 3D generation backend | `MarbleProvider` |
 | **Stub Provider** | `src/providers/stub/provider.ts` | Mock provider with static fixtures (local dev) | `StubProvider` |
 | **Storage Repos** | `src/storage/*.ts` | Scene and Session persistence | `SceneRepository`, `SessionRepository` |
-| **Viewer API** | `src/viewer-api/viewer-server.ts` | HTTP + WebSocket server for viewer | Express + Socket.io |
+| **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat | Hono app |
+| **Chat Route** | `src/viewer-api/routes/chat.ts` | POST /chat endpoint for web UI | `chatRoute()` |
 | **Scene Renderer** | `viewer/src/renderer/scene-renderer.ts` | Three.js scene construction from SceneData | `loadScene()`, `renderScene()` |
 | **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer | UI component |
+| **Chat Drawer** | `viewer/src/components/ChatDrawer.tsx` | Bottom sheet chat UI (peek/open states, streaming) | `ChatDrawer` |
+| **Star Field** | `viewer/src/components/StarField.tsx` | Canvas 2D star particle background for empty state | `StarField` |
 
 ## Data Flow
 
-### Creating a Scene (Happy Path)
+### Creating a Scene via Web Chat
+
+1. User opens browser at `http://localhost:5173` — sees StarField background + ChatDrawer peek strip
+2. User types a message (e.g. "create a snowy mountain scene") and sends
+3. **App.tsx** `POST /chat { sessionId: "web:<userId>", userId, text }`
+4. **chat.ts** route calls `sessionManager.dispatchWebChat()` (fire-and-forget) and returns `{ ok: true }`
+5. **dispatchWebChat** upserts session (creates if first visit), dispatches to Agent
+6. **Agent** (Claude) receives message, calls `create_scene` tool
+7. **Scene Manager** creates scene record, returns scene with `sceneId` + viewUrl
+8. **dispatchWebChat** publishes `scene_created` WS event: `{ type, sceneId, title, viewUrl }`
+9. **App.tsx** receives event: auto-loads scene via `loadSceneById()`, adds scene card to ChatDrawer
+10. **ChatDrawer** shows scene card; clicking it navigates camera to first viewpoint
+
+### Creating a Scene (Happy Path — Telegram)
 
 1. User types in Telegram or stdin: `"Create a basketball court"`
 2. **Channel Adapter** normalizes to `ChatMessage`
@@ -105,7 +128,56 @@ Tool Execution                 Scene CRUD
 5. **Agent** may call `update_scene` to change object state, return narrative description
 6. UI updates scene state or displays text response
 
-## Three.js Rendering Pipeline
+## Web Chat UI
+
+The browser-native chat interface lives entirely in `viewer/src/`.
+
+### Session Identity
+
+- `userId`: UUID generated once and stored in `localStorage` key `scratch_world_user_id`
+- `sessionId`: `"web:<userId>"` — matches session records in the DB
+- `channelId`: `"web"` — set by `dispatchWebChat()` when upserting sessions
+
+### Components
+
+**`viewer/src/App.tsx`**
+- Detects route: `/` (no scene, show StarField) vs `/scene/<id>` (load and render scene)
+- Single WebSocket connection on mount, handles all event types
+- `loadSceneById(id)`: fetches scene, sets `activeViewpoint` to first viewpoint, updates URL
+- Passes `?session=web:<userId>` to all `fetchScene()` calls so owner access works without a share token
+
+**`viewer/src/components/ChatDrawer.tsx`**
+- Two states: `peek` (72px, shows last message preview) / `open` (52vh, full chat + input)
+- Auto-opens when first message arrives
+- User messages: right-aligned, purple background
+- Agent messages: left-aligned, dark background; streaming messages show blinking cursor
+- Typing indicator: bouncing dots while agent is processing
+- Scene cards: rendered when `scene_created` event fires; clicking collapses drawer and navigates
+- `renderText()`: parses `[text](url)` markdown link syntax into clickable `<a>` tags
+
+**`viewer/src/components/StarField.tsx`**
+- Canvas 2D with 220 twinkling star particles
+- Radial gradient background (`#0a0a14` → `#000008`)
+- ResizeObserver for responsive resizing; no WebGPU dependency
+
+### Access Control for Scene Fetch
+
+`GET /scenes/:sceneId` grants access when any of:
+1. `scene.is_public === true`
+2. `?session=web:<userId>` provided and `userId === scene.ownerId`
+3. `?token=<shareToken>` provided and `shareToken === scene.shareToken`
+
+Without one of the above, returns `403 Forbidden`.
+
+## Scene Sharing
+
+`share_scene` tool (in `src/agent/tools/share-scene.ts`):
+- Generates a UUID share token (reuses existing token if already set)
+- Calls `SceneManager.shareScene(sceneId)` which persists token to DB
+- Returns a `shareUrl`: `<VIEWER_BASE_URL>/scene/<sceneId>?token=<token>`
+- Users receiving the link can view the scene without owning it
+
+
 
 **File**: `/Users/wuchunxin/agents/scratch-world/viewer/src/renderer/scene-renderer.ts`
 
@@ -316,6 +388,7 @@ EnvironmentConfig = {
 - `list_scenes(limit?, offset?)` → Paginated list of user's scenes
 - `navigate_to(sceneId, viewpointId)` → Navigate to viewpoint, return view description
 - `interact_with_object(sceneId, objectId, action)` → Execute action on object, return result
+- `share_scene(sceneId)` → Generate share token, return `shareUrl` with `?token=` query param
 
 ## Viewer API
 
@@ -324,13 +397,27 @@ EnvironmentConfig = {
 ### HTTP Endpoints
 
 - `GET /scenes/:sceneId` — Fetch scene data (returns `SceneResponse`)
+  - Access: `is_public=true` OR `?session=web:<userId>` (owner match) OR `?token=<shareToken>`
+- `POST /scenes/:sceneId/panorama` — Upload or set equirectangular skybox URL
 - `POST /interact` — Submit interaction (JSON body: `{ sceneId, objectId, action }`)
+- `POST /chat` — Web chat endpoint (JSON body: `{ sessionId, userId, text }`) → returns `{ ok: true }`, streams via WS
 - `GET /` — Health check / serve viewer app
 
 ### WebSocket
 
-- Connection: `ws://localhost:3001` (or `VIEWER_BASE_URL` with `ws://` substituted)
-- Broadcasts real-time updates to all connected viewers (scene updates, agent responses)
+- Connection: `ws://localhost:3001/realtime/:sessionId`
+- Per-session connection; broadcasts real-time events to the connected viewer
+
+### WebSocket Event Types
+
+```typescript
+type RealtimeEvent =
+  | { type: "text_delta"; delta: string }           // Streaming agent text chunk
+  | { type: "text_done"; text: string }             // Agent response complete
+  | { type: "scene_created"; sceneId: string; title: string; viewUrl: string }  // New scene from web chat
+  | { type: "scene_updated"; sceneId: string }      // Existing scene modified
+  | { type: "error"; message: string }              // Error during processing
+```
 
 ## Storage Schema
 
@@ -340,6 +427,8 @@ EnvironmentConfig = {
 
 - **scenes** — Main scene table
   - `sceneId` (PK), `ownerId`, `title`, `description`, `sceneData` (JSON), `providerRef` (JSON), `version`, `createdAt`, `updatedAt`
+  - `is_public` (INTEGER, default 0) — whether scene is publicly accessible without auth
+  - `share_token` (TEXT, UNIQUE) — opaque token for share-by-link access
 
 - **sessions** — Session state persistence
   - `sessionId` (PK), `userId`, `channelId`, `agentState` (JSON), `activeSceneId` (FK), `createdAt`, `updatedAt`
