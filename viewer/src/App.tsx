@@ -57,13 +57,25 @@ export function App() {
   const [activeViewpoint, setActiveViewpoint] = useState<Viewpoint | null>(null);
   const streamingBuffer = useRef("");
 
+  // Load a scene and jump to its first viewpoint
+  const loadSceneById = useCallback(
+    (sceneId: string, opts?: { token?: string; session?: string }) => {
+      fetchScene(sceneId, opts)
+        .then((s) => {
+          setScene(s);
+          setActiveViewpoint(s.sceneData.viewpoints[0] ?? null);
+          history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
+        })
+        .catch(console.error);
+    },
+    [sessionId],
+  );
+
   // Load initial scene from URL
   useEffect(() => {
     if (!urlInfo.sceneId) return;
-    fetchScene(urlInfo.sceneId, { token: urlInfo.token ?? undefined, session: sessionId })
-      .then(setScene)
-      .catch((err: unknown) => setSceneError(err instanceof Error ? err.message : "Failed to load scene"));
-  }, [urlInfo.sceneId, urlInfo.token, sessionId]);
+    loadSceneById(urlInfo.sceneId, { token: urlInfo.token ?? undefined, session: sessionId });
+  }, [urlInfo.sceneId, urlInfo.token, sessionId, loadSceneById]);
 
   // Connect WebSocket for the session
   useEffect(() => {
@@ -106,15 +118,10 @@ export function App() {
           return [...prev, card];
         });
         // Auto-load the new scene
-        fetchScene(event.sceneId, { session: sessionId })
-          .then((s) => {
-            setScene(s);
-            history.pushState(null, "", `/scene/${event.sceneId}?session=${sessionId}`);
-          })
-          .catch(console.error);
+        loadSceneById(event.sceneId, { session: sessionId });
 
       } else if (event.type === "scene_updated" && scene && event.sceneId === scene.sceneId) {
-        fetchScene(event.sceneId, { session: sessionId }).then(setScene).catch(console.error);
+        fetchScene(event.sceneId, { session: sessionId }).then((s) => setScene(s)).catch(console.error);
 
       } else if (event.type === "error") {
         setNarrativeLines([`Error: ${event.message}`]);
@@ -143,15 +150,10 @@ export function App() {
     [sessionId],
   );
 
-  // Scene card click
+  // Scene card click — load scene and collapse drawer
   const handleSceneSelect = useCallback((card: SceneCard) => {
-    fetchScene(card.sceneId, { session: sessionId })
-      .then((s) => {
-        setScene(s);
-        history.pushState(null, "", `/scene/${card.sceneId}?session=${sessionId}`);
-      })
-      .catch(console.error);
-  }, [sessionId]);
+    loadSceneById(card.sceneId, { session: sessionId });
+  }, [sessionId, loadSceneById]);
 
   // Object interaction (existing flow)
   const handleObjectClick = useCallback(

@@ -279,7 +279,10 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                     gap: 10,
                     cursor: "pointer",
                   }}
-                  onClick={() => onSceneSelect(card)}
+                  onClick={() => {
+                    setState("peek");
+                    onSceneSelect(card);
+                  }}
                 >
                   <div
                     style={{
