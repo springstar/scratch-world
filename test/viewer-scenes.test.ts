@@ -37,6 +37,12 @@ describe("GET /scenes/:sceneId", () => {
 		expect(res.status).toBe(403);
 	});
 
+	it("allows owner access via ?session=web:<userId>", async () => {
+		const scene = await sceneManager.createScene("user-1", "a garden");
+		const res = await app.request(`/${scene.sceneId}?session=web:user-1`);
+		expect(res.status).toBe(200);
+	});
+
 	it("returns scene data for a known sceneId", async () => {
 		const scene = await sceneManager.createScene("user-1", "a forest");
 		const shared = await sceneManager.shareScene(scene.sceneId);

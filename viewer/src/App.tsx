@@ -60,10 +60,10 @@ export function App() {
   // Load initial scene from URL
   useEffect(() => {
     if (!urlInfo.sceneId) return;
-    fetchScene(urlInfo.sceneId, urlInfo.token ?? undefined)
+    fetchScene(urlInfo.sceneId, { token: urlInfo.token ?? undefined, session: sessionId })
       .then(setScene)
       .catch((err: unknown) => setSceneError(err instanceof Error ? err.message : "Failed to load scene"));
-  }, [urlInfo.sceneId, urlInfo.token]);
+  }, [urlInfo.sceneId, urlInfo.token, sessionId]);
 
   // Connect WebSocket for the session
   useEffect(() => {
@@ -106,7 +106,7 @@ export function App() {
           return [...prev, card];
         });
         // Auto-load the new scene
-        fetchScene(event.sceneId)
+        fetchScene(event.sceneId, { session: sessionId })
           .then((s) => {
             setScene(s);
             history.pushState(null, "", `/scene/${event.sceneId}?session=${sessionId}`);
@@ -114,7 +114,7 @@ export function App() {
           .catch(console.error);
 
       } else if (event.type === "scene_updated" && scene && event.sceneId === scene.sceneId) {
-        fetchScene(event.sceneId).then(setScene).catch(console.error);
+        fetchScene(event.sceneId, { session: sessionId }).then(setScene).catch(console.error);
 
       } else if (event.type === "error") {
         setNarrativeLines([`Error: ${event.message}`]);
@@ -145,7 +145,7 @@ export function App() {
 
   // Scene card click
   const handleSceneSelect = useCallback((card: SceneCard) => {
-    fetchScene(card.sceneId)
+    fetchScene(card.sceneId, { session: sessionId })
       .then((s) => {
         setScene(s);
         history.pushState(null, "", `/scene/${card.sceneId}?session=${sessionId}`);

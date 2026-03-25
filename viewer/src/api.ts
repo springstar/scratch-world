@@ -2,9 +2,12 @@ import type { SceneResponse, RealtimeEvent } from "./types.js";
 
 const BASE = import.meta.env.DEV ? "" : (import.meta.env.VITE_API_BASE ?? "");
 
-export async function fetchScene(sceneId: string, token?: string): Promise<SceneResponse> {
-  const url = token ? `${BASE}/scenes/${sceneId}?token=${encodeURIComponent(token)}` : `${BASE}/scenes/${sceneId}`;
-  const res = await fetch(url);
+export async function fetchScene(sceneId: string, opts?: { token?: string; session?: string }): Promise<SceneResponse> {
+  const params = new URLSearchParams();
+  if (opts?.token) params.set("token", opts.token);
+  if (opts?.session) params.set("session", opts.session);
+  const qs = params.size ? `?${params.toString()}` : "";
+  const res = await fetch(`${BASE}/scenes/${sceneId}${qs}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);

@@ -11,22 +11,26 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string): Ho
 	app.get("/:sceneId", async (c) => {
 		const { sceneId } = c.req.param();
 		const tokenParam = c.req.query("token");
+		const sessionParam = c.req.query("session");
+
+		// Extract userId from web session format "web:<userId>"
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
 
 		let scene = tokenParam ? await sceneManager.getSceneByShareToken(tokenParam) : null;
 
-		// Fall back to looking up by sceneId (respects is_public)
 		if (!scene) {
 			const byId = await sceneManager.getScene(sceneId);
 			if (!byId) return c.json({ error: "Scene not found" }, 404);
-			// Allow access if the scene is public, or if a valid share token was provided
-			if (!byId.isPublic && !tokenParam) return c.json({ error: "Forbidden" }, 403);
-			if (!byId.isPublic && tokenParam && byId.shareToken !== tokenParam) {
+
+			const isOwner = sessionUserId !== null && byId.ownerId === sessionUserId;
+			const hasShareToken = !!tokenParam && byId.shareToken === tokenParam;
+
+			if (!byId.isPublic && !isOwner && !hasShareToken) {
 				return c.json({ error: "Forbidden" }, 403);
 			}
 			scene = byId;
 		}
 
-		// Verify the fetched scene matches the requested sceneId (token lookup may differ)
 		if (scene.sceneId !== sceneId) return c.json({ error: "Scene not found" }, 404);
 		return c.json({
 			sceneId: scene.sceneId,
