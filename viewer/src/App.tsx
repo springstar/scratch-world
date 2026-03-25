@@ -215,10 +215,29 @@ export function App() {
                 pointerEvents: "none",
               }}
             >
-              <div style={{ fontSize: 28, fontWeight: 300, color: "rgba(200,210,255,0.8)", fontFamily: "Georgia, serif", marginBottom: 12, letterSpacing: 1 }}>
+              {/* Aurora glow */}
+              <div style={{
+                position: "absolute",
+                width: 360,
+                height: 180,
+                borderRadius: "50%",
+                background: "radial-gradient(ellipse, rgba(100,60,220,0.18) 0%, rgba(40,80,200,0.10) 50%, transparent 80%)",
+                filter: "blur(32px)",
+              }} />
+              <div style={{
+                fontSize: 36,
+                fontWeight: 300,
+                fontFamily: "Georgia, serif",
+                letterSpacing: 3,
+                marginBottom: 14,
+                background: "linear-gradient(135deg, #c8b0ff 0%, #a8d4ff 60%, #e0ccff 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}>
                 Scratch World
               </div>
-              <div style={{ fontSize: 15, color: "rgba(150,170,220,0.5)", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+              <div style={{ fontSize: 15, color: "rgba(170,185,235,0.6)", fontFamily: "system-ui, -apple-system, sans-serif", letterSpacing: 0.5 }}>
                 描述一个你想探索的世界
               </div>
             </div>

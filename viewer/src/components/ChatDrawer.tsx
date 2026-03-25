@@ -24,7 +24,7 @@ interface Props {
 type DrawerState = "peek" | "open";
 
 const PEEK_HEIGHT = 72;
-const OPEN_HEIGHT_VH = 52;
+const OPEN_HEIGHT_VH = 54;
 
 // Minimal markdown link rendering: [text](url) → <a>
 function renderText(text: string): React.ReactNode {
@@ -41,7 +41,7 @@ function renderText(text: string): React.ReactNode {
           href={href}
           target="_blank"
           rel="noreferrer"
-          style={{ color: "#7eb8f7", textDecoration: "underline" }}
+          style={{ color: "#9dc8ff", textDecoration: "underline" }}
           onClick={(e) => e.stopPropagation()}
         >
           {label}
@@ -61,6 +61,7 @@ function renderText(text: string): React.ReactNode {
 export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSelect }: Props) {
   const [state, setState] = useState<DrawerState>("peek");
   const [draft, setDraft] = useState("");
+  const [inputFocused, setInputFocused] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -85,7 +86,6 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
     setDraft("");
     onSend(text);
     setState("open");
-    // Resize textarea back
     if (inputRef.current) inputRef.current.style.height = "40px";
   }, [draft, onSend]);
 
@@ -109,6 +109,9 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
   const isOpen = state === "open";
   const drawerHeight = isOpen ? `${OPEN_HEIGHT_VH}vh` : `${PEEK_HEIGHT}px`;
   const lastMsg = messages[messages.length - 1];
+  const canSend = !!draft.trim();
+
+  const dotColors = ["#a78bfa", "#818cf8", "#60a5fa"];
 
   return (
     <div
@@ -118,12 +121,13 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
         right: 0,
         bottom: 0,
         height: drawerHeight,
-        transition: "height 0.3s cubic-bezier(0.4,0,0.2,1)",
+        transition: "height 0.32s cubic-bezier(0.4,0,0.2,1)",
         display: "flex",
         flexDirection: "column",
-        background: "rgba(8,8,16,0.88)",
-        backdropFilter: "blur(12px)",
-        borderTop: "1px solid rgba(255,255,255,0.08)",
+        background: "linear-gradient(180deg, rgba(18,12,42,0.94) 0%, rgba(10,8,28,0.97) 100%)",
+        backdropFilter: "blur(16px)",
+        borderTop: "1px solid rgba(140,100,255,0.22)",
+        boxShadow: "0 -4px 32px rgba(80,40,200,0.18), 0 -1px 0 rgba(140,100,255,0.12)",
         zIndex: 100,
       }}
     >
@@ -151,7 +155,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
             width: 36,
             height: 4,
             borderRadius: 2,
-            background: "rgba(255,255,255,0.2)",
+            background: "linear-gradient(90deg, rgba(160,120,255,0.5) 0%, rgba(100,160,255,0.5) 100%)",
           }}
         />
 
@@ -163,8 +167,8 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
           style={{
             flexShrink: 0,
             transform: isOpen ? "rotate(180deg)" : "rotate(0deg)",
-            transition: "transform 0.3s",
-            color: "rgba(255,255,255,0.45)",
+            transition: "transform 0.32s cubic-bezier(0.4,0,0.2,1)",
+            color: "rgba(180,150,255,0.7)",
           }}
           fill="none"
           stroke="currentColor"
@@ -174,14 +178,18 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
           <polyline points="4,6 9,11 14,6" />
         </svg>
 
-        {/* Peek preview: show last message text or placeholder */}
+        {/* Peek preview */}
         <div
           style={{
             flex: 1,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            color: lastMsg ? (lastMsg.role === "user" ? "#e0d8ff" : "#c8dff8") : "rgba(255,255,255,0.3)",
+            color: lastMsg
+              ? lastMsg.role === "user"
+                ? "rgba(220,200,255,0.9)"
+                : "rgba(180,220,255,0.9)"
+              : "rgba(160,140,210,0.45)",
             fontSize: 14,
             fontFamily: "system-ui, -apple-system, sans-serif",
           }}
@@ -207,7 +215,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
             {messages.length === 0 && (
               <div
                 style={{
-                  color: "rgba(255,255,255,0.25)",
+                  color: "rgba(160,140,210,0.4)",
                   fontSize: 14,
                   textAlign: "center",
                   marginTop: 24,
@@ -224,22 +232,28 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                 style={{
                   alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
                   maxWidth: "82%",
+                  animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both",
                 }}
               >
                 <div
                   style={{
                     background:
                       msg.role === "user"
-                        ? "rgba(110,80,220,0.45)"
-                        : "rgba(255,255,255,0.07)",
+                        ? "linear-gradient(135deg, rgba(130,80,240,0.7) 0%, rgba(80,100,230,0.65) 100%)"
+                        : "rgba(255,255,255,0.065)",
                     borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
                     padding: "9px 13px",
                     fontSize: 14,
                     lineHeight: 1.55,
-                    color: msg.role === "user" ? "#e8e0ff" : "#d8eaff",
+                    color: msg.role === "user" ? "rgba(238,228,255,0.97)" : "rgba(210,230,255,0.92)",
                     fontFamily: "system-ui, -apple-system, sans-serif",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
+                    border: msg.role === "agent" ? "1px solid rgba(140,120,220,0.12)" : "none",
+                    boxShadow:
+                      msg.role === "user"
+                        ? "0 2px 16px rgba(100,60,220,0.3)"
+                        : "none",
                   }}
                 >
                   {msg.isStreaming ? (
@@ -250,7 +264,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                           display: "inline-block",
                           width: 6,
                           height: 14,
-                          background: "rgba(200,220,255,0.7)",
+                          background: "rgba(180,210,255,0.8)",
                           marginLeft: 2,
                           verticalAlign: "middle",
                           borderRadius: 1,
@@ -267,17 +281,19 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
 
             {/* Scene cards */}
             {sceneCards.map((card) => (
-              <div key={card.sceneId} style={{ alignSelf: "flex-start", maxWidth: "82%" }}>
+              <div key={card.sceneId} style={{ alignSelf: "flex-start", maxWidth: "82%", animation: "msgIn 0.25s cubic-bezier(0.2,0,0,1) both" }}>
                 <div
                   style={{
-                    background: "rgba(40,60,90,0.6)",
-                    border: "1px solid rgba(100,160,255,0.25)",
+                    background: "linear-gradient(135deg, rgba(30,50,100,0.55) 0%, rgba(20,35,80,0.6) 100%)",
+                    border: "1px solid rgba(100,160,255,0.28)",
                     borderRadius: 12,
                     padding: "10px 14px",
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
                     cursor: "pointer",
+                    boxShadow: "0 2px 20px rgba(40,100,255,0.12)",
+                    transition: "border-color 0.2s, box-shadow 0.2s",
                   }}
                   onClick={() => {
                     setState("peek");
@@ -289,7 +305,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                       width: 32,
                       height: 32,
                       borderRadius: 8,
-                      background: "rgba(80,120,200,0.4)",
+                      background: "linear-gradient(135deg, rgba(60,100,220,0.5) 0%, rgba(80,60,200,0.5) 100%)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -304,7 +320,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#c8e0ff", fontFamily: "system-ui, -apple-system, sans-serif" }}>
                       {card.title}
                     </div>
-                    <div style={{ fontSize: 11, color: "rgba(150,190,255,0.6)", marginTop: 2, fontFamily: "system-ui, -apple-system, sans-serif" }}>
+                    <div style={{ fontSize: 11, color: "rgba(140,190,255,0.6)", marginTop: 2, fontFamily: "system-ui, -apple-system, sans-serif" }}>
                       点击进入场景
                     </div>
                   </div>
@@ -313,26 +329,28 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
             ))}
 
             {isTyping && (
-              <div style={{ alignSelf: "flex-start" }}>
+              <div style={{ alignSelf: "flex-start", animation: "msgIn 0.2s cubic-bezier(0.2,0,0,1) both" }}>
                 <div
                   style={{
-                    background: "rgba(255,255,255,0.07)",
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(140,120,220,0.12)",
                     borderRadius: "16px 16px 16px 4px",
-                    padding: "9px 13px",
+                    padding: "9px 14px",
                     display: "flex",
                     gap: 5,
                     alignItems: "center",
                   }}
                 >
-                  {[0, 1, 2].map((i) => (
+                  {dotColors.map((color, i) => (
                     <div
                       key={i}
                       style={{
                         width: 6,
                         height: 6,
                         borderRadius: "50%",
-                        background: "rgba(180,200,255,0.6)",
+                        background: color,
                         animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+                        boxShadow: `0 0 6px ${color}`,
                       }}
                     />
                   ))}
@@ -349,7 +367,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               display: "flex",
               gap: 8,
               alignItems: "flex-end",
-              borderTop: "1px solid rgba(255,255,255,0.06)",
+              borderTop: "1px solid rgba(120,90,200,0.12)",
             }}
           >
             <textarea
@@ -357,15 +375,19 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               value={draft}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
               placeholder="描述一个场景…"
               rows={1}
               style={{
                 flex: 1,
-                background: "rgba(255,255,255,0.07)",
-                border: "1px solid rgba(255,255,255,0.12)",
+                background: "rgba(255,255,255,0.055)",
+                border: inputFocused
+                  ? "1px solid rgba(140,100,255,0.55)"
+                  : "1px solid rgba(140,100,255,0.14)",
                 borderRadius: 12,
                 padding: "10px 14px",
-                color: "#e0e8ff",
+                color: "#e8e0ff",
                 fontSize: 14,
                 fontFamily: "system-ui, -apple-system, sans-serif",
                 resize: "none",
@@ -375,23 +397,28 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                 maxHeight: 120,
                 lineHeight: 1.4,
                 overflowY: "auto",
+                boxShadow: inputFocused ? "0 0 0 3px rgba(120,80,240,0.18)" : "none",
+                transition: "border-color 0.2s, box-shadow 0.2s",
               }}
             />
             <button
               onClick={handleSend}
-              disabled={!draft.trim()}
+              disabled={!canSend}
               style={{
                 flexShrink: 0,
                 width: 40,
                 height: 40,
                 borderRadius: "50%",
                 border: "none",
-                background: draft.trim() ? "rgba(100,80,220,0.8)" : "rgba(80,80,100,0.4)",
-                cursor: draft.trim() ? "pointer" : "default",
+                background: canSend
+                  ? "linear-gradient(135deg, #7c4dff 0%, #448aff 100%)"
+                  : "rgba(80,70,110,0.35)",
+                cursor: canSend ? "pointer" : "default",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                transition: "background 0.2s",
+                boxShadow: canSend ? "0 2px 16px rgba(100,60,240,0.45), 0 0 0 1px rgba(140,100,255,0.3)" : "none",
+                transition: "background 0.2s, box-shadow 0.2s",
               }}
             >
               <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="white" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -403,12 +430,16 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
         </>
       )}
 
-      {/* CSS animations via style tag */}
+      {/* CSS animations */}
       <style>{`
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
         @keyframes bounce {
           0%, 60%, 100% { transform: translateY(0); }
           30% { transform: translateY(-5px); }
+        }
+        @keyframes msgIn {
+          from { opacity: 0; transform: translateY(8px) scale(0.97); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
     </div>
