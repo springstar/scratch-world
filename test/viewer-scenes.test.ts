@@ -4,15 +4,13 @@ import { scenesRoute } from "../src/viewer-api/routes/scenes.js";
 import { SceneManager } from "../src/scene/scene-manager.js";
 import { StubProvider } from "../src/providers/stub/provider.js";
 import { SceneProviderRegistry } from "../src/providers/scene-provider-registry.js";
-import { NarratorRegistry } from "../src/narrators/narrator-registry.js";
 import { SqliteSceneRepo } from "../src/storage/sqlite/scene-repo.js";
 
 function makeManager() {
 	const db = new Database(":memory:");
 	db.pragma("journal_mode = WAL");
 	const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
-	const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
-	return new SceneManager(providerRegistryRef, narratorRegistryRef, new SqliteSceneRepo(db));
+	return new SceneManager(providerRegistryRef, new SqliteSceneRepo(db));
 }
 
 describe("GET /scenes/:sceneId", () => {

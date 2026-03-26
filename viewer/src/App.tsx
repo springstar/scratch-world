@@ -7,7 +7,7 @@ import { ViewpointBar } from "./components/ViewpointBar.js";
 import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
-import type { ChatMessage, SceneCard } from "./components/ChatDrawer.js";
+import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postChat, connectRealtime } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent } from "./types.js";
 
@@ -42,6 +42,7 @@ export function App() {
   const sessionId = `web:${userId.current}`;
 
   const [scene, setScene] = useState<SceneResponse | null>(null);
+  const sceneRef = useRef<SceneResponse | null>(null);
   const [urlInfo] = useState(parseUrl);
   const [sceneError, setSceneError] = useState<string | null>(null);
 
@@ -64,6 +65,7 @@ export function App() {
       fetchScene(sceneId, opts)
         .then((s) => {
           setScene(s);
+          sceneRef.current = s;
           setActiveViewpoint(s.sceneData.viewpoints[0] ?? null);
           history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
         })
@@ -104,8 +106,12 @@ export function App() {
       } else if (event.type === "text_done") {
         if (streamingIdRef.current) {
           const id = streamingIdRef.current;
-          setChatMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text: event.text, isStreaming: false } : m)));
           streamingIdRef.current = null;
+          setChatMessages((prev) => {
+            // If empty (e.g. agent.prompt() threw before generating text), remove placeholder
+            if (!event.text) return prev.filter((m) => m.id !== id);
+            return prev.map((m) => (m.id === id ? { ...m, text: event.text, isStreaming: false } : m));
+          });
         }
         setIsStreaming(false);
         setIsTyping(false);
@@ -124,27 +130,35 @@ export function App() {
         // Auto-load the new scene
         loadSceneById(event.sceneId, { session: sessionId });
 
-      } else if (event.type === "scene_updated" && scene && event.sceneId === scene.sceneId) {
-        fetchScene(event.sceneId, { session: sessionId }).then((s) => setScene(s)).catch(console.error);
+      } else if (event.type === "scene_updated" && sceneRef.current && event.sceneId === sceneRef.current.sceneId) {
+        fetchScene(event.sceneId, { session: sessionId }).then((s) => { setScene(s); sceneRef.current = s; }).catch(console.error);
 
       } else if (event.type === "error") {
         setNarrativeLines([`Error: ${event.message}`]);
         setIsStreaming(false);
         setIsTyping(false);
+        // Also show errors in the chat so they're visible even without a loaded scene
+        setChatMessages((prev) => [...prev, { id: nextId(), role: "agent", text: `Error: ${event.message}` }]);
       }
     });
     return disconnect;
-  }, [sessionId, scene]);
+  }, [sessionId]);
 
   // Chat send
   const handleSend = useCallback(
-    async (text: string) => {
-      const userMsg: ChatMessage = { id: nextId(), role: "user", text };
+    async (text: string, images?: PendingImage[]) => {
+      const userMsg: ChatMessage = {
+        id: nextId(),
+        role: "user",
+        text,
+        images: images?.map((img) => img.dataUrl),
+      };
       setChatMessages((prev) => [...prev, userMsg]);
       setIsTyping(true);
       streamingBuffer.current = "";
+      const apiImages = images?.map((img) => ({ base64: img.base64, mimeType: img.mimeType }));
       try {
-        await postChat({ sessionId, userId: userId.current, text });
+        await postChat({ sessionId, userId: userId.current, text, images: apiImages });
       } catch (err) {
         setIsTyping(false);
         const msg = err instanceof Error ? err.message : "Failed to send";

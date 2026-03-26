@@ -70,18 +70,3 @@ export interface SceneVersion {
 	providerRef: ProviderRef;
 	createdAt: number;
 }
-
-export interface NavigationResult {
-	sceneId: string;
-	viewpoint: Viewpoint;
-	viewUrl: string;
-	description: string; // LLM-facing description of what the user sees
-}
-
-export interface InteractionResult {
-	sceneId: string;
-	objectId: string;
-	action: string;
-	outcome: string; // narrative description of what happened
-	sceneChanged: boolean; // true if the scene state was mutated
-}

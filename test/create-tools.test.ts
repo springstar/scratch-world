@@ -34,8 +34,7 @@ function makeSceneManager(returnScene?: Scene) {
 		updateScene: vi.fn(),
 		getScene: vi.fn(),
 		listScenes: vi.fn(),
-		navigateTo: vi.fn(),
-		interactWithObject: vi.fn(),
+		shareScene: vi.fn(),
 	};
 }
 

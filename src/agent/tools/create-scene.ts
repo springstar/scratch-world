@@ -25,8 +25,7 @@ export function createSceneTool(
 		name: "create_scene",
 		label: "Create 3D scene",
 		description:
-			"Generate a new 3D scene from a text prompt. Use for nature landscapes, sports fields, abstract environments, and outdoor scenes that are NOT settlements. " +
-			"Do NOT use for indoor rooms, dungeons, halls, or gardens — use create_world for those. " +
+			"Generate a new 3D scene from a text prompt. Use for any environment that is NOT a settlement — nature landscapes, indoor rooms, dungeons, halls, gardens, sports fields, abstract environments. " +
 			"Do NOT use for cities, towns, or villages — use create_city for those.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {

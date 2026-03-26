@@ -3,7 +3,6 @@ import Database from "better-sqlite3";
 import { SceneManager } from "../src/scene/scene-manager.js";
 import { StubProvider } from "../src/providers/stub/provider.js";
 import { SceneProviderRegistry } from "../src/providers/scene-provider-registry.js";
-import { NarratorRegistry } from "../src/narrators/narrator-registry.js";
 import { SqliteSceneRepo } from "../src/storage/sqlite/scene-repo.js";
 
 function makeManager() {
@@ -11,8 +10,7 @@ function makeManager() {
 	db.pragma("journal_mode = WAL");
 	const repo = new SqliteSceneRepo(db);
 	const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
-	const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
-	return new SceneManager(providerRegistryRef, narratorRegistryRef, repo);
+	return new SceneManager(providerRegistryRef, repo);
 }
 
 describe("SceneManager", () => {
@@ -56,8 +54,7 @@ describe("SceneManager", () => {
 			db.pragma("journal_mode = WAL");
 			const repo = new SqliteSceneRepo(db);
 			const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
-			const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
-			const m = new SceneManager(providerRegistryRef, narratorRegistryRef, repo);
+			const m = new SceneManager(providerRegistryRef, repo);
 			const scene = await m.createScene("user-1", "a temple");
 			const versions = await repo.findVersions(scene.sceneId);
 			expect(versions).toHaveLength(1);
@@ -111,8 +108,7 @@ describe("SceneManager", () => {
 			db.pragma("journal_mode = WAL");
 			const repo = new SqliteSceneRepo(db);
 			const providerRegistryRef = { current: new SceneProviderRegistry([new StubProvider()], "stub") };
-			const narratorRegistryRef = { current: new NarratorRegistry([], "none") };
-			const m = new SceneManager(providerRegistryRef, narratorRegistryRef, repo);
+			const m = new SceneManager(providerRegistryRef, repo);
 			const scene = await m.createScene("user-1", "a fortress");
 			await m.updateScene(scene.sceneId, "add walls");
 			await m.updateScene(scene.sceneId, "add towers");
@@ -164,58 +160,6 @@ describe("SceneManager", () => {
 		it("returns empty array when owner has no scenes", async () => {
 			const scenes = await manager.listScenes("nobody");
 			expect(scenes).toHaveLength(0);
-		});
-	});
-
-	describe("navigateTo", () => {
-		it("returns correct viewpoint by name", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			const result = await manager.navigateTo(scene.sceneId, "entrance");
-			expect(result.viewpoint.name).toBe("entrance");
-			expect(result.viewUrl).toContain("vp_entrance");
-		});
-
-		it("is case-insensitive", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			const result = await manager.navigateTo(scene.sceneId, "ENTRANCE");
-			expect(result.viewpoint.name).toBe("entrance");
-		});
-
-		it("throws for unknown viewpoint", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			await expect(manager.navigateTo(scene.sceneId, "throne room")).rejects.toThrow("Viewpoint");
-		});
-
-		it("throws for unknown sceneId", async () => {
-			await expect(manager.navigateTo("nonexistent", "entrance")).rejects.toThrow("Scene not found");
-		});
-	});
-
-	describe("interactWithObject", () => {
-		it("returns an outcome for an interactable object", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			const main = scene.sceneData.objects.find((o) => o.interactable);
-			const result = await manager.interactWithObject(scene.sceneId, main!.objectId, "examine");
-			expect(result.outcome).toBeTruthy();
-		});
-
-		it("returns sceneChanged: false for a non-mutating action", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			const main = scene.sceneData.objects.find((o) => o.interactable);
-			const result = await manager.interactWithObject(scene.sceneId, main!.objectId, "examine");
-			expect(result.sceneChanged).toBe(false);
-		});
-
-		it("returns cannot interact for non-interactable object", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			const ground = scene.sceneData.objects.find((o) => !o.interactable);
-			const result = await manager.interactWithObject(scene.sceneId, ground!.objectId, "touch");
-			expect(result.outcome).toContain("cannot be interacted with");
-		});
-
-		it("throws for unknown objectId", async () => {
-			const scene = await manager.createScene("user-1", "a castle");
-			await expect(manager.interactWithObject(scene.sceneId, "nonexistent", "touch")).rejects.toThrow("not found");
 		});
 	});
 });

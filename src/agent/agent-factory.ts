@@ -5,9 +5,7 @@ import { trimContext } from "./context-trimmer.js";
 import { createCityTool } from "./tools/create-city.js";
 import { createSceneTool } from "./tools/create-scene.js";
 import { getSceneTool } from "./tools/get-scene.js";
-import { interactWithObjectTool } from "./tools/interact-with-object.js";
 import { listScenesTool } from "./tools/list-scenes.js";
-import { navigateToTool } from "./tools/navigate-to.js";
 import { shareSceneTool } from "./tools/share-scene.js";
 import { updateSceneTool } from "./tools/update-scene.js";
 
@@ -17,8 +15,6 @@ You are a world-building companion. You help users create, explore, and evolve p
 When a user describes a place, scene, or environment they want to create, call create_scene.
 When a user wants a city, town, village, settlement, or commercial district, call create_city.
 When a user wants to change or add something to an existing scene, call update_scene.
-When a user wants to look around, go somewhere, or change their viewpoint, call navigate_to.
-When a user tries to interact with an object (touch, open, examine, pick up, etc.), call interact_with_object.
 When a user asks what scenes they have, call list_scenes.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, get a link, or make a scene public, call share_scene.
@@ -62,8 +58,6 @@ export function createAgent(
 				updateSceneTool(sceneManager, viewerUrl),
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager, ownerId),
-				navigateToTool(sceneManager, viewerUrl),
-				interactWithObjectTool(sceneManager),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 			],
 		},

@@ -6,6 +6,7 @@ interface ChatBody {
 	sessionId: string;
 	userId: string;
 	text: string;
+	images?: Array<{ base64: string; mimeType: string }>;
 }
 
 export function chatRoute(sessionManager: SessionManager, bus: RealtimeBus): Hono {
@@ -21,14 +22,15 @@ export function chatRoute(sessionManager: SessionManager, bus: RealtimeBus): Hon
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const { sessionId, userId, text } = body;
-		if (!sessionId || !userId || !text?.trim()) {
-			return c.json({ error: "Missing required fields: sessionId, userId, text" }, 400);
+		const { sessionId, userId, text, images } = body;
+		if (!sessionId || !userId || (!text?.trim() && !images?.length)) {
+			return c.json({ error: "Missing required fields: sessionId, userId, and text or images" }, 400);
 		}
 
 		// Fire-and-forget — response streams over WebSocket
-		sessionManager.dispatchWebChat(sessionId, userId, text, bus).catch((err: unknown) => {
-			const message = err instanceof Error ? err.message : "Internal error";
+		sessionManager.dispatchWebChat(sessionId, userId, text ?? "", bus, images).catch((err: unknown) => {
+			// err.message is empty for AggregateError (e.g. ECONNREFUSED); fall back to toString()
+			const message = err instanceof Error ? err.message || String(err) : String(err);
 			bus.publish(sessionId, { type: "error", message });
 		});
 

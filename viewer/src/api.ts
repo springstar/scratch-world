@@ -36,6 +36,7 @@ export async function postChat(payload: {
   sessionId: string;
   userId: string;
   text: string;
+  images?: Array<{ base64: string; mimeType: string }>;
 }): Promise<void> {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
@@ -54,18 +55,47 @@ export function connectRealtime(
 ): () => void {
   const wsBase = BASE.replace(/^http/, "ws") || `ws://${location.host}`;
   const url = `${wsBase}/realtime/${encodeURIComponent(sessionId)}`;
-  const ws = new WebSocket(url);
 
-  ws.onmessage = (e) => {
-    try {
-      const event = JSON.parse(e.data as string) as RealtimeEvent;
-      onEvent(event);
-    } catch {
-      // Malformed frame — ignore
-    }
+  let ws: WebSocket;
+  let closed = false;
+  let retryDelay = 1000;
+
+  function connect() {
+    ws = new WebSocket(url);
+
+    ws.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data as string) as RealtimeEvent;
+        onEvent(event);
+      } catch {
+        // Malformed frame — ignore
+      }
+    };
+
+    ws.onerror = () => {
+      // Don't surface individual errors — onclose will handle reconnection
+    };
+
+    ws.onclose = () => {
+      if (closed) return;
+      // Reconnect with backoff (cap at 16 s)
+      setTimeout(() => {
+        if (!closed) {
+          retryDelay = Math.min(retryDelay * 2, 16000);
+          connect();
+        }
+      }, retryDelay);
+    };
+
+    ws.onopen = () => {
+      retryDelay = 1000; // reset backoff on successful connect
+    };
+  }
+
+  connect();
+
+  return () => {
+    closed = true;
+    ws.close();
   };
-
-  ws.onerror = () => onEvent({ type: "error", message: "WebSocket error" });
-
-  return () => ws.close();
 }

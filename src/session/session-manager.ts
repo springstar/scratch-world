@@ -1,5 +1,7 @@
 import type { Agent } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { createAgent } from "../agent/agent-factory.js";
+import { trimContext } from "../agent/context-trimmer.js";
 import type { ChannelGateway } from "../channels/gateway.js";
 import type { ChatMessage } from "../channels/types.js";
 import type { SceneManager } from "../scene/scene-manager.js";
@@ -38,8 +40,14 @@ export class SessionManager {
 		return this.enqueue(sessionId, () => this._dispatchViewerInteraction(sessionId, sceneId, text, bus));
 	}
 
-	dispatchWebChat(sessionId: string, userId: string, text: string, bus: RealtimeBus): Promise<void> {
-		return this.enqueue(sessionId, () => this._dispatchWebChat(sessionId, userId, text, bus));
+	dispatchWebChat(
+		sessionId: string,
+		userId: string,
+		text: string,
+		bus: RealtimeBus,
+		images?: Array<{ base64: string; mimeType: string }>,
+	): Promise<void> {
+		return this.enqueue(sessionId, () => this._dispatchWebChat(sessionId, userId, text, bus, images));
 	}
 
 	// ── Private helpers ──────────────────────────────────────────────────────
@@ -100,7 +108,13 @@ export class SessionManager {
 		await this.saveSession(msg, agent, activeSceneId);
 	}
 
-	private async _dispatchWebChat(sessionId: string, userId: string, text: string, bus: RealtimeBus): Promise<void> {
+	private async _dispatchWebChat(
+		sessionId: string,
+		userId: string,
+		text: string,
+		bus: RealtimeBus,
+		images?: Array<{ base64: string; mimeType: string }>,
+	): Promise<void> {
 		// Upsert session record — web sessions may not exist yet
 		const existing = await this.sessionRepo.findById(sessionId);
 		if (!existing) {
@@ -149,9 +163,16 @@ export class SessionManager {
 		});
 
 		try {
-			await agent.prompt(text);
-			bus.publish(sessionId, { type: "text_done", text: fullText });
+			const imageContents: ImageContent[] | undefined = images?.map((img) => ({
+				type: "image" as const,
+				data: img.base64,
+				mimeType: img.mimeType,
+			}));
+			await agent.prompt(text, imageContents);
 		} finally {
+			// Always publish text_done so the client's isTyping indicator always resets,
+			// even if agent.prompt() threw (e.g., API unreachable, tool execution error).
+			bus.publish(sessionId, { type: "text_done", text: fullText });
 			unsub();
 		}
 
@@ -284,12 +305,31 @@ export class SessionManager {
 	}
 
 	private async saveSession(msg: ChatMessage, agent: Agent, activeSceneId: string | null): Promise<void> {
+		// Trim to MAX_TURNS before persisting to prevent unbounded history growth.
+		// Also strip image data from non-recent messages — images are already processed
+		// by the model and do not need to be re-sent on future turns.
+		const trimmed = trimContext(agent.state.messages as Parameters<typeof trimContext>[0]);
+		const lastUserIdx = [...trimmed].reverse().findIndex((m) => (m as { role?: string }).role === "user");
+		const lastUserAbsIdx = lastUserIdx === -1 ? -1 : trimmed.length - 1 - lastUserIdx;
+		const stripped = trimmed.map((m, i) => {
+			if (
+				(m as { role?: string }).role === "user" &&
+				i !== lastUserAbsIdx &&
+				Array.isArray((m as { content?: unknown }).content)
+			) {
+				const content = (m as { content: unknown[] }).content.filter(
+					(c) => (c as { type?: string }).type !== "image",
+				);
+				return { ...m, content };
+			}
+			return m;
+		});
 		await this.sessionRepo.save({
 			sessionId: msg.sessionId,
 			userId: msg.userId,
 			channelId: msg.channelId,
 			activeSceneId,
-			agentMessages: JSON.stringify(agent.state.messages),
+			agentMessages: JSON.stringify(stripped),
 			updatedAt: Date.now(),
 		});
 	}

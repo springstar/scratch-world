@@ -191,31 +191,6 @@ describe("SessionManager", () => {
 			expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ activeSceneId: "scene-xyz" }));
 		});
 
-		it("saves sceneId after navigate_to tool fires", async () => {
-			const agent = makeFakeAgent((emit) => {
-				emit({
-					type: "tool_execution_end",
-					toolCallId: "tc-1",
-					toolName: "navigate_to",
-					isError: false,
-					result: { details: { sceneId: "scene-nav", viewpoint: "entrance" }, content: [] },
-				});
-			});
-			mockCreateAgent.mockReturnValue(agent as never);
-			const repo = makeSessionRepo();
-			const sm = new SessionManager(
-				gateway,
-				sceneManager,
-				repo,
-				"http://localhost:3001",
-				makeSkillLoader() as never,
-			);
-
-			await sm.dispatch(makeMsg());
-
-			expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ activeSceneId: "scene-nav" }));
-		});
-
 		it("does not update activeSceneId when tool errors", async () => {
 			const agent = makeFakeAgent((emit) => {
 				emit({
@@ -272,9 +247,9 @@ describe("SessionManager", () => {
 				emit({
 					type: "tool_execution_end",
 					toolCallId: "tc-2",
-					toolName: "navigate_to",
+					toolName: "update_scene",
 					isError: false,
-					result: { details: { sceneId: "scene-second", viewpoint: "entrance" }, content: [] },
+					result: { details: { sceneId: "scene-second", title: "Second", version: 2 }, content: [] },
 				});
 			});
 			mockCreateAgent.mockReturnValue(agent as never);
@@ -324,14 +299,14 @@ describe("SessionManager", () => {
 			);
 		});
 
-		it("does not call gateway.presentScene after navigate_to", async () => {
+		it("does not call gateway.presentScene after get_scene", async () => {
 			const agent = makeFakeAgent((emit) => {
 				emit({
 					type: "tool_execution_end",
 					toolCallId: "tc-1",
-					toolName: "navigate_to",
+					toolName: "get_scene",
 					isError: false,
-					result: { details: { sceneId: "scene-nav", viewpoint: "entrance" }, content: [] },
+					result: { details: { sceneId: "scene-abc" }, content: [] },
 				});
 			});
 			mockCreateAgent.mockReturnValue(agent as never);

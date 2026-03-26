@@ -1,13 +1,11 @@
 import { randomUUID } from "crypto";
-import type { NarratorRegistry } from "../narrators/narrator-registry.js";
 import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
 import type { SceneRepository } from "../storage/types.js";
-import type { InteractionResult, NavigationResult, Scene, SceneData } from "./types.js";
+import type { Scene, SceneData } from "./types.js";
 
 export class SceneManager {
 	constructor(
 		private providerRegistryRef: { current: SceneProviderRegistry },
-		private narratorRegistryRef: { current: NarratorRegistry },
 		private repo: SceneRepository,
 	) {}
 
@@ -131,117 +129,11 @@ export class SceneManager {
 		return this.repo.findByShareToken(shareToken);
 	}
 
-	async navigateTo(sceneId: string, viewpointName: string): Promise<NavigationResult> {
-		const scene = await this.requireScene(sceneId);
-		const viewpoint = scene.sceneData.viewpoints.find((v) => v.name.toLowerCase() === viewpointName.toLowerCase());
-		if (!viewpoint) {
-			const available = scene.sceneData.viewpoints.map((v) => `"${v.name}"`).join(", ");
-			throw new Error(`Viewpoint "${viewpointName}" not found. Available: ${available}`);
-		}
-		const viewUrl = scene.providerRef.viewUrl ?? "";
-		return {
-			sceneId,
-			viewpoint,
-			viewUrl: `${viewUrl}#${viewpoint.viewpointId}`,
-			description: `You are now at the ${viewpoint.name}. ${this.describeObjectsNearby(scene, viewpoint.position)}`,
-		};
-	}
-
-	async interactWithObject(sceneId: string, objectId: string, action: string): Promise<InteractionResult> {
-		const scene = await this.requireScene(sceneId);
-		const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
-		if (!obj) throw new Error(`Object "${objectId}" not found in scene "${sceneId}"`);
-		if (!obj.interactable) {
-			return {
-				sceneId,
-				objectId,
-				action,
-				outcome: `The ${obj.name} cannot be interacted with.`,
-				sceneChanged: false,
-			};
-		}
-
-		// ── State transition ─────────────────────────────────────────────────
-		const transitions = obj.metadata.transitions as Record<string, string> | undefined;
-		let sceneChanged = false;
-		let updatedScene = scene;
-
-		if (transitions) {
-			const normalizedAction = action.toLowerCase().trim();
-			const nextState =
-				transitions[normalizedAction] ??
-				Object.entries(transitions).find(([k]) => normalizedAction.includes(k))?.[1];
-
-			const currentState = obj.metadata.state as string | undefined;
-			if (nextState !== undefined && nextState !== currentState) {
-				const updatedObjects = scene.sceneData.objects.map((o) =>
-					o.objectId === objectId ? { ...o, metadata: { ...o.metadata, state: nextState } } : o,
-				);
-				const updatedSceneData = { ...scene.sceneData, objects: updatedObjects };
-				const now = Date.now();
-				updatedScene = {
-					...scene,
-					sceneData: updatedSceneData,
-					version: scene.version + 1,
-					updatedAt: now,
-				};
-				await this.repo.saveVersion({
-					sceneId: updatedScene.sceneId,
-					version: updatedScene.version,
-					sceneData: updatedSceneData,
-					providerRef: updatedScene.providerRef,
-					createdAt: now,
-				});
-				await this.repo.save(updatedScene);
-				sceneChanged = true;
-			}
-		}
-
-		// ── Narrate ──────────────────────────────────────────────────────────
-		const narrateFn = this.narratorRegistryRef.current.getActiveNarrator();
-		const targetObj = updatedScene.sceneData.objects.find((o) => o.objectId === objectId) ?? obj;
-		let outcome = `You ${action} the ${targetObj.name}. ${targetObj.description}`;
-		if (narrateFn) {
-			try {
-				const nearby = this.describeObjectsNearby(scene, targetObj.position);
-				const stateNote = sceneChanged
-					? `The object's state changed to: ${(targetObj.metadata.state as string) ?? "unknown"}.`
-					: "";
-				const prompt = `You are narrating a 3D world interaction.
-Object: "${targetObj.name}" (type: ${targetObj.type})
-Description: ${targetObj.description}
-${targetObj.interactionHint ? `Hint: ${targetObj.interactionHint}` : ""}
-User action: ${action}
-${stateNote}
-${nearby ? `Nearby: ${nearby}` : ""}
-
-Write 2-3 vivid sentences narrating what happens when the user performs this action. Be immersive and specific.`;
-				outcome = await narrateFn(prompt);
-			} catch {
-				// fall through to default outcome already set above
-			}
-		}
-
-		return { sceneId, objectId, action, outcome, sceneChanged };
-	}
-
 	// ── Private helpers ──────────────────────────────────────────────────────
 
 	private async requireScene(sceneId: string): Promise<Scene> {
 		const scene = await this.repo.findById(sceneId);
 		if (!scene) throw new Error(`Scene not found: ${sceneId}`);
 		return scene;
-	}
-
-	private describeObjectsNearby(scene: Scene, position: { x: number; y: number; z: number }): string {
-		const nearby = scene.sceneData.objects
-			.filter((o) => {
-				const dx = o.position.x - position.x;
-				const dz = o.position.z - position.z;
-				return Math.sqrt(dx * dx + dz * dz) < 20;
-			})
-			.map((o) => o.name);
-		if (nearby.length === 0) return "";
-		return `Nearby: ${nearby.join(", ")}.`;
 	}
 }

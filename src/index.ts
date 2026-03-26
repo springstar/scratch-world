@@ -59,7 +59,7 @@ async function main() {
 	};
 
 	// ── Scene + Session managers ───────────────────────────────────────────
-	const sceneManager = new SceneManager(providerRegistryRef, narratorRegistryRef, sceneRepo);
+	const sceneManager = new SceneManager(providerRegistryRef, sceneRepo);
 
 	// ── Channels ───────────────────────────────────────────────────────────
 	const gateway = new ChannelGateway();

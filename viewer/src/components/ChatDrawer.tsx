@@ -4,6 +4,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "agent";
   text: string;
+  images?: string[]; // data URLs for display
   isStreaming?: boolean;
 }
 
@@ -13,13 +14,22 @@ export interface SceneCard {
   viewUrl: string;
 }
 
+// Image attachment pending send
+interface PendingImage {
+  dataUrl: string;   // for preview display
+  base64: string;    // raw base64 (no prefix)
+  mimeType: string;
+}
+
 interface Props {
   messages: ChatMessage[];
   sceneCards: SceneCard[];
   isTyping: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, images?: PendingImage[]) => void;
   onSceneSelect: (card: SceneCard) => void;
 }
+
+export type { PendingImage };
 
 type DrawerState = "peek" | "open";
 
@@ -62,8 +72,10 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
   const [state, setState] = useState<DrawerState>("peek");
   const [draft, setDraft] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-open when a new message arrives
   useEffect(() => {
@@ -82,12 +94,13 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
 
   const handleSend = useCallback(() => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text && pendingImages.length === 0) return;
     setDraft("");
-    onSend(text);
+    setPendingImages([]);
+    onSend(text, pendingImages.length > 0 ? pendingImages : undefined);
     setState("open");
     if (inputRef.current) inputRef.current.style.height = "40px";
-  }, [draft, onSend]);
+  }, [draft, pendingImages, onSend]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -106,10 +119,56 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, []);
 
+  // Convert a File/Blob to PendingImage
+  const fileToImage = useCallback(async (file: File): Promise<PendingImage | null> => {
+    if (!file.type.startsWith("image/")) return null;
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        // dataUrl = "data:<mimeType>;base64,<base64>"
+        const base64 = dataUrl.split(",")[1] ?? "";
+        resolve({ dataUrl, base64, mimeType: file.type });
+      };
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  // Paste handler — capture pasted images
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter((item) => item.kind === "file" && item.type.startsWith("image/"));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    const results = await Promise.all(
+      imageItems.map((item) => {
+        const file = item.getAsFile();
+        return file ? fileToImage(file) : Promise.resolve(null);
+      }),
+    );
+    const valid = results.filter((r): r is PendingImage => r !== null);
+    if (valid.length > 0) setPendingImages((prev) => [...prev, ...valid]);
+  }, [fileToImage]);
+
+  // File input change handler
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    const results = await Promise.all(files.map(fileToImage));
+    const valid = results.filter((r): r is PendingImage => r !== null);
+    if (valid.length > 0) setPendingImages((prev) => [...prev, ...valid]);
+    // Reset file input so the same file can be re-selected
+    e.target.value = "";
+  }, [fileToImage]);
+
+  const removeImage = useCallback((idx: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
   const isOpen = state === "open";
   const drawerHeight = isOpen ? `${OPEN_HEIGHT_VH}vh` : `${PEEK_HEIGHT}px`;
   const lastMsg = messages[messages.length - 1];
-  const canSend = !!draft.trim();
+  const canSend = !!(draft.trim() || pendingImages.length > 0);
 
   const dotColors = ["#a78bfa", "#818cf8", "#60a5fa"];
 
@@ -235,6 +294,19 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                   animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both",
                 }}
               >
+                {/* Image thumbnails (user messages) */}
+                {msg.images && msg.images.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4, justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
+                    {msg.images.map((src, i) => (
+                      <img
+                        key={i}
+                        src={src}
+                        alt=""
+                        style={{ maxWidth: 140, maxHeight: 100, borderRadius: 8, objectFit: "cover", border: "1px solid rgba(140,100,255,0.3)" }}
+                      />
+                    ))}
+                  </div>
+                )}
                 <div
                   style={{
                     background:
@@ -254,6 +326,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                       msg.role === "user"
                         ? "0 2px 16px rgba(100,60,220,0.3)"
                         : "none",
+                    display: msg.text ? undefined : "none",
                   }}
                 >
                   {msg.isStreaming ? (
@@ -365,67 +438,143 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               flexShrink: 0,
               padding: "8px 12px 12px",
               display: "flex",
-              gap: 8,
-              alignItems: "flex-end",
+              flexDirection: "column",
+              gap: 6,
               borderTop: "1px solid rgba(120,90,200,0.12)",
             }}
           >
-            <textarea
-              ref={inputRef}
-              value={draft}
-              onChange={handleInput}
-              onKeyDown={handleKeyDown}
-              onFocus={() => setInputFocused(true)}
-              onBlur={() => setInputFocused(false)}
-              placeholder="描述一个场景…"
-              rows={1}
-              style={{
-                flex: 1,
-                background: "rgba(255,255,255,0.055)",
-                border: inputFocused
-                  ? "1px solid rgba(140,100,255,0.55)"
-                  : "1px solid rgba(140,100,255,0.14)",
-                borderRadius: 12,
-                padding: "10px 14px",
-                color: "#e8e0ff",
-                fontSize: 14,
-                fontFamily: "system-ui, -apple-system, sans-serif",
-                resize: "none",
-                outline: "none",
-                height: 40,
-                minHeight: 40,
-                maxHeight: 120,
-                lineHeight: 1.4,
-                overflowY: "auto",
-                boxShadow: inputFocused ? "0 0 0 3px rgba(120,80,240,0.18)" : "none",
-                transition: "border-color 0.2s, box-shadow 0.2s",
-              }}
-            />
-            <button
-              onClick={handleSend}
-              disabled={!canSend}
-              style={{
-                flexShrink: 0,
-                width: 40,
-                height: 40,
-                borderRadius: "50%",
-                border: "none",
-                background: canSend
-                  ? "linear-gradient(135deg, #7c4dff 0%, #448aff 100%)"
-                  : "rgba(80,70,110,0.35)",
-                cursor: canSend ? "pointer" : "default",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                boxShadow: canSend ? "0 2px 16px rgba(100,60,240,0.45), 0 0 0 1px rgba(140,100,255,0.3)" : "none",
-                transition: "background 0.2s, box-shadow 0.2s",
-              }}
-            >
-              <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="white" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <line x1="9" y1="14" x2="9" y2="4" />
-                <polyline points="4,9 9,4 14,9" />
-              </svg>
-            </button>
+            {/* Pending image previews */}
+            {pendingImages.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 0" }}>
+                {pendingImages.map((img, i) => (
+                  <div key={i} style={{ position: "relative" }}>
+                    <img
+                      src={img.dataUrl}
+                      alt=""
+                      style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover", border: "1px solid rgba(140,100,255,0.35)", display: "block" }}
+                    />
+                    <button
+                      onClick={() => removeImage(i)}
+                      style={{
+                        position: "absolute",
+                        top: -6,
+                        right: -6,
+                        width: 18,
+                        height: 18,
+                        borderRadius: "50%",
+                        background: "rgba(30,20,50,0.9)",
+                        border: "1px solid rgba(180,140,255,0.4)",
+                        color: "rgba(220,200,255,0.9)",
+                        fontSize: 11,
+                        lineHeight: 1,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: 0,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: "none" }}
+                onChange={handleFileChange}
+              />
+
+              {/* Upload button */}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                title="上传图片"
+                style={{
+                  flexShrink: 0,
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
+                  border: "1px solid rgba(140,100,255,0.25)",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "rgba(180,150,255,0.75)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "background 0.2s, border-color 0.2s",
+                }}
+              >
+                {/* Paperclip icon */}
+                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+
+              <textarea
+                ref={inputRef}
+                value={draft}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                onFocus={() => setInputFocused(true)}
+                onBlur={() => setInputFocused(false)}
+                placeholder="描述一个场景，或粘贴图片…"
+                rows={1}
+                style={{
+                  flex: 1,
+                  background: "rgba(255,255,255,0.055)",
+                  border: inputFocused
+                    ? "1px solid rgba(140,100,255,0.55)"
+                    : "1px solid rgba(140,100,255,0.14)",
+                  borderRadius: 12,
+                  padding: "10px 14px",
+                  color: "#e8e0ff",
+                  fontSize: 14,
+                  fontFamily: "system-ui, -apple-system, sans-serif",
+                  resize: "none",
+                  outline: "none",
+                  height: 40,
+                  minHeight: 40,
+                  maxHeight: 120,
+                  lineHeight: 1.4,
+                  overflowY: "auto",
+                  boxShadow: inputFocused ? "0 0 0 3px rgba(120,80,240,0.18)" : "none",
+                  transition: "border-color 0.2s, box-shadow 0.2s",
+                }}
+              />
+              <button
+                onClick={handleSend}
+                disabled={!canSend}
+                style={{
+                  flexShrink: 0,
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
+                  border: "none",
+                  background: canSend
+                    ? "linear-gradient(135deg, #7c4dff 0%, #448aff 100%)"
+                    : "rgba(80,70,110,0.35)",
+                  cursor: canSend ? "pointer" : "default",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: canSend ? "0 2px 16px rgba(100,60,240,0.45), 0 0 0 1px rgba(140,100,255,0.3)" : "none",
+                  transition: "background 0.2s, box-shadow 0.2s",
+                }}
+              >
+                <svg width={18} height={18} viewBox="0 0 18 18" fill="none" stroke="white" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="9" y1="14" x2="9" y2="4" />
+                  <polyline points="4,9 9,4 14,9" />
+                </svg>
+              </button>
+            </div>
           </div>
         </>
       )}
