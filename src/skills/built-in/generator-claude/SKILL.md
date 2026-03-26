@@ -1,25 +1,9 @@
 # generator-claude
 
-## create_world — AI-generated 3D Scene (HunyuanWorld)
-
-Use `create_world` for **indoor scenes, rooms, dungeons, halls, gardens** — any single
-explorable space needing photorealistic geometry and textures.
-
-- `create_city`  → outdoor settlements (roads, buildings, NPCs)
-- `create_world` → single indoor/outdoor explorable space (AI-generated geometry)
-- `create_scene` → everything else
-
-Parameters: `prompt` (describe the space in detail), `title` (optional)
-
-Note: Generation is queued on HuggingFace ZeroGPU — typically 30–120 s.
-
----
-
 ## create_city — Procedural City Generation
 
 Use `create_city` when the user asks for a **city, town, village, settlement, or commercial district**.
-Use `create_world` for **indoor rooms, dungeons, halls, and single explorable spaces**.
-Use `create_scene` for nature landscapes, sports fields, abstract scenes, or anything else.
+Use `create_scene` for nature landscapes, sports fields, abstract scenes, rooms, or anything else.
 
 Parameters:
 - `prompt`  — describe theme and atmosphere

@@ -1,27 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Scene, SceneData } from "../src/scene/types.js";
-
-// ── @gradio/client mock (hoisted) ─────────────────────────────────────────────
-// The mock factory uses a module-level variable so individual tests can control
-// whether the client succeeds or fails.
-
-let gradioShouldFail = false;
-let gradioFakeGlbUrl = "https://hunyuan.example.com/output.glb";
-
-vi.mock("@gradio/client", () => ({
-	Client: {
-		connect: vi.fn(async () => {
-			if (gradioShouldFail) {
-				throw new Error("connection refused");
-			}
-			return {
-				predict: vi.fn(async () => ({
-					data: [{ url: gradioFakeGlbUrl }],
-				})),
-			};
-		}),
-	},
-}));
 
 // ── node:fs/promises mock (hoisted) ──────────────────────────────────────────
 vi.mock("node:fs/promises", () => ({
@@ -31,7 +9,6 @@ vi.mock("node:fs/promises", () => ({
 
 // ── Imports after mocks ───────────────────────────────────────────────────────
 import { createCityTool } from "../src/agent/tools/create-city.js";
-import { createWorldTool } from "../src/agent/tools/create-world.js";
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
@@ -192,144 +169,5 @@ describe("createCityTool", () => {
 	it("tool name is 'create_city'", () => {
 		const tool = createCityTool(sceneManager as never, ownerId, viewerUrl);
 		expect(tool.name).toBe("create_city");
-	});
-});
-
-// ── create-world tool ─────────────────────────────────────────────────────────
-
-describe("createWorldTool", () => {
-	let sceneManager: ReturnType<typeof makeSceneManager>;
-
-	beforeEach(() => {
-		gradioShouldFail = false;
-		gradioFakeGlbUrl = "https://hunyuan.example.com/output.glb";
-		delete process.env.HF_TOKEN;
-		sceneManager = makeSceneManager();
-	});
-
-	it("tool name is 'create_world'", () => {
-		const tool = createWorldTool(sceneManager as never, ownerId, viewerUrl);
-		expect(tool.name).toBe("create_world");
-	});
-
-	describe("GLB path (HunyuanWorld succeeds)", () => {
-		it("calls createScene with sceneData containing a single GLB object", async () => {
-			// Mock global fetch so no real HTTP request is made
-			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-				ok: true,
-				arrayBuffer: () => Promise.resolve(Buffer.from("FAKE_GLB").buffer),
-			} as Response);
-
-			const tool = createWorldTool(sceneManager as never, ownerId, viewerUrl);
-			await tool.execute("run-glb", { prompt: "a dungeon room" });
-
-			expect(sceneManager.createScene).toHaveBeenCalledTimes(1);
-			const [, , , sd] = sceneManager.createScene.mock.calls[0] as [string, string, string | undefined, SceneData];
-			expect(sd).toBeDefined();
-			expect(sd.objects.length).toBe(1);
-			expect(sd.objects[0].metadata.modelUrl).toBeTruthy();
-
-			vi.restoreAllMocks();
-		});
-
-		it("GLB object modelUrl starts with /uploads/worlds/", async () => {
-			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-				ok: true,
-				arrayBuffer: () => Promise.resolve(Buffer.from("GLB").buffer),
-			} as Response);
-
-			const tool = createWorldTool(sceneManager as never, ownerId, viewerUrl);
-			await tool.execute("run-glb-url", { prompt: "a hall" });
-
-			const [, , , sd] = sceneManager.createScene.mock.calls[0] as [string, string, string | undefined, SceneData];
-			expect(sd.objects[0].metadata.modelUrl as string).toMatch(/^\/uploads\/worlds\//);
-
-			vi.restoreAllMocks();
-		});
-
-		it("result JSON includes glbUrl", async () => {
-			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-				ok: true,
-				arrayBuffer: () => Promise.resolve(Buffer.from("GLB").buffer),
-			} as Response);
-
-			const scene = makeScene({ sceneId: "glb-scene", title: "Dungeon" });
-			const sm = makeSceneManager(scene);
-			const tool = createWorldTool(sm as never, ownerId, viewerUrl);
-
-			const result = await tool.execute("run-glb-json", { prompt: "dungeon", title: "Dungeon" });
-			const parsed = JSON.parse((result.content[0] as { type: string; text: string }).text);
-
-			expect(parsed.sceneId).toBe("glb-scene");
-			expect(parsed.glbUrl).toMatch(/^\/uploads\/worlds\//);
-
-			vi.restoreAllMocks();
-		});
-
-		it("GLB path sceneData has two viewpoints", async () => {
-			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-				ok: true,
-				arrayBuffer: () => Promise.resolve(Buffer.from("GLB").buffer),
-			} as Response);
-
-			const tool = createWorldTool(sceneManager as never, ownerId, viewerUrl);
-			await tool.execute("run-glb-vp", { prompt: "a hall" });
-
-			const [, , , sd] = sceneManager.createScene.mock.calls[0] as [string, string, string | undefined, SceneData];
-			expect(sd.viewpoints.length).toBe(2);
-
-			vi.restoreAllMocks();
-		});
-	});
-
-	describe("fallback path (HunyuanWorld fails)", () => {
-		beforeEach(() => {
-			gradioShouldFail = true;
-
-			// Make sleep() a no-op so retries don't stall the test suite
-			vi.spyOn(globalThis, "setTimeout").mockImplementation((fn: TimerHandler) => {
-				if (typeof fn === "function") fn();
-				return 0 as unknown as ReturnType<typeof globalThis.setTimeout>;
-			});
-		});
-
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
-
-		it("falls back to createScene without sceneData when all attempts fail", async () => {
-			const scene = makeScene({ sceneId: "fallback-scene" });
-			const sm = makeSceneManager(scene);
-			const tool = createWorldTool(sm as never, ownerId, viewerUrl);
-
-			const result = await tool.execute("run-fallback", { prompt: "a garden" });
-
-			expect(sm.createScene).toHaveBeenCalledTimes(1);
-			const [, , , sd] = sm.createScene.mock.calls[0] as [string, string, string | undefined, SceneData | undefined];
-			expect(sd).toBeUndefined();
-
-			const parsed = JSON.parse((result.content[0] as { type: string; text: string }).text);
-			expect(parsed.fallbackNote).toBeTruthy();
-		});
-
-		it("returns sceneId and title from the fallback scene", async () => {
-			const scene = makeScene({ sceneId: "fb-scene", title: "A Garden" });
-			const sm = makeSceneManager(scene);
-			const tool = createWorldTool(sm as never, ownerId, viewerUrl);
-
-			const result = await tool.execute("run-fb2", { prompt: "a garden", title: "A Garden" });
-			const parsed = JSON.parse((result.content[0] as { type: string; text: string }).text);
-			expect(parsed.sceneId).toBe("fb-scene");
-			expect(parsed.title).toBe("A Garden");
-		});
-
-		it("fallback result details includes fallbackNote", async () => {
-			const scene = makeScene();
-			const sm = makeSceneManager(scene);
-			const tool = createWorldTool(sm as never, ownerId, viewerUrl);
-
-			const result = await tool.execute("run-fb3", { prompt: "test" });
-			expect(result.details).toHaveProperty("fallbackNote");
-		});
 	});
 });
