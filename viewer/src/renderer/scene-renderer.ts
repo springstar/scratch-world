@@ -1086,6 +1086,20 @@ export class SceneRenderer {
   // which accumulates floating-point residual and causes continuous camera drift.
   private controlsNeedsUpdate = false;
 
+  // ── WASD keyboard movement ────────────────────────────────────────────────
+  private keysDown = new Set<string>();
+  private readonly wasdSpeed = 10; // units per second
+  private readonly wasdFwd   = new THREE.Vector3();
+  private readonly wasdRight = new THREE.Vector3();
+  private readonly wasdUp_   = new THREE.Vector3(0, 1, 0);
+  private readonly wasdMove  = new THREE.Vector3();
+  private readonly onKeyDown = (e: KeyboardEvent) => {
+    this.keysDown.add(e.key.toLowerCase());
+  };
+  private readonly onKeyUp = (e: KeyboardEvent) => {
+    this.keysDown.delete(e.key.toLowerCase());
+  };
+
   // ── Demand rendering (R3F-style frameloop:"demand") ──────────────────────
   // framesDue > 0 → render this frame and decrement.
   // Always render when animSystems are active (animated scenes like Water).
@@ -1132,6 +1146,9 @@ export class SceneRenderer {
     // each frame until damping fully settles. Without this guard, update() runs every
     // frame in the demand-render loop and accumulated float residual causes camera drift.
     this.controls.addEventListener("start",  () => { this.controlsNeedsUpdate = true; });
+
+    window.addEventListener("keydown", this.onKeyDown);
+    window.addEventListener("keyup",   this.onKeyUp);
 
     // Lights — will be overridden by loadScene() env settings
     this.hemi = new THREE.HemisphereLight(0x87ceeb, 0x4a7c59, 0.6);
@@ -1930,6 +1947,9 @@ export class SceneRenderer {
     this.disposed = true;
     try { this.renderer.setAnimationLoop(null); } catch (_) { /* not yet initialized */ }
     if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
+    window.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("keyup",   this.onKeyUp);
+    this.keysDown.clear();
     this.controls.dispose();
     try { this.renderer.dispose(); } catch (_) { /* backend may be uninitialized */ }
   }
@@ -2137,6 +2157,35 @@ export class SceneRenderer {
     this.renderer.setAnimationLoop(async (now: number) => {
       const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
       this.lastFrameTime = now;
+
+      // ── WASD movement ─────────────────────────────────────────────────────
+      if (this.keysDown.size > 0 && !this.transitioning && delta > 0) {
+        const activeEl = document.activeElement;
+        const inputActive =
+          activeEl instanceof HTMLInputElement ||
+          activeEl instanceof HTMLTextAreaElement;
+        if (!inputActive) {
+          this.camera.getWorldDirection(this.wasdFwd);
+          this.wasdFwd.y = 0;
+          if (this.wasdFwd.lengthSq() > 0.0001) this.wasdFwd.normalize();
+          this.wasdRight.crossVectors(this.wasdFwd, this.wasdUp_).normalize();
+
+          const sprint = this.keysDown.has("shift") ? 3 : 1;
+          const spd = sprint * this.wasdSpeed * Math.min(delta, 0.1);
+          this.wasdMove.set(0, 0, 0);
+          if (this.keysDown.has("w") || this.keysDown.has("arrowup"))    this.wasdMove.addScaledVector(this.wasdFwd,  spd);
+          if (this.keysDown.has("s") || this.keysDown.has("arrowdown"))  this.wasdMove.addScaledVector(this.wasdFwd, -spd);
+          if (this.keysDown.has("a") || this.keysDown.has("arrowleft"))  this.wasdMove.addScaledVector(this.wasdRight, -spd);
+          if (this.keysDown.has("d") || this.keysDown.has("arrowright")) this.wasdMove.addScaledVector(this.wasdRight,  spd);
+
+          if (this.wasdMove.lengthSq() > 0) {
+            this.camera.position.add(this.wasdMove);
+            this.controls.target.add(this.wasdMove);
+            this.controlsNeedsUpdate = true;
+            this.invalidate(1);
+          }
+        }
+      }
 
       // Smooth camera transition. Camera position is lerped directly, then
       // controls.update() syncs OrbitControls' internal spherical state.
