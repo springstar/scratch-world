@@ -33,12 +33,19 @@ export class SceneManager {
 		} else {
 			// Provider path
 			const result = await this.providerRegistryRef.current.getActiveProvider().generate(prompt);
+			const sceneId = randomUUID();
+			// Some providers (e.g. Marble proxy mode) need the sceneId to build the
+			// splatUrl — they return a splatUrlTemplate with a "{sceneId}" placeholder.
+			let sceneData = result.sceneData;
+			if (result.splatUrlTemplate) {
+				sceneData = { ...sceneData, splatUrl: result.splatUrlTemplate.replace("{sceneId}", sceneId) };
+			}
 			scene = {
-				sceneId: randomUUID(),
+				sceneId,
 				ownerId,
 				title: title ?? prompt.slice(0, 60),
 				description: prompt,
-				sceneData: result.sceneData,
+				sceneData,
 				providerRef: result.ref,
 				version: 1,
 				createdAt: now,

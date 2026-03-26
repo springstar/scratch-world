@@ -38,7 +38,10 @@ async function main() {
 	const marbleKey = process.env.MARBLE_API_KEY;
 
 	const allProviders: SceneRenderProvider[] = [new StubProvider(), new LlmProvider()];
-	if (marbleKey) allProviders.push(new MarbleProvider(marbleKey));
+	if (marbleKey) {
+		const spzMode = (process.env.SPZ_MODE ?? "proxy") as "proxy" | "local";
+		allProviders.push(new MarbleProvider(marbleKey, projectRoot, spzMode));
+	}
 
 	const defaultProvider = process.env.SCENE_PROVIDER ?? "stub";
 	const providerRegistryRef = {
@@ -88,6 +91,7 @@ async function main() {
 		providerRegistryRef,
 		narratorRegistryRef,
 		projectRoot,
+		marbleApiKey: marbleKey,
 	});
 
 	// ── Start ──────────────────────────────────────────────────────────────

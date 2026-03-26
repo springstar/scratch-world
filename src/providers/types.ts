@@ -15,6 +15,13 @@ export interface ProviderResult {
 	viewUrl: string;
 	thumbnailUrl?: string;
 	sceneData: SceneData; // provider-parsed, provider-agnostic scene graph
+	/**
+	 * When set, SceneManager will replace the literal string "{sceneId}" in this
+	 * template with the newly-assigned sceneId and store the result as
+	 * sceneData.splatUrl.  Use this when the splatUrl path cannot be known until
+	 * the scene has been assigned its ID (e.g. the proxy route /splat/{sceneId}).
+	 */
+	splatUrlTemplate?: string;
 }
 
 export interface ProviderDescription {

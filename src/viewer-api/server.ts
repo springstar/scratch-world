@@ -13,6 +13,7 @@ import { chatRoute } from "./routes/chat.js";
 import { generatorsRoute } from "./routes/generators.js";
 import { interactRoute } from "./routes/interact.js";
 import { scenesRoute } from "./routes/scenes.js";
+import { splatProxyRoute } from "./routes/splat-proxy.js";
 
 export interface ViewerApiOptions {
 	port: number;
@@ -22,6 +23,7 @@ export interface ViewerApiOptions {
 	providerRegistryRef: { current: SceneProviderRegistry };
 	narratorRegistryRef: { current: NarratorRegistry };
 	projectRoot: string;
+	marbleApiKey?: string;
 }
 
 export interface ViewerApiServer {
@@ -30,8 +32,16 @@ export interface ViewerApiServer {
 }
 
 export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
-	const { port, sceneManager, sessionManager, skillLoader, providerRegistryRef, narratorRegistryRef, projectRoot } =
-		opts;
+	const {
+		port,
+		sceneManager,
+		sessionManager,
+		skillLoader,
+		providerRegistryRef,
+		narratorRegistryRef,
+		projectRoot,
+		marbleApiKey,
+	} = opts;
 	const bus = new RealtimeBus();
 
 	const app = new Hono();
@@ -46,12 +56,13 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 
 	app.options("*", (c) => c.body(null, 204));
 
-	// Static file serving for uploaded panoramas
+	// Static file serving for uploaded panoramas and locally-cached splats
 	app.use("/uploads/*", serveStatic({ root: projectRoot }));
 
 	app.route("/scenes", scenesRoute(sceneManager, projectRoot));
 	app.route("/interact", interactRoute(sessionManager, bus));
 	app.route("/chat", chatRoute(sessionManager, bus));
+	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));

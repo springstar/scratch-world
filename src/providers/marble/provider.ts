@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ProviderRef, SceneData } from "../../scene/types.js";
 import type {
 	EditOptions,
@@ -95,12 +97,14 @@ async function pollOperation(apiKey: string, operationId: string): Promise<Marbl
 // Marble returns a navigable 3D world, not a structured object graph.
 // We synthesise a minimal SceneData so the rest of the system (agent tools,
 // viewer API) has something to work with.  The real visual content lives at
-// world_marble_url and is rendered by the Marble viewer iframe.
+// world_marble_url and is rendered by the Marble viewer iframe,
+// OR via SplatViewer when a resolved splatUrl is provided.
 
-function worldToSceneData(world: MarbleWorld, prompt: string): SceneData {
+function worldToSceneData(world: MarbleWorld, prompt: string, splatUrl?: string): SceneData {
 	const caption = world.assets?.caption ?? prompt;
 
 	return {
+		splatUrl,
 		environment: {
 			skybox: "clear_day",
 			timeOfDay: "noon",
@@ -128,6 +132,8 @@ function worldToSceneData(world: MarbleWorld, prompt: string): SceneData {
 					marbleUrl: world.world_marble_url,
 					thumbnailUrl: world.assets?.thumbnail_url ?? null,
 					panoUrl: world.assets?.imagery?.pano_url ?? null,
+					// Kept for the /splat/:sceneId proxy route — never sent to browser
+					spzUrls: world.assets?.splats?.spz_urls ?? null,
 				},
 			},
 		],
@@ -136,13 +142,38 @@ function worldToSceneData(world: MarbleWorld, prompt: string): SceneData {
 
 // ── MarbleProvider ────────────────────────────────────────────────────────────
 
+/**
+ * SPZ_MODE controls how Marble splat files are served to the browser.
+ *
+ * IMPORTANT — AUTH PROBLEM:
+ *   Marble's spz_urls[] require the WLT-Api-Key header.  That key must never
+ *   reach the browser.  Two strategies are supported:
+ *
+ *   SPZ_MODE=proxy  (default)
+ *     A server-side proxy route GET /splat/:sceneId fetches the SPZ with the
+ *     API key and streams it to the browser without exposing the key.
+ *     Pros: no extra disk space, URL is always fresh.
+ *     Cons: every page load re-downloads from Marble CDN; no offline cache.
+ *
+ *   SPZ_MODE=local
+ *     At generation time the provider downloads spz_urls[0] and saves it to
+ *     uploads/splats/{sceneId}.spz, then sets splatUrl to the local path.
+ *     Pros: served directly from local static file server, no repeat CDN cost.
+ *     Cons: consumes disk; large files increase generation time slightly.
+ */
+type SpzMode = "proxy" | "local";
+
 export class MarbleProvider implements SceneRenderProvider {
 	readonly name = "marble";
 
 	private readonly apiKey: string;
+	private readonly projectRoot: string;
+	private readonly spzMode: SpzMode;
 
-	constructor(apiKey: string) {
+	constructor(apiKey: string, projectRoot: string, spzMode: SpzMode = "proxy") {
 		this.apiKey = apiKey;
+		this.projectRoot = projectRoot;
+		this.spzMode = spzMode;
 	}
 
 	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {
@@ -170,6 +201,42 @@ export class MarbleProvider implements SceneRenderProvider {
 
 		console.log(`[MarbleProvider] world ready: ${world.world_id} → ${world.world_marble_url}`);
 
+		// ── Resolve splatUrl based on SPZ_MODE ────────────────────────────────
+		let splatUrl: string | undefined;
+		const spzUrls = world.assets?.splats?.spz_urls;
+
+		// splatUrlTemplate is set when the URL depends on the sceneId (proxy mode).
+		// SceneManager will replace "{sceneId}" after the scene record is created.
+		let splatUrlTemplate: string | undefined;
+
+		if (spzUrls && spzUrls.length > 0) {
+			if (this.spzMode === "local") {
+				// Download and cache the SPZ file server-side so the static file
+				// server can serve it without ever exposing the WLT-Api-Key.
+				const splatsDir = join(this.projectRoot, "uploads", "splats");
+				await mkdir(splatsDir, { recursive: true });
+				const fileName = `${world.world_id}.spz`;
+				const localPath = join(splatsDir, fileName);
+
+				console.log(`[MarbleProvider] downloading SPZ to ${localPath}…`);
+				const res = await fetch(spzUrls[0], { headers: { "WLT-Api-Key": this.apiKey } });
+				if (!res.ok) {
+					console.warn(`[MarbleProvider] SPZ download failed (${res.status}) — falling back to proxy mode`);
+					splatUrlTemplate = "/splat/{sceneId}";
+				} else {
+					const buf = await res.arrayBuffer();
+					await writeFile(localPath, Buffer.from(buf));
+					splatUrl = `/uploads/splats/${fileName}`;
+					console.log(`[MarbleProvider] SPZ cached locally → ${splatUrl}`);
+				}
+			} else {
+				// proxy mode: GET /splat/:sceneId adds WLT-Api-Key server-side.
+				// The sceneId is only known after SceneManager creates the record,
+				// so we return a template that SceneManager resolves.
+				splatUrlTemplate = "/splat/{sceneId}";
+			}
+		}
+
 		const ref: ProviderRef = {
 			provider: "marble",
 			assetId: world.world_id,
@@ -181,7 +248,8 @@ export class MarbleProvider implements SceneRenderProvider {
 			ref,
 			viewUrl: world.world_marble_url,
 			thumbnailUrl: world.assets?.thumbnail_url ?? undefined,
-			sceneData: worldToSceneData(world, prompt),
+			sceneData: worldToSceneData(world, prompt, splatUrl),
+			splatUrlTemplate,
 		};
 	}
 

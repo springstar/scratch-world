@@ -51,6 +51,7 @@ Tool Execution                 Scene CRUD
 | **Scene Types** | `src/scene/types.ts` | Core domain interfaces (Scene, SceneData, SceneObject, etc.) | Type definitions |
 | **Scene Schema** | `src/scene/schema.ts` | Typebox validation schemas for API | Schema validators |
 | **Marble Provider** | `src/providers/marble/provider.ts` | WorldLabs Marble 3D generation backend | `MarbleProvider` |
+| **Splat Proxy Route** | `src/viewer-api/routes/splat-proxy.ts` | Proxy GET /splat/:sceneId to serve SPZ files with API key server-side | `splatProxyRoute()` |
 | **Stub Provider** | `src/providers/stub/provider.ts` | Mock provider with static fixtures (local dev) | `StubProvider` |
 | **Storage Repos** | `src/storage/*.ts` | Scene and Session persistence | `SceneRepository`, `SessionRepository` |
 | **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat | Hono app |
@@ -401,7 +402,48 @@ EnvironmentConfig = {
 - `POST /scenes/:sceneId/panorama` — Upload or set equirectangular skybox URL
 - `POST /interact` — Submit interaction (JSON body: `{ sceneId, objectId, action }`)
 - `POST /chat` — Web chat endpoint (JSON body: `{ sessionId, userId, text }`) → returns `{ ok: true }`, streams via WS
+- `GET /splat/:sceneId` — SPZ proxy: fetches Marble SPZ with API key server-side, streams to browser (see auth note below)
 - `GET /` — Health check / serve viewer app
+
+### ⚠️ CRITICAL: Marble SPZ Authentication
+
+Marble's `spz_urls[]` (Gaussian splat files) require the `WLT-Api-Key` header.
+**The API key must NEVER be sent to the browser.**
+
+Two strategies are implemented (controlled by `SPZ_MODE` env var):
+
+#### `SPZ_MODE=proxy` (default)
+The backend route `GET /splat/:sceneId` fetches the SPZ from Marble's CDN with the
+API key added server-side, then streams the binary to the browser without exposing the key.
+
+```
+Browser → GET /splat/<sceneId>
+Backend → GET <spz_url> (with WLT-Api-Key header)
+Backend → streams ArrayBuffer back to browser
+```
+
+- `spzUrls` are stored in `scene.sceneData.objects[0].metadata.spzUrls` (backend only, not serialised to browser response)
+- `sceneData.splatUrl` is set to `/splat/<sceneId>` after the scene is assigned an ID (SceneManager patches the `splatUrlTemplate` returned by `MarbleProvider.generate()`)
+
+#### `SPZ_MODE=local`
+At generation time the provider downloads `spz_urls[0]` with the API key and saves it to
+`uploads/splats/<worldId>.spz`. The static file server at `/uploads/*` serves it directly.
+
+```
+MarbleProvider.generate() → downloads SPZ → uploads/splats/<worldId>.spz
+Browser → GET /uploads/splats/<worldId>.spz (no auth needed)
+```
+
+- Falls back to `proxy` mode automatically if the download fails.
+- Pros: served without repeated CDN round-trips; survives Marble CDN URL expiry.
+- Cons: consumes local disk space; increases generation time for large scenes.
+
+#### Viewer routing (App.tsx)
+```
+sceneData.splatUrl present        → SplatViewer (Gaussian splat, @sparkjsdev/spark)
+providerRef.provider === "marble" → MarbleViewer (iframe)
+else                              → ViewerCanvas (Three.js WebGPU renderer)
+```
 
 ### WebSocket
 
@@ -449,6 +491,7 @@ type RealtimeEvent =
 | `SCENE_PROVIDER` | `stub` | `marble`, `llm`, or `stub` |
 | `MARBLE_API_KEY` | — | Required when `PROVIDER=marble` |
 | `MARBLE_API_URL` | — | Marble endpoint (if custom) |
+| `SPZ_MODE` | `proxy` | `proxy` (stream via /splat/:sceneId) or `local` (cache to uploads/splats/) — see auth note above |
 | `DATABASE_URL` | `sqlite:./dev.db` | `sqlite:<path>` or `postgres://...` |
 | `VIEWER_API_PORT` | `3001` | Viewer API listen port |
 | `VIEWER_BASE_URL` | `http://localhost:5173` | Public URL for viewer links |
