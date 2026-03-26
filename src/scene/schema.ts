@@ -50,4 +50,9 @@ export const SceneDataSchema = Type.Object({
 	environment: EnvironmentConfigSchema,
 	viewpoints: Type.Array(ViewpointSchema),
 	sceneCode: Type.Optional(Type.String()),
+	splatUrl: Type.Optional(
+		Type.String({
+			description: "URL to a Gaussian splat file (.spz/.ply/.splat) — activates SplatViewer in the browser",
+		}),
+	),
 });

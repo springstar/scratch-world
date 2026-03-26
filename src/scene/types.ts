@@ -38,6 +38,7 @@ export interface SceneData {
 	environment: EnvironmentConfig;
 	viewpoints: Viewpoint[];
 	sceneCode?: string;
+	splatUrl?: string; // URL to a Gaussian splat file (.spz / .ply / .splat) — activates SplatViewer
 }
 
 // Opaque per-provider pointer to the generated asset

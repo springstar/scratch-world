@@ -354,7 +354,49 @@ Any object can load a real 3D model by setting `metadata.modelUrl` to a GLTF/GLB
 
 ---
 
-## Post-Processing Effects (Path B)
+## Gaussian Splat Rendering (Path D: splatUrl)
+
+Set `sceneData.splatUrl` to load and display a pre-captured Gaussian splat file in the browser. The viewer will use a dedicated WebGL-based `SplatViewer` component powered by [spark.js](https://github.com/sparkjsdev/spark) instead of the standard Three.js renderer.
+
+**Supported formats:** `.spz`, `.ply`, `.splat`, `.ksplat`
+
+```json
+{
+  "sceneData": {
+    "splatUrl": "https://example.com/scene.spz",
+    "objects": [],
+    "environment": {},
+    "viewpoints": [
+      {
+        "viewpointId": "vp_default",
+        "name": "Default view",
+        "position": { "x": 0, "y": 0, "z": 3 },
+        "lookAt": { "x": 0, "y": 0, "z": 0 }
+      }
+    ]
+  }
+}
+```
+
+**When to use:**
+- Displaying photogrammetry captures or NeRF-derived Gaussian splats
+- Showcasing real-world environments captured with 3D scanning tools
+- High-fidelity photorealistic scenes that cannot be reproduced with procedural geometry
+
+**Notes:**
+- `objects` and `sceneCode` are ignored when `splatUrl` is set — the splat is the entire scene
+- Camera auto-fits to the splat bounding box on load
+- WASD keyboard navigation and mouse orbit/zoom work as usual
+- The `viewpoints` array is still accepted but the camera auto-fit overrides the first viewpoint on initial load
+
+**Free splat asset sources:**
+- [Luma AI](https://lumalabs.ai) — capture and export as .spz
+- [Polycam](https://poly.cam) — export Gaussian splats from room scans
+- [sparkjsdev/spark assets](https://sparkjs.dev) — demo .spz files for testing
+
+---
+
+
 
 Set `environment.effects.bloom` to enable glow on emissive materials:
 

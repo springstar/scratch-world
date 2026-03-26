@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ViewerCanvas } from "./components/ViewerCanvas.js";
 import { MarbleViewer } from "./components/MarbleViewer.js";
+import { SplatViewer } from "./components/SplatViewer.js";
 import { NarrativeOverlay } from "./components/NarrativeOverlay.js";
 import { ViewpointBar } from "./components/ViewpointBar.js";
 import { InteractionPrompt } from "./components/InteractionPrompt.js";
@@ -66,7 +67,10 @@ export function App() {
           setActiveViewpoint(s.sceneData.viewpoints[0] ?? null);
           history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
         })
-        .catch(console.error);
+        .catch((err) => {
+          setSceneError(err instanceof Error ? err.message : "Failed to load scene");
+          console.error(err);
+        });
     },
     [sessionId],
   );
@@ -196,7 +200,9 @@ export function App() {
             {sceneError}
           </div>
         ) : scene ? (
-          scene.providerRef.provider === "marble" && scene.providerRef.viewUrl ? (
+          scene.sceneData.splatUrl ? (
+            <SplatViewer splatUrl={scene.sceneData.splatUrl} />
+          ) : scene.providerRef.provider === "marble" && scene.providerRef.viewUrl ? (
             <MarbleViewer marbleUrl={scene.providerRef.viewUrl} sceneData={scene.sceneData} />
           ) : (
             <ViewerCanvas sceneData={scene.sceneData} onObjectClick={handleObjectClick} activeViewpoint={activeViewpoint} />
