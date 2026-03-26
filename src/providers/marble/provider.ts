@@ -99,13 +99,8 @@ async function pollOperation(apiKey: string, operationId: string): Promise<Marbl
 
 function worldToSceneData(world: MarbleWorld, prompt: string): SceneData {
 	const caption = world.assets?.caption ?? prompt;
-	// Prefer the native SPZ splat for in-browser rendering via SplatViewer.
-	// spz_urls[0] is the lowest-resolution tier (~100k splats) — fast to load.
-	// Fall back to higher-res variants if the array has more entries.
-	const spzUrl = world.assets?.splats?.spz_urls?.[0] ?? undefined;
 
 	return {
-		splatUrl: spzUrl,
 		environment: {
 			skybox: "clear_day",
 			timeOfDay: "noon",
@@ -133,7 +128,6 @@ function worldToSceneData(world: MarbleWorld, prompt: string): SceneData {
 					marbleUrl: world.world_marble_url,
 					thumbnailUrl: world.assets?.thumbnail_url ?? null,
 					panoUrl: world.assets?.imagery?.pano_url ?? null,
-					spzUrls: world.assets?.splats?.spz_urls ?? null,
 				},
 			},
 		],
