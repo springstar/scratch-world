@@ -24,6 +24,8 @@ export interface ViewerApiOptions {
 	narratorRegistryRef: { current: NarratorRegistry };
 	projectRoot: string;
 	marbleApiKey?: string;
+	/** Pre-created bus shared with GenerationQueue. If omitted, a new bus is created. */
+	bus?: RealtimeBus;
 }
 
 export interface ViewerApiServer {
@@ -42,7 +44,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 		projectRoot,
 		marbleApiKey,
 	} = opts;
-	const bus = new RealtimeBus();
+	const bus = opts.bus ?? new RealtimeBus();
 
 	const app = new Hono();
 

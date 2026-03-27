@@ -31,6 +31,7 @@ export function chatRoute(sessionManager: SessionManager, bus: RealtimeBus): Hon
 		sessionManager.dispatchWebChat(sessionId, userId, text ?? "", bus, images).catch((err: unknown) => {
 			// err.message is empty for AggregateError (e.g. ECONNREFUSED); fall back to toString()
 			const message = err instanceof Error ? err.message || String(err) : String(err);
+			console.error(`[chat] dispatchWebChat error for session ${sessionId}:`, err);
 			bus.publish(sessionId, { type: "error", message });
 		});
 

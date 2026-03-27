@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-25
+**Last Updated:** 2026-03-28
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -16,20 +16,20 @@ Channel Gateway                        POST /chat  (Viewer API)
                  ↓
          Session Manager (per-user state)
                  ↓
-Agent Core (Claude + tools) ←→ Scene Manager ←→ 3D Provider (Marble/Stub)
-    ↓                              ↓
-Tool Execution                 Scene CRUD
-  - create_scene                  ↓
-  - update_scene            SQLite/PostgreSQL
-  - get_scene                   ↓
-  - list_scenes         Viewer API (HTTP + WebSocket)
-  - navigate_to                  ↓
-  - interact_with           Three.js Viewer
-  - share_scene             (scene-renderer.ts)
-                                  ↓
-                          Web Chat: WS events
-                          (text_delta, text_done,
-                           scene_created)
+Agent Core (Claude + tools) ←→ Scene Manager ←→ 3D Provider (Marble/Stub/LLM)
+    ↓                         ↓                      ↓
+Tool Execution          Scene CRUD         If provider.startGeneration:
+  - create_scene          ↓                  ├─ enqueue job to GenerationQueue
+  - update_scene    SQLite/PostgreSQL        └─ scene.status = "generating"
+  - get_scene             ↓                     scene.operationId = "..."
+  - list_scenes    Viewer API (HTTP + WS)
+  - navigate_to           ↓                  GenerationQueue
+  - interact_with    Three.js Viewer        (polls every 3s until done)
+  - share_scene     + SplatViewer               ↓
+                   (scene-renderer.ts)    completeScene() / failScene()
+                                                ↓
+                                    WebSocket event: scene_created /
+                                    scene_updated (with final status="ready")
 ```
 
 ## Entry Points
@@ -44,19 +44,22 @@ Tool Execution                 Scene CRUD
 |--------|----------|---------|-------------|
 | **Channel Gateway** | `src/channels/gateway.ts` | Routes messages from adapters to sessions | `ChannelGateway` |
 | **Telegram Adapter** | `src/channels/telegram/adapter.ts` | Telegram bot integration | `TelegramAdapter` |
-| **Session Manager** | `src/session/session-manager.ts` | Maintains per-user state, dispatches to agent | `SessionManager` |
+| **Session Manager** | `src/session/session-manager.ts` | Maintains per-user state, dispatches to agent, injects active skills | `SessionManager` |
 | **Agent Factory** | `src/agent/agent-factory.ts` | Wires Claude with scene tools | `createAgent()` |
 | **Scene Tools** | `src/agent/tools/*.ts` | Tool implementations (create, update, get, list, navigate, interact, share) | Tool functions |
-| **Scene Manager** | `src/scene/scene-manager.ts` | Scene CRUD, orchestrates provider calls, scene sharing | `SceneManager` |
-| **Scene Types** | `src/scene/types.ts` | Core domain interfaces (Scene, SceneData, SceneObject, etc.) | Type definitions |
+| **Scene Manager** | `src/scene/scene-manager.ts` | Scene CRUD, orchestrates provider calls (sync and async), versioning | `SceneManager` |
+| **Scene Types** | `src/scene/types.ts` | Core domain interfaces with async fields (Scene.status, operationId) | Type definitions |
 | **Scene Schema** | `src/scene/schema.ts` | Typebox validation schemas for API | Schema validators |
-| **Marble Provider** | `src/providers/marble/provider.ts` | WorldLabs Marble 3D generation backend | `MarbleProvider` |
+| **Generation Queue** | `src/generation/generation-queue.ts` | Polls async providers every 3s, completes scenes or reports errors | `GenerationQueue` |
+| **Marble Provider** | `src/providers/marble/provider.ts` | WorldLabs Marble 3D generation backend (supports async) | `MarbleProvider` |
+| **LLM Provider** | `src/providers/llm/provider.ts` | Claude-based generation (supports async) | `LLMProvider` |
 | **Splat Proxy Route** | `src/viewer-api/routes/splat-proxy.ts` | Proxy GET /splat/:sceneId to serve SPZ files with API key server-side | `splatProxyRoute()` |
 | **Stub Provider** | `src/providers/stub/provider.ts` | Mock provider with static fixtures (local dev) | `StubProvider` |
 | **Storage Repos** | `src/storage/*.ts` | Scene and Session persistence | `SceneRepository`, `SessionRepository` |
 | **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat | Hono app |
 | **Chat Route** | `src/viewer-api/routes/chat.ts` | POST /chat endpoint for web UI | `chatRoute()` |
 | **Scene Renderer** | `viewer/src/renderer/scene-renderer.ts` | Three.js scene construction from SceneData | `loadScene()`, `renderScene()` |
+| **Splat Viewer** | `viewer/src/components/SplatViewer.tsx` | Gaussian splat viewer using @sparkjsdev/spark | `SplatViewer` |
 | **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer | UI component |
 | **Chat Drawer** | `viewer/src/components/ChatDrawer.tsx` | Bottom sheet chat UI (peek/open states, streaming) | `ChatDrawer` |
 | **Star Field** | `viewer/src/components/StarField.tsx` | Canvas 2D star particle background for empty state | `StarField` |
@@ -88,37 +91,31 @@ Tool Execution                 Scene CRUD
      sceneData?: { objects: [...], environment: {...}, viewpoints: [...] }
    }
    ```
-5. **create-scene.ts** tool:
-   - Merges `sceneCode` (if provided) into `sceneData`
-   - Calls `SceneManager.createScene(userId, prompt, title, sceneData)`
-6. **SceneManager**:
-   - Generates GLTF asset via 3D provider (Marble or Stub)
-   - Creates `Scene` record in database
-   - Returns scene with `providerRef` (asset ID) and viewer URL
-7. **Tool** returns scene details to Claude as text
-8. **Channel Adapter** sends reply with viewer URL back to user
-9. User opens viewer URL → browser loads `viewer/src/components/App.tsx` → `ViewerCanvas.tsx`
-10. **ViewerCanvas** fetches scene via `GET /api/scenes/:sceneId`
-11. **scene-renderer.ts** parses `sceneData` and builds Three.js scene:
-    - Builds procedurally generated objects from `SceneObject[]`
-    - Sets up lighting, sky, environment based on `EnvironmentConfig`
-    - Applies bloom post-processing if configured
-    - Loads GLTF models if `metadata.modelUrl` present
-    - Registers viewpoint cameras
-12. User sees 3D scene in browser, can navigate and interact
+5. **create-scene.ts** tool determines execution path:
+   - **Skill path**: If sceneData merged from prompt-generator skill (Claude-only), calls `SceneManager.createScene()` synchronously
+   - **Async provider path**: If provider has `startGeneration()` method (Marble/LLM):
+     - Calls `provider.startGeneration(prompt)` → returns `operationId`
+     - Calls `SceneManager.createSceneAsync()` → creates Scene with `status="generating"`, `operationId`
+     - Enqueues job to `GenerationQueue` which polls every 3s via `provider.checkGeneration(operationId)`
+     - When done, `GenerationQueue` calls `SceneManager.completeScene()` → `status="ready"`, broadcasts `scene_created` via WebSocket
+   - **Sync fallback**: If no startGeneration (StubProvider), calls `SceneManager.createScene()` immediately
+6. **Tool returns immediately** (for async path) with scene `{ sceneId, status: "generating" }`
+7. **Channel Adapter** sends reply with viewer URL back to user
+8. User opens viewer URL → scene loads with "generating" status indicator
+9. **GenerationQueue** completes generation → broadcasts `scene_created` event → viewer updates to `status="ready"`, displays full scene
 
 ### Updating a Scene
 
 1. User: `"Add a fountain to the center"`
-2. **update-scene.ts** tool calls `SceneManager.updateScene(sceneId, instruction, sceneData?)`
-3. **SceneManager**:
-   - Fetches current scene
-   - Increments version
-   - Writes snapshot to `scene_versions` table
-   - Sends edit instruction to 3D provider
-   - Updates database, returns new scene
-4. **Viewer API** broadcasts real-time update via WebSocket to all connected clients
-5. Viewer re-renders with updated scene
+2. **update-scene.ts** tool determines execution path (same three paths as create_scene):
+   - **Skill path**: Synchronous SceneManager call
+   - **Async provider path**: Calls `provider.startGeneration()`, enqueues to GenerationQueue
+   - **Sync fallback**: Immediate provider call
+3. For async path: Scene incremented to next version with `status="generating"`, operationId stored
+4. **GenerationQueue** polls and eventually calls `SceneManager.completeScene()`
+5. Scene status becomes `"ready"`, version incremented, broadcast via WebSocket
+6. **Viewer API** broadcasts `scene_updated` event with new version
+7. Viewer re-renders with updated scene
 
 ### Interacting with Objects
 
@@ -222,6 +219,17 @@ Without one of the above, returns `403 Forbidden`.
     animated meshes — gold/stone/marble colors can match flame heuristics, causing unintended
     objects to animate. Tag meshes explicitly: `mesh.userData.animated = true`, then collect
     with `scene.traverse(obj => { if (obj.userData.animated) ... })`
+
+### Gaussian Splat Rendering (SplatViewer)
+
+When `sceneData.splatUrl` is present, the viewer routes to `SplatViewer` (using `@sparkjsdev/spark`):
+
+- **Camera position**: `(0, 1.7, 0)` — placed inside the scene at eye height
+- **Coordinate flip**: `splat.rotation.x = Math.PI` converts COLMAP convention (Y-down, Z-forward) to Three.js convention (Y-up, Z-backward)
+- **OrbitControls**: target set to `(0, 1.7, 5)` for natural pan/zoom
+- **WASD navigation**: full keyboard + arrow key support
+- **Loading state**: animated progress bar with gradient background
+- **Error handling**: displays error message overlay if splat fails to load
 
 ### Demand Rendering and OrbitControls
 
@@ -422,8 +430,11 @@ Backend → GET <spz_url> (with WLT-Api-Key header)
 Backend → streams ArrayBuffer back to browser
 ```
 
-- `spzUrls` are stored in `scene.sceneData.objects[0].metadata.spzUrls` (backend only, not serialised to browser response)
-- `sceneData.splatUrl` is set to `/splat/<sceneId>` after the scene is assigned an ID (SceneManager patches the `splatUrlTemplate` returned by `MarbleProvider.generate()`)
+- `spzUrls` stored in `scene.sceneData.objects[0].metadata.spzUrls`
+  - Marble returns either `string[]` or `Record<string, string>` (e.g. `{500k, 100k, full_res}`)
+  - Proxy route handles both formats: array → first element, object → prefers "500k" → "100k" → "full_res" → first available
+- `sceneData.splatUrl` is set to `/splat/<sceneId>` after scene ID assignment
+- Response cached for 1 hour via `Cache-Control`
 
 #### `SPZ_MODE=local`
 At generation time the provider downloads `spz_urls[0]` with the API key and saves it to
@@ -441,7 +452,7 @@ Browser → GET /uploads/splats/<worldId>.spz (no auth needed)
 #### Viewer routing (App.tsx)
 ```
 sceneData.splatUrl present        → SplatViewer (Gaussian splat, @sparkjsdev/spark)
-providerRef.provider === "marble" → MarbleViewer (iframe)
+providerRef.provider === "marble" → MarbleViewer (iframe, legacy)
 else                              → ViewerCanvas (Three.js WebGPU renderer)
 ```
 
@@ -457,7 +468,7 @@ type RealtimeEvent =
   | { type: "text_delta"; delta: string }           // Streaming agent text chunk
   | { type: "text_done"; text: string }             // Agent response complete
   | { type: "scene_created"; sceneId: string; title: string; viewUrl: string }  // New scene from web chat
-  | { type: "scene_updated"; sceneId: string }      // Existing scene modified
+  | { type: "scene_updated"; sceneId: string; version: number }  // Existing scene modified (async or sync)
   | { type: "error"; message: string }              // Error during processing
 ```
 
@@ -471,6 +482,8 @@ type RealtimeEvent =
   - `sceneId` (PK), `ownerId`, `title`, `description`, `sceneData` (JSON), `providerRef` (JSON), `version`, `createdAt`, `updatedAt`
   - `is_public` (INTEGER, default 0) — whether scene is publicly accessible without auth
   - `share_token` (TEXT, UNIQUE) — opaque token for share-by-link access
+  - `status` (TEXT) — `"generating"`, `"ready"`, or `"failed"` (async lifecycle)
+  - `operationId` (TEXT) — provider operationId while status is `"generating"`
 
 - **sessions** — Session state persistence
   - `sessionId` (PK), `userId`, `channelId`, `agentState` (JSON), `activeSceneId` (FK), `createdAt`, `updatedAt`

@@ -31,9 +31,16 @@ export function splatProxyRoute(sceneManager: SceneManager, marbleApiKey: string
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
 
 		// spz_urls are stored in metadata.spzUrls by MarbleProvider
+		// Marble returns either string[] or Record<string,string> (e.g. {500k, 100k, full_res})
 		const meta = scene.sceneData.objects[0]?.metadata as Record<string, unknown> | undefined;
-		const spzUrls = meta?.spzUrls as string[] | null | undefined;
-		const spzUrl = spzUrls?.[0];
+		const spzUrls = meta?.spzUrls as string[] | Record<string, string> | null | undefined;
+		const spzUrl = Array.isArray(spzUrls)
+			? spzUrls[0]
+			: spzUrls
+				? ((spzUrls["500k"] ?? spzUrls["100k"] ?? spzUrls.full_res ?? Object.values(spzUrls)[0]) as
+						| string
+						| undefined)
+				: undefined;
 
 		if (!spzUrl) {
 			return c.json({ error: "No SPZ URL available for this scene" }, 404);

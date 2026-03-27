@@ -41,4 +41,19 @@ export interface SceneRenderProvider {
 
 	// Retrieve current scene state (for sync after external edits)
 	describe(ref: ProviderRef): Promise<ProviderDescription>;
+
+	// ── Async generation (optional) ───────────────────────────────────────
+	// Providers that implement these two methods support non-blocking generation.
+	// GenerationQueue calls startGeneration() once, then polls checkGeneration()
+	// every few seconds until a ProviderResult is returned.
+
+	/** Start a generation job. Returns an opaque operationId for polling. */
+	startGeneration?(prompt: string, options?: GenerateOptions): Promise<{ operationId: string }>;
+
+	/**
+	 * Check the status of a previously started job.
+	 * Returns null while the job is still in progress, or a ProviderResult when done.
+	 * Throws on unrecoverable errors.
+	 */
+	checkGeneration?(operationId: string): Promise<ProviderResult | null>;
 }

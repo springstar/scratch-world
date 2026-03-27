@@ -37,6 +37,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string): Ho
 			title: scene.title,
 			description: scene.description,
 			version: scene.version,
+			status: scene.status ?? "ready",
 			sceneData: scene.sceneData,
 			providerRef: {
 				provider: scene.providerRef.provider,

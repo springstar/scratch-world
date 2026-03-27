@@ -61,6 +61,8 @@ export interface Scene {
 	updatedAt: number;
 	isPublic: boolean; // true = anyone with the share link can view
 	shareToken?: string; // opaque token appended to viewer URL for access
+	status?: "generating" | "ready" | "failed"; // async generation lifecycle
+	operationId?: string; // provider operationId while status === "generating"
 }
 
 export interface SceneVersion {

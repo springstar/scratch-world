@@ -13,7 +13,7 @@ import type {
 
 const MARBLE_BASE_URL = "https://api.worldlabs.ai";
 const POLL_INTERVAL_MS = 3_000;
-const POLL_TIMEOUT_MS = 300_000; // 5 minutes
+const POLL_TIMEOUT_MS = 600_000; // 10 minutes
 
 // ── Marble API response types ─────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ interface MarbleWorld {
 		thumbnail_url: string | null;
 		imagery: { pano_url: string } | null;
 		mesh: { collider_mesh_url: string } | null;
-		splats: { spz_urls: string[] } | null;
+		splats: { spz_urls: string[] | Record<string, string> } | null;
 	} | null;
 }
 
@@ -178,38 +178,56 @@ export class MarbleProvider implements SceneRenderProvider {
 
 	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {
 		console.log(`[MarbleProvider] generating world: "${prompt}"`);
+		const { operationId } = await this.startGeneration(prompt);
+		const world = await pollOperation(this.apiKey, operationId);
+		return this.buildResult(world, prompt);
+	}
 
+	async startGeneration(prompt: string, _options?: GenerateOptions): Promise<{ operationId: string }> {
+		console.log(`[MarbleProvider] starting async generation: "${prompt}"`);
 		const requestBody = {
-			world_prompt: {
-				type: "text",
-				text_prompt: prompt,
-			},
+			world_prompt: { type: "text", text_prompt: prompt },
 			display_name: prompt.slice(0, 64),
 			model: "Marble 0.1-plus",
 		};
-
 		const { operation_id } = await marbleRequest<{ operation_id: string }>(
 			this.apiKey,
 			"POST",
 			"/marble/v1/worlds:generate",
 			requestBody,
 		);
-
 		console.log(`[MarbleProvider] operation started: ${operation_id}`);
+		return { operationId: operation_id };
+	}
 
-		const world = await pollOperation(this.apiKey, operation_id);
+	async checkGeneration(operationId: string): Promise<ProviderResult | null> {
+		const op = await marbleRequest<MarbleOperation>(this.apiKey, "GET", `/marble/v1/operations/${operationId}`);
+		if (!op.done) {
+			const progress = op.metadata?.progress_percentage ?? "?";
+			console.log(`[MarbleProvider] operation ${operationId} in progress (${progress}%)…`);
+			return null;
+		}
+		if (op.error) throw new Error(`Marble generation failed: ${op.error.message} (${op.error.code})`);
+		if (!op.response) throw new Error("Marble operation done but response is null");
+		return this.buildResult(op.response, op.response.display_name ?? operationId);
+	}
 
-		console.log(`[MarbleProvider] world ready: ${world.world_id} → ${world.world_marble_url}`);
-
+	private async buildResult(world: MarbleWorld, prompt: string): Promise<ProviderResult> {
 		// ── Resolve splatUrl based on SPZ_MODE ────────────────────────────────
 		let splatUrl: string | undefined;
-		const spzUrls = world.assets?.splats?.spz_urls;
+		const spzUrlsRaw = world.assets?.splats?.spz_urls;
+
+		// Normalize: Marble returns either string[] or Record<string,string> (e.g. {500k, 100k, full_res})
+		const pickSpzUrl = (urls: string[] | Record<string, string>): string | undefined => {
+			if (Array.isArray(urls)) return urls[0];
+			return urls["500k"] ?? urls["100k"] ?? urls.full_res ?? Object.values(urls)[0];
+		};
 
 		// splatUrlTemplate is set when the URL depends on the sceneId (proxy mode).
 		// SceneManager will replace "{sceneId}" after the scene record is created.
 		let splatUrlTemplate: string | undefined;
 
-		if (spzUrls && spzUrls.length > 0) {
+		if (spzUrlsRaw && (Array.isArray(spzUrlsRaw) ? spzUrlsRaw.length > 0 : Object.keys(spzUrlsRaw).length > 0)) {
 			if (this.spzMode === "local") {
 				// Download and cache the SPZ file server-side so the static file
 				// server can serve it without ever exposing the WLT-Api-Key.
@@ -218,8 +236,9 @@ export class MarbleProvider implements SceneRenderProvider {
 				const fileName = `${world.world_id}.spz`;
 				const localPath = join(splatsDir, fileName);
 
+				const localSpzUrl = pickSpzUrl(spzUrlsRaw);
 				console.log(`[MarbleProvider] downloading SPZ to ${localPath}…`);
-				const res = await fetch(spzUrls[0], { headers: { "WLT-Api-Key": this.apiKey } });
+				const res = await fetch(localSpzUrl!, { headers: { "WLT-Api-Key": this.apiKey } });
 				if (!res.ok) {
 					console.warn(`[MarbleProvider] SPZ download failed (${res.status}) — falling back to proxy mode`);
 					splatUrlTemplate = "/splat/{sceneId}";

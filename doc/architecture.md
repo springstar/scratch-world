@@ -2,7 +2,7 @@
 
 ## Overview
 
-A chat-driven AI agent application that lets users create, explore, and evolve persistent 3D worlds through natural conversation. Supports multiple messaging channels (Telegram MVP, then WeChat, Discord, WhatsApp) and abstracts the 3D generation backend so providers like WorldLabs Marble can be swapped.
+A chat-driven AI agent application that lets users create, explore, and evolve persistent 3D worlds through natural conversation. Supports multiple messaging channels (Telegram MVP, then WeChat, Discord, WhatsApp) and abstracts the 3D generation backend so providers like WorldLabs Marble and Claude-based LLM generation can be swapped. Async generation is supported: the agent enqueues long-running jobs and polls for completion every 3 seconds.
 
 ---
 
@@ -25,27 +25,39 @@ A chat-driven AI agent application that lets users create, explore, and evolve p
 │                      Session Manager                             │
 │  - Lookup or create Session per (userId, channelId)              │
 │  - Load/save AgentState + SceneState from storage                │
+│  - Inject active generator skill system prompt                   │
 │  - Dispatch message to the user's Agent instance                 │
 └────────┬────────────────────────────────────┬────────────────────┘
          │                                    │
 ┌────────▼────────────┐            ┌──────────▼──────────────────┐
 │   Agent Core        │            │     Scene Manager            │
 │  (pi-agent-core)    │◄──tools───►│  - Scene CRUD                │
-│                     │            │  - Object management         │
-│  - systemPrompt     │            │  - Navigation state          │
-│  - message history  │            │  - Interaction state         │
-│  - tool execution   │            │  - Serialization / diff      │
-│  - event streaming  │            └──────────┬───────────────────┘
-└─────────────────────┘                       │
-                                   ┌──────────▼───────────────────┐
+│                     │            │  - Async job handling        │
+│  - systemPrompt     │            │  - Object management         │
+│  - message history  │            │  - Versioning               │
+│  - tool execution   │            └──────────┬───────────────────┘
+│  - event streaming  │                       │
+└─────────────────────┘            ┌──────────▼───────────────────┐
                                    │   3D Provider Interface       │
                                    │  (abstract / pluggable)       │
                                    │                               │
                                    │  Implementations:             │
-                                   │   • MarbleProvider (MVP)      │
-                                   │   • StubProvider (local dev)  │
-                                   │   • Future providers...       │
-                                   └──────────────────────────────┘
+                                   │   • MarbleProvider (async)    │
+                                   │   • LLMProvider (async)       │
+                                   │   • StubProvider (sync)       │
+                                   └──────────┬───────────────────┘
+                                              │
+                                              ▼
+                                   ┌──────────────────────┐
+                                   │  GenerationQueue     │
+                                   │  (polls every 3s)    │
+                                   │                      │
+                                   │  When async job      │
+                                   │  completes, calls    │
+                                   │  completeScene() or  │
+                                   │  failScene() and     │
+                                   │  broadcasts via WS   │
+                                   └──────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Storage Layer                            │

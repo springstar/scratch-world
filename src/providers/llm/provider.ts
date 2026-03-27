@@ -89,12 +89,21 @@ function buildModel() {
 	return model;
 }
 
+interface JobState {
+	done: boolean;
+	result?: ProviderResult;
+	error?: Error;
+}
+
 export class LlmProvider implements SceneRenderProvider {
 	readonly name = "llm";
 
 	// In-memory store of sceneData by assetId for describe()
 	private scenes = new Map<string, SceneData>();
 	private stub = new StubProvider();
+
+	// Async generation tracking: operationId → job state
+	private jobStates = new Map<string, JobState>();
 
 	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {
 		const assetId = randomUUID();
@@ -171,5 +180,31 @@ export class LlmProvider implements SceneRenderProvider {
 			return this.stub.describe(ref);
 		}
 		return { ref, sceneData };
+	}
+
+	async startGeneration(prompt: string, options?: GenerateOptions): Promise<{ operationId: string }> {
+		const operationId = randomUUID();
+		const state: JobState = { done: false };
+		this.jobStates.set(operationId, state);
+		this.generate(prompt, options).then(
+			(result) => {
+				state.done = true;
+				state.result = result;
+			},
+			(err: unknown) => {
+				state.done = true;
+				state.error = err instanceof Error ? err : new Error(String(err));
+			},
+		);
+		return { operationId };
+	}
+
+	async checkGeneration(operationId: string): Promise<ProviderResult | null> {
+		const state = this.jobStates.get(operationId);
+		if (!state) throw new Error(`LlmProvider: unknown operationId ${operationId}`);
+		if (!state.done) return null;
+		this.jobStates.delete(operationId);
+		if (state.error) throw state.error;
+		return state.result!;
 	}
 }

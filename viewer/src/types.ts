@@ -49,6 +49,7 @@ export interface SceneResponse {
   title: string;
   description: string;
   version: number;
+  status?: "generating" | "ready" | "failed";
   sceneData: SceneData;
   providerRef: {
     provider: string;

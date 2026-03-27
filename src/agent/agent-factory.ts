@@ -1,5 +1,6 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import { getModel } from "@mariozechner/pi-ai";
+import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import { trimContext } from "./context-trimmer.js";
 import { createCityTool } from "./tools/create-city.js";
@@ -9,7 +10,7 @@ import { listScenesTool } from "./tools/list-scenes.js";
 import { shareSceneTool } from "./tools/share-scene.js";
 import { updateSceneTool } from "./tools/update-scene.js";
 
-const BASE_SYSTEM_PROMPT = `\
+export const BASE_SYSTEM_PROMPT = `\
 You are a world-building companion. You help users create, explore, and evolve persistent 3D worlds through conversation.
 
 When a user describes a place, scene, or environment they want to create, call create_scene.
@@ -31,6 +32,7 @@ export function createAgent(
 	viewerBaseUrl: string,
 	sessionId: string,
 	skillPrompt: string | null = null,
+	generationQueue: GenerationQueue,
 ): Agent {
 	const ownerId = () => userId;
 	const viewerUrl = (sceneId: string) => `${viewerBaseUrl}/scene/${sceneId}?session=${sessionId}`;
@@ -53,9 +55,9 @@ export function createAgent(
 			systemPrompt,
 			model,
 			tools: [
-				createSceneTool(sceneManager, ownerId, viewerUrl),
+				createSceneTool(sceneManager, ownerId, viewerUrl, generationQueue, sessionId),
 				createCityTool(sceneManager, ownerId, viewerUrl),
-				updateSceneTool(sceneManager, viewerUrl),
+				updateSceneTool(sceneManager, viewerUrl, generationQueue, sessionId),
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager, ownerId),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),

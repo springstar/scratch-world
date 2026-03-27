@@ -4,6 +4,7 @@ import { createAgent } from "../agent/agent-factory.js";
 import { trimContext } from "../agent/context-trimmer.js";
 import type { ChannelGateway } from "../channels/gateway.js";
 import type { ChatMessage } from "../channels/types.js";
+import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { SkillLoader } from "../skills/skill-loader.js";
 import type { SessionRepository } from "../storage/types.js";
@@ -29,6 +30,7 @@ export class SessionManager {
 		private sessionRepo: SessionRepository,
 		private viewerBaseUrl: string,
 		private skillLoader: SkillLoader,
+		private generationQueue: GenerationQueue,
 		private agentTtlMs: number = DEFAULT_AGENT_TTL_MS,
 	) {}
 
@@ -115,8 +117,16 @@ export class SessionManager {
 		bus: RealtimeBus,
 		images?: Array<{ base64: string; mimeType: string }>,
 	): Promise<void> {
+		console.log(`[SessionManager] _dispatchWebChat sessionId=${sessionId}`);
 		// Upsert session record — web sessions may not exist yet
-		const existing = await this.sessionRepo.findById(sessionId);
+		let existing: Awaited<ReturnType<typeof this.sessionRepo.findById>>;
+		try {
+			existing = await this.sessionRepo.findById(sessionId);
+			console.log(`[SessionManager] findById done, existing=${!!existing}`);
+		} catch (err) {
+			console.error("[SessionManager] sessionRepo.findById threw:", err);
+			throw err;
+		}
 		if (!existing) {
 			await this.sessionRepo.save({
 				sessionId,
@@ -137,8 +147,11 @@ export class SessionManager {
 		};
 
 		const agent = await this.getOrCreateAgent(msg);
+		console.log("[SessionManager] agent ready");
 		await this.hydrateActiveScene(agent, sessionId);
+		console.log("[SessionManager] hydrateActiveScene done");
 		this.hydrateActiveSkills(agent);
+		console.log("[SessionManager] hydrateActiveSkills done");
 
 		let fullText = "";
 		let activeSceneId: string | null = existing?.activeSceneId ?? null;
@@ -148,16 +161,22 @@ export class SessionManager {
 				fullText += delta;
 				bus.publish(sessionId, { type: "text_delta", delta });
 			} else if (event.type === "tool_execution_end" && !event.isError) {
-				const details = event.result?.details as { sceneId?: string; title?: string } | undefined;
+				const details = event.result?.details as
+					| { sceneId?: string; title?: string; generating?: boolean }
+					| undefined;
 				if (details?.sceneId) {
 					activeSceneId = details.sceneId;
-					const viewUrl = `${this.viewerBaseUrl}/scene/${details.sceneId}?session=${sessionId}`;
-					bus.publish(sessionId, {
-						type: "scene_created",
-						sceneId: details.sceneId,
-						title: details.title ?? details.sceneId,
-						viewUrl,
-					});
+					// Async paths (Marble/LLM provider): GenerationQueue will publish scene_created when ready.
+					// Only publish immediately for sync paths (sceneData provided, or StubProvider).
+					if (!details.generating) {
+						const viewUrl = `${this.viewerBaseUrl}/scene/${details.sceneId}?session=${sessionId}`;
+						bus.publish(sessionId, {
+							type: "scene_created",
+							sceneId: details.sceneId,
+							title: details.title ?? details.sceneId,
+							viewUrl,
+						});
+					}
 				}
 			}
 		});
@@ -168,7 +187,10 @@ export class SessionManager {
 				data: img.base64,
 				mimeType: img.mimeType,
 			}));
+			console.log("[SessionManager] calling agent.prompt");
 			await agent.prompt(text, imageContents);
+			console.log("[SessionManager] agent.prompt done");
+			console.log("[SessionManager] agent reply:", fullText.slice(0, 200));
 		} finally {
 			// Always publish text_done so the client's isTyping indicator always resets,
 			// even if agent.prompt() threw (e.g., API unreachable, tool execution error).
@@ -245,7 +267,14 @@ export class SessionManager {
 		}
 
 		const record = await this.sessionRepo.findById(msg.sessionId);
-		const agent = createAgent(this.sceneManager, msg.userId, this.viewerBaseUrl, msg.sessionId);
+		const agent = createAgent(
+			this.sceneManager,
+			msg.userId,
+			this.viewerBaseUrl,
+			msg.sessionId,
+			null,
+			this.generationQueue,
+		);
 
 		if (record?.agentMessages) {
 			try {
@@ -284,7 +313,16 @@ export class SessionManager {
 		let prompt = agent.state.systemPrompt
 			.split("\n\n## Scene Generation")[0]
 			.split("\n\n## Renderer Capabilities")[0]
-			.split("\n\n## Three.js Reference")[0];
+			.split("\n\n## Three.js Reference")[0]
+			.split("\n\nIMPORTANT: The active 3D world provider")[0];
+
+		const provider = this.sceneManager.getActiveProvider();
+		if (provider.startGeneration) {
+			prompt +=
+				"\n\nIMPORTANT: The active 3D world provider generates the scene automatically from the prompt. " +
+				"When calling create_scene or update_scene, provide ONLY `prompt` (and optional `title`). " +
+				"Do NOT provide `sceneData` or `sceneCode` — the provider ignores them and will overwrite with its own output.";
+		}
 
 		const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
 		if (generatorMd) {

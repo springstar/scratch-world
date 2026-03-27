@@ -14,6 +14,8 @@ interface SceneRow {
 	updated_at: number;
 	is_public: number; // SQLite boolean: 0 | 1
 	share_token: string | null;
+	status: string | null;
+	operation_id: string | null;
 }
 
 interface SceneVersionRow {
@@ -37,6 +39,8 @@ function rowToScene(row: SceneRow): Scene {
 		updatedAt: row.updated_at,
 		isPublic: row.is_public === 1,
 		shareToken: row.share_token ?? undefined,
+		status: (row.status as Scene["status"]) ?? undefined,
+		operationId: row.operation_id ?? undefined,
 	};
 }
 
@@ -91,13 +95,35 @@ export class SqliteSceneRepo implements SceneRepository {
 		if (!names.has("share_token")) {
 			this.db.exec("ALTER TABLE scenes ADD COLUMN share_token TEXT");
 		}
+		if (!names.has("status")) {
+			this.db.exec("ALTER TABLE scenes ADD COLUMN status TEXT");
+		}
+		if (!names.has("operation_id")) {
+			this.db.exec("ALTER TABLE scenes ADD COLUMN operation_id TEXT");
+		}
 	}
 
 	async save(scene: Scene): Promise<void> {
 		this.db
-			.prepare<[string, string, string, string, string, string, number, number, number, number, string | null]>(`
-				INSERT INTO scenes (scene_id, owner_id, title, description, scene_data, provider_ref, version, created_at, updated_at, is_public, share_token)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			.prepare<
+				[
+					string,
+					string,
+					string,
+					string,
+					string,
+					string,
+					number,
+					number,
+					number,
+					number,
+					string | null,
+					string | null,
+					string | null,
+				]
+			>(`
+				INSERT INTO scenes (scene_id, owner_id, title, description, scene_data, provider_ref, version, created_at, updated_at, is_public, share_token, status, operation_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(scene_id) DO UPDATE SET
 					title        = excluded.title,
 					description  = excluded.description,
@@ -106,7 +132,9 @@ export class SqliteSceneRepo implements SceneRepository {
 					version      = excluded.version,
 					updated_at   = excluded.updated_at,
 					is_public    = excluded.is_public,
-					share_token  = excluded.share_token
+					share_token  = excluded.share_token,
+					status       = excluded.status,
+					operation_id = excluded.operation_id
 			`)
 			.run(
 				scene.sceneId,
@@ -120,6 +148,8 @@ export class SqliteSceneRepo implements SceneRepository {
 				scene.updatedAt,
 				scene.isPublic ? 1 : 0,
 				scene.shareToken ?? null,
+				scene.status ?? null,
+				scene.operationId ?? null,
 			);
 	}
 

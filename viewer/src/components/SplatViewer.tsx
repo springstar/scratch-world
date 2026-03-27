@@ -35,12 +35,16 @@ export function SplatViewer({ splatUrl }: Props) {
     scene.background = new Color(0x0a0a14);
     scene.add(new AmbientLight(0xffffff, 0.6));
 
-    const camera = new PerspectiveCamera(60, canvas.clientWidth / canvas.clientHeight, 0.01, 2000);
-    camera.position.set(0, 0, 3);
+    const camera = new PerspectiveCamera(65, canvas.clientWidth / canvas.clientHeight, 0.01, 1000);
+    // Marble worlds are panoramic scenes built around the origin.
+    // Place the camera inside at eye-height and look forward.
+    camera.position.set(0, 1.7, 0);
 
     const controls = new OrbitControls(camera, canvas);
+    controls.target.set(0, 1.7, 5);
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
+    controls.update();
 
     const clock = new Clock();
     const sparkRenderer = new SparkRenderer({ renderer, clock });
@@ -48,19 +52,12 @@ export function SplatViewer({ splatUrl }: Props) {
 
     // ── Load splat ────────────────────────────────────────────────────────────
     const splat = new SplatMesh({ url: splatUrl });
+    // SPZ files use COLMAP convention (Y-down, Z-forward).
+    // Rotate 180° around X to convert to Three.js convention (Y-up, Z-backward).
+    splat.rotation.x = Math.PI;
     scene.add(splat);
 
     splat.initialized.then(() => {
-      // Auto-fit camera to the loaded splat's bounding box
-      const box = splat.getBoundingBox();
-      const center = new Vector3();
-      box.getCenter(center);
-      const size = new Vector3();
-      box.getSize(size);
-      const maxDim = Math.max(size.x, size.y, size.z);
-      camera.position.copy(center).addScaledVector(new Vector3(0, 0.2, 1).normalize(), maxDim * 1.8);
-      controls.target.copy(center);
-      controls.update();
       setStatus("ready");
     }).catch((err: unknown) => {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load splat file");

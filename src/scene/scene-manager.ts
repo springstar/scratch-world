@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
+import type { ProviderResult } from "../providers/types.js";
 import type { SceneRepository } from "../storage/types.js";
 import type { Scene, SceneData } from "./types.js";
 
@@ -117,6 +118,10 @@ export class SceneManager {
 		return this.repo.findByOwner(ownerId);
 	}
 
+	getActiveProvider() {
+		return this.providerRegistryRef.current.getActiveProvider();
+	}
+
 	async shareScene(sceneId: string): Promise<Scene> {
 		const scene = await this.requireScene(sceneId);
 		// Reuse existing token if already shared
@@ -135,5 +140,88 @@ export class SceneManager {
 		const scene = await this.repo.findById(sceneId);
 		if (!scene) throw new Error(`Scene not found: ${sceneId}`);
 		return scene;
+	}
+
+	// ── Async generation lifecycle ────────────────────────────────────────────
+
+	/**
+	 * Create a placeholder scene with status "generating" and return its sceneId
+	 * immediately. The caller should enqueue a background job that calls
+	 * completeScene() or failScene() when the provider finishes.
+	 */
+	async createSceneAsync(
+		ownerId: string,
+		prompt: string,
+		title: string | undefined,
+		operationId: string,
+		providerName: string,
+	): Promise<Scene> {
+		const now = Date.now();
+		const sceneId = randomUUID();
+		const scene: Scene = {
+			sceneId,
+			ownerId,
+			title: title ?? prompt.slice(0, 60),
+			description: prompt,
+			sceneData: { objects: [], environment: {}, viewpoints: [] },
+			providerRef: { provider: providerName, assetId: sceneId },
+			version: 1,
+			createdAt: now,
+			updatedAt: now,
+			isPublic: false,
+			status: "generating",
+			operationId,
+		};
+		await this.repo.save(scene);
+		return scene;
+	}
+
+	/**
+	 * Called by GenerationQueue when the provider returns a ProviderResult.
+	 * Fills in the real sceneData and marks status "ready".
+	 */
+	async completeScene(sceneId: string, result: ProviderResult): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		const now = Date.now();
+		let sceneData = result.sceneData;
+		if (result.splatUrlTemplate) {
+			sceneData = { ...sceneData, splatUrl: result.splatUrlTemplate.replace("{sceneId}", sceneId) };
+		}
+		const updated: Scene = {
+			...scene,
+			sceneData,
+			providerRef: result.ref,
+			version: scene.version + 1,
+			updatedAt: now,
+			status: "ready",
+			operationId: undefined,
+		};
+		await this.repo.save(updated);
+		await this.repo.saveVersion({
+			sceneId,
+			version: updated.version,
+			sceneData: updated.sceneData,
+			providerRef: updated.providerRef,
+			createdAt: now,
+		});
+		return updated;
+	}
+
+	/**
+	 * Mark an existing scene as "generating" in preparation for an async update.
+	 * The caller should enqueue a background job that calls completeScene() when done.
+	 */
+	async updateSceneAsync(sceneId: string, operationId: string): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		const updated: Scene = { ...scene, status: "generating", operationId, updatedAt: Date.now() };
+		await this.repo.save(updated);
+		return updated;
+	}
+
+	/** Called by GenerationQueue on timeout or unrecoverable error. */
+	async failScene(sceneId: string): Promise<void> {
+		const scene = await this.repo.findById(sceneId);
+		if (!scene) return;
+		await this.repo.save({ ...scene, status: "failed", operationId: undefined, updatedAt: Date.now() });
 	}
 }

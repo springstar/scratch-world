@@ -1,6 +1,8 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
+import type { GenerationQueue } from "../../generation/generation-queue.js";
+import { DEFAULT_TIMEOUT_MS } from "../../generation/generation-queue.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import { SceneDataSchema } from "../../scene/schema.js";
 
@@ -19,6 +21,8 @@ const parameters = Type.Object({
 export function updateSceneTool(
 	sceneManager: SceneManager,
 	viewerUrl: (sceneId: string) => string,
+	generationQueue: GenerationQueue,
+	sessionId: string,
 ): AgentTool<typeof parameters> {
 	return {
 		name: "update_scene",
@@ -27,13 +31,70 @@ export function updateSceneTool(
 			"Modify an existing scene based on a natural language instruction. Use this when the user wants to add, remove, or change something in a scene.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
+			console.log(`[update_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);
 			const mergedSceneData = params.sceneCode
 				? {
 						...(params.sceneData ?? { objects: [], environment: {}, viewpoints: [] }),
 						sceneCode: params.sceneCode,
 					}
 				: params.sceneData;
-			const scene = await sceneManager.updateScene(params.sceneId, params.instruction, mergedSceneData);
+
+			// Skill path (sceneData supplied directly) — always synchronous
+			if (mergedSceneData) {
+				const scene = await sceneManager.updateScene(params.sceneId, params.instruction, mergedSceneData);
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								sceneId: scene.sceneId,
+								title: scene.title,
+								version: scene.version,
+								status: "ready",
+								viewUrl: viewerUrl(scene.sceneId),
+								objects: scene.sceneData.objects.map((o) => ({ id: o.objectId, name: o.name, type: o.type })),
+							}),
+						},
+					],
+					details: { sceneId: scene.sceneId, version: scene.version, title: scene.title, sceneChanged: true },
+				};
+			}
+
+			// Provider path — use async if provider supports it
+			const provider = sceneManager.getActiveProvider();
+			if (provider.startGeneration) {
+				const { operationId } = await provider.startGeneration(params.instruction);
+				const scene = await sceneManager.updateSceneAsync(params.sceneId, operationId);
+				const url = viewerUrl(scene.sceneId);
+				generationQueue.enqueue({
+					type: "update",
+					sceneId: scene.sceneId,
+					sessionId,
+					viewerUrl: url,
+					title: scene.title,
+					provider,
+					operationId,
+					timeoutMs: DEFAULT_TIMEOUT_MS,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								sceneId: scene.sceneId,
+								title: scene.title,
+								status: "generating",
+								message:
+									"Update started. The scene will be refreshed in chat when ready (~15 s for LLM, ~5 min for Marble).",
+							}),
+						},
+					],
+					details: { sceneId: scene.sceneId, title: scene.title, generating: true },
+				};
+			}
+
+			// Synchronous fallback (e.g. StubProvider)
+			const scene = await sceneManager.updateScene(params.sceneId, params.instruction);
 			return {
 				content: [
 					{
@@ -42,12 +103,13 @@ export function updateSceneTool(
 							sceneId: scene.sceneId,
 							title: scene.title,
 							version: scene.version,
+							status: "ready",
 							viewUrl: viewerUrl(scene.sceneId),
 							objects: scene.sceneData.objects.map((o) => ({ id: o.objectId, name: o.name, type: o.type })),
 						}),
 					},
 				],
-				details: { sceneId: scene.sceneId, version: scene.version, title: scene.title },
+				details: { sceneId: scene.sceneId, version: scene.version, title: scene.title, sceneChanged: true },
 			};
 		},
 	};

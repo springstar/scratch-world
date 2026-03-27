@@ -1,5 +1,5 @@
 {
-  "generator": "generator-claude",
+  "generator": null,
   "renderer": "renderer-threejs",
   "threejs_disabled": [
     "threejs-animation",

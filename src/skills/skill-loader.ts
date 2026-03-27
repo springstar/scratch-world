@@ -100,8 +100,10 @@ export class SkillLoader {
 
 	getActiveSkill(category: "generator" | "renderer"): SkillManifest | null {
 		const active = this.readActive();
+		// Explicit null/"none" means deactivated — no default applied
+		if (active[category] === null || active[category] === "none") return null;
 		const defaults: Record<string, string> = { generator: "generator-claude", renderer: "renderer-threejs" };
-		const name = active[category] ?? defaults[category];
+		const name = (active[category] as string | undefined) ?? defaults[category];
 		return BUILT_IN_SKILLS.find((s) => s.category === category && s.name === name) ?? null;
 	}
 
@@ -113,11 +115,14 @@ export class SkillLoader {
 		return readFileSync(mdPath, "utf-8");
 	}
 
+	/** Pass name="none" to deactivate the skill for this category (use provider path). */
 	activate(category: "generator" | "renderer", name: string): void {
-		const exists = BUILT_IN_SKILLS.some((s) => s.category === category && s.name === name);
-		if (!exists) throw new Error(`Skill "${name}" not found in category "${category}"`);
+		if (name !== "none") {
+			const exists = BUILT_IN_SKILLS.some((s) => s.category === category && s.name === name);
+			if (!exists) throw new Error(`Skill "${name}" not found in category "${category}"`);
+		}
 		const active = this.readActive();
-		active[category] = name;
+		active[category] = name === "none" ? null : name;
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
 	}
 
@@ -125,9 +130,7 @@ export class SkillLoader {
 	// By default all threejs skills are enabled; add name to "threejs_disabled" array in skills.active.json to disable.
 	getThreejsMarkdown(): string | null {
 		const active = this.readActive();
-		const disabled: string[] = Array.isArray(active["threejs_disabled"])
-			? (active["threejs_disabled"] as string[])
-			: [];
+		const disabled: string[] = Array.isArray(active.threejs_disabled) ? (active.threejs_disabled as string[]) : [];
 		const skills = BUILT_IN_SKILLS.filter((s) => s.category === "threejs" && !disabled.includes(s.name));
 		if (skills.length === 0) return null;
 		const parts = skills
@@ -142,20 +145,16 @@ export class SkillLoader {
 
 	disableThreejsSkill(name: string): void {
 		const active = this.readActive();
-		const disabled: string[] = Array.isArray(active["threejs_disabled"])
-			? (active["threejs_disabled"] as string[])
-			: [];
+		const disabled: string[] = Array.isArray(active.threejs_disabled) ? (active.threejs_disabled as string[]) : [];
 		if (!disabled.includes(name)) disabled.push(name);
-		active["threejs_disabled"] = disabled;
+		active.threejs_disabled = disabled;
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
 	}
 
 	enableThreejsSkill(name: string): void {
 		const active = this.readActive();
-		const disabled: string[] = Array.isArray(active["threejs_disabled"])
-			? (active["threejs_disabled"] as string[])
-			: [];
-		active["threejs_disabled"] = disabled.filter((n) => n !== name);
+		const disabled: string[] = Array.isArray(active.threejs_disabled) ? (active.threejs_disabled as string[]) : [];
+		active.threejs_disabled = disabled.filter((n) => n !== name);
 		writeFileSync(this.activeFile, `${JSON.stringify(active, null, 2)}\n`, "utf-8");
 	}
 

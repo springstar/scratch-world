@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { ChannelGateway } from "./channels/gateway.js";
 import { StdinAdapter } from "./channels/stdin/adapter.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
+import { GenerationQueue } from "./generation/generation-queue.js";
 import { narrateWithHaiku } from "./narrators/built-in/haiku.js";
 import { NarratorRegistry } from "./narrators/narrator-registry.js";
 import { LlmProvider } from "./providers/llm/provider.js";
@@ -15,6 +16,7 @@ import { SessionManager } from "./session/session-manager.js";
 import { SkillLoader } from "./skills/skill-loader.js";
 import { SqliteSceneRepo } from "./storage/sqlite/scene-repo.js";
 import { SqliteSessionRepo } from "./storage/sqlite/session-repo.js";
+import { RealtimeBus } from "./viewer-api/realtime.js";
 import { startViewerApi } from "./viewer-api/server.js";
 
 async function main() {
@@ -61,6 +63,10 @@ async function main() {
 	// ── Scene + Session managers ───────────────────────────────────────────
 	const sceneManager = new SceneManager(providerRegistryRef, sceneRepo);
 
+	// ── Realtime bus + generation queue ────────────────────────────────────
+	const bus = new RealtimeBus();
+	const generationQueue = new GenerationQueue(bus, sceneManager);
+
 	// ── Channels ───────────────────────────────────────────────────────────
 	const gateway = new ChannelGateway();
 	const channel = process.env.CHANNEL ?? "telegram";
@@ -78,7 +84,14 @@ async function main() {
 	const viewerBaseUrl = process.env.VIEWER_BASE_URL ?? `http://localhost:${viewerPort}`;
 
 	// ── Session manager ────────────────────────────────────────────────────
-	const sessionManager = new SessionManager(gateway, sceneManager, sessionRepo, viewerBaseUrl, skillLoader);
+	const sessionManager = new SessionManager(
+		gateway,
+		sceneManager,
+		sessionRepo,
+		viewerBaseUrl,
+		skillLoader,
+		generationQueue,
+	);
 	gateway.onMessage(async (msg) => {
 		await sessionManager.dispatch(msg);
 	});
@@ -92,6 +105,7 @@ async function main() {
 		narratorRegistryRef,
 		projectRoot,
 		marbleApiKey: marbleKey,
+		bus,
 	});
 
 	// ── Start ──────────────────────────────────────────────────────────────

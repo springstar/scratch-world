@@ -84,6 +84,7 @@ function makeGateway(): ChannelGateway {
 function makeSceneManager(): SceneManager {
 	return {
 		getScene: vi.fn().mockResolvedValue(null),
+		getActiveProvider: vi.fn().mockReturnValue({ name: "stub" }),
 	} as unknown as SceneManager;
 }
 
@@ -103,6 +104,10 @@ function makeSkillLoader() {
 		listSkills: vi.fn().mockReturnValue([]),
 		activate: vi.fn(),
 	};
+}
+
+function makeGenerationQueue() {
+	return { enqueue: vi.fn(), stop: vi.fn() } as never;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -134,6 +139,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -159,6 +165,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -184,6 +191,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -209,6 +217,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -228,6 +237,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -260,6 +270,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -287,6 +298,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -317,6 +329,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatch(makeMsg());
@@ -338,6 +351,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			await sm.dispatchViewerInteraction("telegram:user-1", "scene-viewer", "examine this", bus);
@@ -386,6 +400,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 				TTL,
 			);
 
@@ -411,6 +426,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 				TTL,
 			);
 
@@ -440,6 +456,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 				TTL,
 			);
 
@@ -485,6 +502,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			const p1 = sm.dispatch(makeMsg());
@@ -525,6 +543,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			const msgA = makeMsg();
@@ -560,6 +579,7 @@ describe("SessionManager", () => {
 				repo,
 				"http://localhost:3001",
 				makeSkillLoader() as never,
+				makeGenerationQueue(),
 			);
 
 			const p1 = sm.dispatch(makeMsg());
