@@ -261,6 +261,12 @@ Put the exact text to display in the `description` field (e.g. `"黑板上写着
 - All `objectId` values must be unique strings (e.g. `"obj_gate"`, `"obj_fountain"`).
 - All `viewpointId` values must be unique strings (e.g. `"vp_entrance"`, `"vp_overview"`).
 
+## Placing objects at the player's current position
+
+When the user message starts with `[玩家当前位置: x=..., y=..., z=...]`, the player is standing in a Marble splat scene and has physically walked to the spot where they want to place something. **Use those coordinates directly** as the `position` of the new object in `sceneData.objects`. Do not invent or offset the coordinates — the player already walked to the exact spot.
+
+Example: message `[玩家当前位置: x=3.2, y=0.8, z=-5.1]\n在这里放一个木箱` → create an object at `{"x": 3.2, "y": 0.8, "z": -5.1}`.
+
 ---
 
 ## NPC Behavior Metadata

@@ -37,6 +37,7 @@ export async function postChat(payload: {
   userId: string;
   text: string;
   images?: Array<{ base64: string; mimeType: string }>;
+  playerPosition?: { x: number; y: number; z: number };
 }): Promise<void> {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",

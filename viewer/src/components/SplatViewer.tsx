@@ -217,6 +217,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
 
         const pos = cc.body.translation();
         camera.position.set(pos.x, pos.y + 0.8, pos.z);
+        (window as unknown as Record<string, unknown>).__playerPosition = { x: pos.x, y: pos.y, z: pos.z };
 
         // NPC proximity check (every frame, cheap distance math)
         if (npcs.length > 0) {
@@ -246,6 +247,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
         delete (window as unknown as Record<string, unknown>).__physicsShoot;
         delete (window as unknown as Record<string, unknown>).__physicsInteract;
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
+        delete (window as unknown as Record<string, unknown>).__playerPosition;
         if (document.pointerLockElement === cv) document.exitPointerLock();
         for (const p of projectiles) {
           world.removeRigidBody(p.body);

@@ -48,8 +48,9 @@ export class SessionManager {
 		text: string,
 		bus: RealtimeBus,
 		images?: Array<{ base64: string; mimeType: string }>,
+		playerPosition?: { x: number; y: number; z: number },
 	): Promise<void> {
-		return this.enqueue(sessionId, () => this._dispatchWebChat(sessionId, userId, text, bus, images));
+		return this.enqueue(sessionId, () => this._dispatchWebChat(sessionId, userId, text, bus, images, playerPosition));
 	}
 
 	// ── Private helpers ──────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ export class SessionManager {
 		text: string,
 		bus: RealtimeBus,
 		images?: Array<{ base64: string; mimeType: string }>,
+		playerPosition?: { x: number; y: number; z: number },
 	): Promise<void> {
 		console.log(`[SessionManager] _dispatchWebChat sessionId=${sessionId}`);
 		// Upsert session record — web sessions may not exist yet
@@ -187,8 +189,12 @@ export class SessionManager {
 				data: img.base64,
 				mimeType: img.mimeType,
 			}));
+			// Prepend player position as spatial context so the agent can use it for object placement
+			const promptText = playerPosition
+				? `[玩家当前位置: x=${playerPosition.x.toFixed(1)}, y=${playerPosition.y.toFixed(1)}, z=${playerPosition.z.toFixed(1)}]\n${text}`
+				: text;
 			console.log("[SessionManager] calling agent.prompt");
-			await agent.prompt(text, imageContents);
+			await agent.prompt(promptText, imageContents);
 			console.log("[SessionManager] agent.prompt done");
 			console.log("[SessionManager] agent reply:", fullText.slice(0, 200));
 		} finally {

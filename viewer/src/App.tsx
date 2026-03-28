@@ -157,8 +157,11 @@ export function App() {
       setIsTyping(true);
       streamingBuffer.current = "";
       const apiImages = images?.map((img) => ({ base64: img.base64, mimeType: img.mimeType }));
+      const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+        | { x: number; y: number; z: number }
+        | undefined;
       try {
-        await postChat({ sessionId, userId: userId.current, text, images: apiImages });
+        await postChat({ sessionId, userId: userId.current, text, images: apiImages, playerPosition });
       } catch (err) {
         setIsTyping(false);
         const msg = err instanceof Error ? err.message : "Failed to send";
