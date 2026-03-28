@@ -202,6 +202,22 @@ export function App() {
     setActiveViewpoint(vp);
   }, []);
 
+  const handleSplatInteract = useCallback(
+    async (objectId: string, action: string) => {
+      if (!scene) return;
+      setNarrativeLines([]);
+      setIsStreaming(true);
+      streamingBuffer.current = "";
+      try {
+        await postInteract({ sessionId, sceneId: scene.sceneId, objectId, action });
+      } catch (err) {
+        setNarrativeLines([err instanceof Error ? err.message : "Interaction failed"]);
+        setIsStreaming(false);
+      }
+    },
+    [scene, sessionId],
+  );
+
   // Bottom padding to keep 3D canvas above the chat drawer (peek = 72px)
   const PEEK_HEIGHT = 72;
 
@@ -215,7 +231,12 @@ export function App() {
           </div>
         ) : scene ? (
           scene.sceneData.splatUrl ? (
-            <SplatViewer splatUrl={scene.sceneData.splatUrl} />
+            <SplatViewer
+              splatUrl={scene.sceneData.splatUrl}
+              colliderMeshUrl={scene.sceneData.colliderMeshUrl}
+              sceneObjects={scene.sceneData.objects}
+              onInteract={handleSplatInteract}
+            />
           ) : scene.providerRef.provider === "marble" && scene.providerRef.viewUrl ? (
             <MarbleViewer marbleUrl={scene.providerRef.viewUrl} sceneData={scene.sceneData} />
           ) : (

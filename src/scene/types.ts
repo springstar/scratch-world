@@ -39,6 +39,7 @@ export interface SceneData {
 	viewpoints: Viewpoint[];
 	sceneCode?: string;
 	splatUrl?: string; // URL to a Gaussian splat file (.spz / .ply / .splat) — activates SplatViewer
+	colliderMeshUrl?: string; // URL to physics collision mesh (.glb) — public CDN, no auth required
 }
 
 // Opaque per-provider pointer to the generated asset

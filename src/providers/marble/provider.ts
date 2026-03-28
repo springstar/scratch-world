@@ -105,6 +105,7 @@ function worldToSceneData(world: MarbleWorld, prompt: string, splatUrl?: string)
 
 	return {
 		splatUrl,
+		colliderMeshUrl: world.assets?.mesh?.collider_mesh_url ?? undefined,
 		environment: {
 			skybox: "clear_day",
 			timeOfDay: "noon",

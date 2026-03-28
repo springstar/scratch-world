@@ -302,6 +302,34 @@ NPCs support movement modes and chatter bubbles via `metadata`:
 - NPCs always perform idle bob/sway animation while paused or in `"idle"` mode.
 - Clicking an NPC with no `chatter` array (or an empty one) silently does nothing.
 
+**NPC Dialogue (proximity + E key):**
+
+When the player walks within ~2.5 m of an interactable NPC in physics mode, an `[E] 与 {name} 对话` prompt appears. Pressing E triggers an AI-powered dialogue turn using the NPC's `metadata.character` field as personality/knowledge context.
+
+To enable rich dialogue, always set `metadata.character` on every `npc` object:
+
+```json
+{
+  "objectId": "npc_guard",
+  "type": "npc",
+  "name": "老卫兵",
+  "interactable": true,
+  "interactionHint": "打招呼",
+  "metadata": {
+    "character": "你是皇城门口驻守三十年的老卫兵，见过无数人来人往，知道城内各处要道和禁忌，说话简短有力，偶尔叹息往事",
+    "moveMode": "idle",
+    "chatter": ["别乱跑", "今日无事"]
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `character` | `string` | Personality, role, knowledge, and speech style. The agent uses this as the NPC's system prompt for dialogue turns. Be specific: include who they are, what they know, and how they speak. |
+
+- `interactionHint` becomes the opening action the player sends (e.g. `"打招呼"` → agent receives `"玩家 打招呼"`).
+- Without `character`, the agent defaults to the NPC's `name` and `description` for context.
+
 ---
 
 ## GLTF Model Loading (Path A)

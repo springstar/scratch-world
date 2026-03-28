@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
     "@sparkjsdev/spark": "^0.1.10",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

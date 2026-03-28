@@ -55,4 +55,9 @@ export const SceneDataSchema = Type.Object({
 			description: "URL to a Gaussian splat file (.spz/.ply/.splat) — activates SplatViewer in the browser",
 		}),
 	),
+	colliderMeshUrl: Type.Optional(
+		Type.String({
+			description: "URL to physics collision mesh (.glb) — public CDN, no auth required",
+		}),
+	),
 });
