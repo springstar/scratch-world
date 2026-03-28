@@ -254,10 +254,11 @@ export class SceneRenderer {
   private perfCurrent = 1;            // multiplier applied to devicePixelRatio
   private readonly perfMin    = 0.5;  // floor during regression
   private readonly perfMax    = 1;    // ceiling during recovery
-  private readonly perfDebounce = 200; // ms before DPR is restored
+  private readonly perfDebounce = 400; // ms before DPR is restored (longer = less yo-yo)
   private perfRestoreTimer: ReturnType<typeof setTimeout> | null = null;
   // Rolling frame-time budget: if a frame exceeds this, regress.
-  private readonly frameBudgetMs = 50; // ~20 fps threshold
+  // 33ms = 30fps threshold — trigger before stutter, not after.
+  private readonly frameBudgetMs = 33;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -381,13 +382,15 @@ export class SceneRenderer {
 
     // GTAO — WebGPU-native Ground Truth Ambient Occlusion (TSL node graph).
     // Replaces the WebGL SSAOPass dropped during the WebGPU migration (c6461d8).
-    // radius=0.25: contact shadows tight to geometry (avoids haloing on open surfaces)
-    // distanceExponent=1: linear falloff (softer than quadratic for architectural scenes)
-    // samples=16: quality/perf balance; SMAA downstream cleans up temporal noise
+    // resolutionScale=0.5: render AO at half resolution — 4× fewer pixels, negligible
+    //   visual difference since SMAA downstream smooths the upscaled AO boundary.
+    // radius=0.25: tight contact shadows without haloing on open surfaces.
+    // samples=8: 16→8 halves per-pixel cost; AO is low-frequency so 8 is sufficient.
     this.aoNode = ao(sceneDepth, sceneNormal, this.camera);
+    this.aoNode.resolutionScale       = 0.5;
     this.aoNode.radius.value          = 0.25;
     this.aoNode.distanceExponent.value = 1.0;
-    this.aoNode.samples.value         = 16;
+    this.aoNode.samples.value         = 8;
     // getTextureNode("ao") returns a single-channel float where 1.0 = fully lit, 0.0 = occluded
     const aoTexture = this.aoNode.getTextureNode("ao");
     // Multiply scene color by AO to darken crevices/contact zones.
