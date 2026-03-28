@@ -236,7 +236,6 @@ export function App() {
           scene.sceneData.splatUrl ? (
             <SplatViewer
               splatUrl={scene.sceneData.splatUrl}
-              colliderMeshUrl={scene.sceneData.colliderMeshUrl}
               sceneObjects={scene.sceneData.objects}
               onInteract={handleSplatInteract}
             />
