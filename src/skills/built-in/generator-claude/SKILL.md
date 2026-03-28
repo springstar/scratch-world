@@ -638,10 +638,65 @@ const mat = stdlib.makeMat(0x8b6040, 0.8, 0.0);
 
 | Surface | color (hex) | roughness | metalness | notes |
 |---|---|---|---|---|
-| Hardwood floor (light oak) | `0xc8a46e` | 0.45 | 0.0 | use `applyPbr` + repeat 12 for best result |
-| Hardwood floor (dark walnut) | `0x6b4226` | 0.5 | 0.0 | |
+| Hardwood floor (light oak) | `0xc8a46e` | 0.35 | 0.0 | **use `makePhysicalMat` with clearcoat=0.8 instead** |
+| Hardwood floor (dark walnut) | `0x6b4226` | 0.4 | 0.0 | **use `makePhysicalMat` with clearcoat=0.9 instead** |
 | Concrete floor | `0x9e9e9e` | 0.85 | 0.0 | `applyPbr("concrete_floor_02", 8)` |
 | Painted wall (white) | `0xf2efe8` | 0.92 | 0.0 | slight warm tint, not pure white |
+
+---
+
+### `stdlib.makePhysicalMat(color, opts?)` → `THREE.MeshPhysicalMaterial`  ⭐ PREFER FOR KEY SURFACES
+
+**Use this instead of `makeMat` for any surface the camera will look at closely.**
+`MeshPhysicalMaterial` adds clearcoat (lacquer), transmission (glass), and anisotropy (brushed metal).
+
+```typescript
+stdlib.makePhysicalMat(color: number, opts?: {
+  roughness?:          number; // base roughness (default 0.5)
+  metalness?:          number; // default 0
+  clearcoat?:          number; // 0–1: polished lacquer over the base layer
+  clearcoatRoughness?: number; // roughness of the clearcoat itself (default 0.1)
+  transmission?:       number; // 0–1: glass-like transparency with refraction
+  ior?:                number; // index of refraction — glass=1.5, water=1.33, diamond=2.4
+  thickness?:          number; // transmission depth in world units (default 0.5)
+  anisotropy?:         number; // 0–1: brushed-metal directional highlight
+  iridescence?:        number; // 0–1: oil-film spectral colour shift
+})
+```
+
+**Physical material recipes — MANDATORY for these surface types:**
+
+| Surface | recipe |
+|---|---|
+| **NBA/sports hardwood floor** | `makePhysicalMat(0xc07820, { roughness:0.35, clearcoat:0.85, clearcoatRoughness:0.08 })` then `applyPbr(mat, "wood_floor", 14)` |
+| **Polished marble / tile** | `makePhysicalMat(0xe8e2d6, { roughness:0.08, clearcoat:1.0, clearcoatRoughness:0.05 })` then `applyPbr(mat, "marble_01", 6)` |
+| **Glass panel / window** | `makePhysicalMat(0xc8e0f0, { roughness:0.04, transmission:0.96, ior:1.52, thickness:0.3 })` |
+| **Lacquered wood (furniture)** | `makePhysicalMat(0x8b5e3c, { roughness:0.3, clearcoat:0.6, clearcoatRoughness:0.15 })` |
+| **Brushed stainless steel** | `makePhysicalMat(0xb8bec4, { roughness:0.3, metalness:0.95, anisotropy:0.8 })` |
+| **Polished chrome** | `makePhysicalMat(0xd0d4d8, { roughness:0.05, metalness:1.0 })` |
+| **Ice / frosted glass** | `makePhysicalMat(0xd0e8f4, { roughness:0.15, transmission:0.7, ior:1.31, thickness:0.5 })` |
+
+```javascript
+// ✅ CORRECT — polished hardwood court floor
+const floorMat = stdlib.makePhysicalMat(0xc07820, {
+  roughness: 0.35,
+  clearcoat: 0.85,
+  clearcoatRoughness: 0.08,
+});
+stdlib.applyPbr(floorMat, "wood_floor", 14);  // applyPbr works on physical materials too
+const floor = new THREE.Mesh(new THREE.BoxGeometry(28, 0.2, 15), floorMat);
+
+// ✅ CORRECT — glass backboard
+const glassMat = stdlib.makePhysicalMat(0xc8e4f8, {
+  roughness: 0.04,
+  transmission: 0.92,
+  ior: 1.52,
+  thickness: 0.05,
+});
+
+// ❌ WRONG — using makeMat for a surface the camera sees up close
+const floorMat = stdlib.makeMat(0xc07820, 0.45, 0.0);  // no clearcoat, looks flat/matte
+```
 | Painted wall (colored) | your choice | 0.88 | 0.0 | |
 | Brick wall | `0xc1693a` | 0.9 | 0.0 | `applyPbr("red_brick_03", 6)` |
 | Plaster / stucco | `0xddd5c8` | 0.95 | 0.0 | |

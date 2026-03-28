@@ -222,9 +222,29 @@ export interface StdlibApi {
 
   // Material helpers
   makeMat(col: number, roughness?: number, metalness?: number): THREE.MeshStandardMaterial;
+
+  /**
+   * Physical material — clearcoat, transmission, anisotropy, iridescence.
+   * Use instead of makeMat() when the surface needs:
+   *   - clearcoat: polished hardwood floors, lacquered surfaces, car paint
+   *   - transmission: glass panels, water bottles, ice
+   *   - anisotropy: brushed metal (poles, rails)
+   *   - iridescence: soap bubbles, oily puddles (rare)
+   */
+  makePhysicalMat(col: number, opts?: {
+    roughness?:          number; // base roughness (default 0.5)
+    metalness?:          number; // default 0
+    clearcoat?:          number; // 0–1, lacquer over the base (default 0)
+    clearcoatRoughness?: number; // roughness of the clearcoat layer (default 0.1)
+    transmission?:       number; // 0–1, glass-like refractive transparency (default 0)
+    ior?:                number; // index of refraction: glass=1.5, diamond=2.4 (default 1.5)
+    thickness?:          number; // transmission depth in world units (default 0.5)
+    anisotropy?:         number; // 0–1, brushed metal directional highlight (default 0)
+    iridescence?:        number; // 0–1, oil-film colour shift (default 0)
+  }): THREE.MeshPhysicalMaterial;
   makeTerrainSlopeMat(topColor: number, sideColor: number, lo?: number, hi?: number): THREE.MeshStandardNodeMaterial;
   makeMountainMat(snowColor?: number, rockColor?: number): THREE.MeshStandardNodeMaterial;
-  applyPbr(mat: THREE.MeshStandardMaterial, textureId: string, repeat: number, displacementScale?: number): void;
+  applyPbr(mat: THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial, textureId: string, repeat: number, displacementScale?: number): void;
 
   // Asset loaders
   loadModel(url: string, opts?: LoadModelOpts): Promise<THREE.Group>;
@@ -354,6 +374,34 @@ export function createStdlib(
     // ── Material helpers ────────────────────────────────────────────────────────
     makeMat(col: number, roughness = 0.8, metalness = 0.1) {
       return new THREE.MeshStandardMaterial({ color: col, roughness, metalness });
+    },
+
+    makePhysicalMat(col: number, opts: {
+      roughness?: number; metalness?: number;
+      clearcoat?: number; clearcoatRoughness?: number;
+      transmission?: number; ior?: number; thickness?: number;
+      anisotropy?: number; iridescence?: number;
+    } = {}) {
+      const {
+        roughness          = 0.5,
+        metalness          = 0,
+        clearcoat          = 0,
+        clearcoatRoughness = 0.1,
+        transmission       = 0,
+        ior                = 1.5,
+        thickness          = 0.5,
+        anisotropy         = 0,
+        iridescence        = 0,
+      } = opts;
+      const mat = new THREE.MeshPhysicalMaterial({
+        color: col, roughness, metalness,
+        clearcoat, clearcoatRoughness,
+        transmission, ior, thickness,
+        anisotropy, iridescence,
+      });
+      // transmission requires transparent rendering path
+      if (transmission > 0) mat.transparent = true;
+      return mat;
     },
 
     makeTerrainSlopeMat(topColor: number, sideColor: number, lo = 0.35, hi = 0.75) {

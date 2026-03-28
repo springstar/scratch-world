@@ -1,9 +1,10 @@
 import * as THREE from "three/webgpu";
 import * as TSL from "three/tsl";
-import { color, normalLocal, mix, uv, pass } from "three/tsl";
+import { color, normalLocal, mix, uv, pass, mrt, normalView, output } from "three/tsl";
 import { bloom }  from "three/addons/tsl/display/BloomNode.js";
 import { smaa }   from "three/addons/tsl/display/SMAANode.js";
 import { film }   from "three/examples/jsm/tsl/display/FilmNode.js";
+import { ao }     from "three/examples/jsm/tsl/display/GTAONode.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -196,6 +197,8 @@ export class SceneRenderer {
   private postProcessing!: THREE.PostProcessing;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private bloomNode!: any; // BloomNode — access .strength.value / .radius.value / .threshold.value
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private aoNode!: any;    // GTAONode — access .radius.value / .distanceExponent.value
   private sunDir = new THREE.Vector3(0, 1, 0); // updated per scene
   private sky: SkyMesh;
   // Persistent world ground plane and background ridges — hidden for indoor scenes,
@@ -368,19 +371,37 @@ export class SceneRenderer {
   }
 
   private setupPostProcessing(): void {
-    const scenePass  = pass(this.scene, this.camera);
-    const sceneColor = scenePass.getTextureNode("output");
+    // MRT: render color + view-space normals in one pass (required by GTAONode)
+    const scenePass = pass(this.scene, this.camera);
+    scenePass.setMRT(mrt({ output, normal: normalView }));
 
-    // Bloom — conservative defaults: threshold 1.1 (only true HDR overexposure),
-    // strength 0.2 and radius 0.2 keep glow subtle for typical scenes.
-    // Per-scene overrides are applied in loadScene() from environment.effects.bloom.
-    this.bloomNode = bloom(sceneColor, 0.2, 0.2, 1.1);
-    const withBloom = sceneColor.add(this.bloomNode);
+    const sceneColor  = scenePass.getTextureNode("output");
+    const sceneNormal = scenePass.getTextureNode("normal");
+    const sceneDepth  = scenePass.getTextureNode("depth");
+
+    // GTAO — WebGPU-native Ground Truth Ambient Occlusion (TSL node graph).
+    // Replaces the WebGL SSAOPass dropped during the WebGPU migration (c6461d8).
+    // radius=0.25: contact shadows tight to geometry (avoids haloing on open surfaces)
+    // distanceExponent=1: linear falloff (softer than quadratic for architectural scenes)
+    // samples=16: quality/perf balance; SMAA downstream cleans up temporal noise
+    this.aoNode = ao(sceneDepth, sceneNormal, this.camera);
+    this.aoNode.radius.value          = 0.25;
+    this.aoNode.distanceExponent.value = 1.0;
+    this.aoNode.samples.value         = 16;
+    // getTextureNode("ao") returns a single-channel float where 1.0 = fully lit, 0.0 = occluded
+    const aoTexture = this.aoNode.getTextureNode("ao");
+    // Multiply scene color by AO to darken crevices/contact zones.
+    // aoTexture is [0,1] so open surfaces stay at ×1; occluded zones dim toward 0.
+    const withAO = sceneColor.mul(aoTexture);
+
+    // Bloom — conservative defaults; per-scene overrides applied in loadScene()
+    this.bloomNode = bloom(withAO, 0.2, 0.2, 1.1);
+    const withBloom = withAO.add(this.bloomNode);
 
     // SMAA anti-aliasing
     const smaaNode = smaa(withBloom);
 
-    // Film grain — photographic noise (intensity 0.04 = very subtle)
+    // Film grain — photographic noise (0.04 = very subtle)
     const withGrain = film(smaaNode, 0.04);
 
     // Subtle screen-space vignette
