@@ -249,16 +249,23 @@ export class SceneRenderer {
   // Always render when animSystems are active (animated scenes like Water).
   private framesDue = 0;
 
-  // ── Adaptive DPR (R3F-style performance.regress) ──────────────────────────
-  // Tracks rendering performance; lowers pixel-ratio on frame drops.
-  private perfCurrent = 1;            // multiplier applied to devicePixelRatio
-  private readonly perfMin    = 0.5;  // floor during regression
-  private readonly perfMax    = 1;    // ceiling during recovery
-  private readonly perfDebounce = 400; // ms before DPR is restored (longer = less yo-yo)
-  private perfRestoreTimer: ReturnType<typeof setTimeout> | null = null;
-  // Rolling frame-time budget: if a frame exceeds this, regress.
-  // 33ms = 30fps threshold — trigger before stutter, not after.
-  private readonly frameBudgetMs = 33;
+  // ── Dynamic quality tier (0=LOW, 1=MEDIUM, 2=HIGH) ──────────────────────
+  // Tier transitions rebuild the full PostProcessing pipeline so expensive
+  // GPU passes (GTAO, SMAA, grain) are truly skipped — not just blended away.
+  //
+  //  HIGH   (2): GTAO + bloom + SMAA + grain + vignette,  DPR ×1.0
+  //  MEDIUM (1): no GTAO,       bloom + SMAA,             DPR ×0.75
+  //  LOW    (0): no GTAO/SMAA,  bloom only,               DPR ×0.5
+  //
+  // Asymmetric cooldowns prevent thrashing: fast downgrade, slow upgrade.
+  private qualityTier = 2;
+  private readonly frameSamples: number[] = [];  // rolling GPU frame-time window
+  private readonly frameSampleMax = 10;
+  private lastTierChange = 0;
+  private readonly tierDownCooldown = 2000;  // ms: minimum gap between downgrades
+  private readonly tierUpCooldown   = 8000;  // ms: minimum gap between upgrades
+  // Bloom params cached here so they survive pipeline rebuilds on tier change
+  private bloomParams = { strength: 0.2, radius: 0.2, threshold: 1.1 };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -364,54 +371,70 @@ export class SceneRenderer {
       this.scene.environment = pmrem.fromScene(new RoomEnvironment()).texture;
       pmrem.dispose();
 
-      this.setupPostProcessing();
+      this.buildPostProcessing(this.qualityTier);
       this.setupResizeObserver(this.canvas);
       this.startLoop();
     })();
     return this.initPromise;
   }
 
-  private setupPostProcessing(): void {
-    // MRT: render color + view-space normals in one pass (required by GTAONode)
-    const scenePass = pass(this.scene, this.camera);
-    scenePass.setMRT(mrt({ output, normal: normalView }));
+  private buildPostProcessing(tier: number): void {
+    // Dispose the old pipeline before rebuilding (avoids GPU resource leaks).
+    try { (this.postProcessing as unknown as { dispose?: () => void }).dispose?.(); } catch (_) { /* ignore */ }
 
-    const sceneColor  = scenePass.getTextureNode("output");
-    const sceneNormal = scenePass.getTextureNode("normal");
-    const sceneDepth  = scenePass.getTextureNode("depth");
+    if (tier >= 2) {
+      // ── HIGH: MRT → GTAO → bloom → SMAA → grain → vignette ───────────────
+      const scenePass = pass(this.scene, this.camera);
+      scenePass.setMRT(mrt({ output, normal: normalView }));
+      const sceneColor  = scenePass.getTextureNode("output");
+      const sceneNormal = scenePass.getTextureNode("normal");
+      const sceneDepth  = scenePass.getTextureNode("depth");
 
-    // GTAO — WebGPU-native Ground Truth Ambient Occlusion (TSL node graph).
-    // resolutionScale=0.25: render AO at quarter resolution — 16x fewer pixels.
-    // AO is a low-frequency effect; quarter-res is invisible after SMAA blending.
-    // samples=6: minimal sample count sufficient for contact shadows.
-    this.aoNode = ao(sceneDepth, sceneNormal, this.camera);
-    this.aoNode.resolutionScale       = 0.25;
-    this.aoNode.radius.value          = 0.25;
-    this.aoNode.distanceExponent.value = 1.0;
-    this.aoNode.samples.value         = 6;
-    // getTextureNode("ao") returns a single-channel float where 1.0 = fully lit, 0.0 = occluded
-    const aoTexture = this.aoNode.getTextureNode("ao");
-    // Multiply scene color by AO to darken crevices/contact zones.
-    // aoTexture is [0,1] so open surfaces stay at ×1; occluded zones dim toward 0.
-    const withAO = sceneColor.mul(aoTexture);
+      // GTAO — quarter resolution (16× fewer pixels), 6 samples: sufficient for contact shadows
+      this.aoNode = ao(sceneDepth, sceneNormal, this.camera);
+      this.aoNode.resolutionScale       = 0.25;
+      this.aoNode.radius.value          = 0.25;
+      this.aoNode.distanceExponent.value = 1.0;
+      this.aoNode.samples.value         = 6;
+      const aoTexture = this.aoNode.getTextureNode("ao");
+      const withAO = sceneColor.mul(aoTexture);
 
-    // Bloom — conservative defaults; per-scene overrides applied in loadScene()
-    this.bloomNode = bloom(withAO, 0.2, 0.2, 1.1);
-    const withBloom = withAO.add(this.bloomNode);
+      this.bloomNode = bloom(withAO, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
+      const withBloom = withAO.add(this.bloomNode);
+      const smaaNode  = smaa(withBloom);
+      const withGrain = film(smaaNode, 0.04);
+      const dist      = uv().sub(0.5).length().mul(1.55);
+      const vignette  = dist.smoothstep(0.8, 0.15).mul(0.24).add(0.76);
 
-    // SMAA anti-aliasing
-    const smaaNode = smaa(withBloom);
+      const pp = new THREE.PostProcessing(this.renderer);
+      pp.outputNode = withGrain.mul(vignette);
+      this.postProcessing = pp;
 
-    // Film grain — photographic noise (0.04 = very subtle)
-    const withGrain = film(smaaNode, 0.04);
+    } else if (tier === 1) {
+      // ── MEDIUM: no GTAO, bloom + SMAA ─────────────────────────────────────
+      const scenePass  = pass(this.scene, this.camera);
+      const sceneColor = scenePass.getTextureNode("output");
 
-    // Subtle screen-space vignette
-    const dist     = uv().sub(0.5).length().mul(1.55);
-    const vignette = dist.smoothstep(0.8, 0.15).mul(0.24).add(0.76);
+      this.bloomNode = bloom(sceneColor, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
+      const withBloom = sceneColor.add(this.bloomNode);
+      const smaaNode  = smaa(withBloom);
 
-    const pp = new THREE.PostProcessing(this.renderer);
-    pp.outputNode = withGrain.mul(vignette);
-    this.postProcessing = pp;
+      const pp = new THREE.PostProcessing(this.renderer);
+      pp.outputNode = smaaNode;
+      this.postProcessing = pp;
+
+    } else {
+      // ── LOW: no GTAO/SMAA, bloom only ─────────────────────────────────────
+      const scenePass  = pass(this.scene, this.camera);
+      const sceneColor = scenePass.getTextureNode("output");
+
+      this.bloomNode = bloom(sceneColor, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
+      const withBloom = sceneColor.add(this.bloomNode);
+
+      const pp = new THREE.PostProcessing(this.renderer);
+      pp.outputNode = withBloom;
+      this.postProcessing = pp;
+    }
   }
 
   /** Register a per-frame system. Systems are kept sorted by priority (ascending). */
@@ -511,10 +534,13 @@ export class SceneRenderer {
     const bloomCfg = env.effects?.bloom;
     const baseStrength = bloomCfg?.strength ?? 0.2;
     const isNight = env.skybox === "night" || env.timeOfDay === "night";
-    this.bloomNode.strength.value  = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
-    this.bloomNode.radius.value    = bloomCfg?.radius ?? 0.2;
+    this.bloomParams.strength  = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
+    this.bloomParams.radius    = bloomCfg?.radius ?? 0.2;
+    this.bloomParams.threshold = bloomCfg?.threshold ?? 1.1;
+    this.bloomNode.strength.value  = this.bloomParams.strength;
+    this.bloomNode.radius.value    = this.bloomParams.radius;
     // Threshold 1.1: only pixels that exceed 1.1 in HDR space bloom.
-    this.bloomNode.threshold.value = bloomCfg?.threshold ?? 1.1;
+    this.bloomNode.threshold.value = this.bloomParams.threshold;
 
     // Upgrade scene.environment from RoomEnvironment baseline to a real Polyhaven
     // HDRI matched to the skybox preset.  Fire-and-forget: the baseline keeps
@@ -643,9 +669,12 @@ export class SceneRenderer {
       return hasPoint;
     })();
     if (isIndoor) {
-      this.bloomNode.strength.value  = 0.12;
-      this.bloomNode.radius.value    = 0.05;
-      this.bloomNode.threshold.value = 1.3;
+      this.bloomParams.strength  = 0.12;
+      this.bloomParams.radius    = 0.05;
+      this.bloomParams.threshold = 1.3;
+      this.bloomNode.strength.value  = this.bloomParams.strength;
+      this.bloomNode.radius.value    = this.bloomParams.radius;
+      this.bloomNode.threshold.value = this.bloomParams.threshold;
     }
   }
 
@@ -716,7 +745,6 @@ export class SceneRenderer {
     if (this.disposed) return;
     this.disposed = true;
     try { this.renderer.setAnimationLoop(null); } catch (_) { /* not yet initialized */ }
-    if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup",   this.onKeyUp);
     this.keysDown.clear();
@@ -729,23 +757,60 @@ export class SceneRenderer {
   // ── Private ──────────────────────────────────────────────────────────────
 
   /**
-   * Adaptive DPR regression (R3F performance.regress pattern).
-   * Halves the pixel ratio immediately; schedules restore after debounce.
+   * Switch to a new quality tier. Rebuilds the PostProcessing pipeline so
+   * expensive GPU passes are truly skipped, and adjusts DPR accordingly.
+   *  2 = HIGH:   GTAO + bloom + SMAA + grain + vignette, DPR ×1.0
+   *  1 = MEDIUM: bloom + SMAA,                           DPR ×0.75
+   *  0 = LOW:    bloom only,                             DPR ×0.5
    */
-  private regress(): void {
-    if (this.perfCurrent <= this.perfMin) return; // already at floor
-    this.perfCurrent = this.perfMin;
+  private setQualityTier(tier: number): void {
+    this.qualityTier = tier;
+    this.lastTierChange = performance.now();
+    this.frameSamples.length = 0; // reset window after any tier change
+
+    // Rebuild pipeline for the new tier
+    this.buildPostProcessing(tier);
+
+    // Reapply stored bloom params to the freshly created bloomNode
+    this.bloomNode.strength.value  = this.bloomParams.strength;
+    this.bloomNode.radius.value    = this.bloomParams.radius;
+    this.bloomNode.threshold.value = this.bloomParams.threshold;
+
+    // Adjust DPR: lower tiers reduce pixel count to save fillrate
+    const dprScale = tier >= 2 ? 1.0 : tier === 1 ? 0.75 : 0.5;
     const el = this.renderer.domElement;
-    this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
+    this.renderer.setPixelRatio(window.devicePixelRatio * dprScale);
     this.renderer.setSize(el.clientWidth, el.clientHeight, false);
-    if (this.perfRestoreTimer !== null) clearTimeout(this.perfRestoreTimer);
-    this.perfRestoreTimer = setTimeout(() => {
-      this.perfRestoreTimer = null;
-      this.perfCurrent = this.perfMax;
-      this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
-      this.renderer.setSize(el.clientWidth, el.clientHeight, false);
-      this.invalidate(2);
-    }, this.perfDebounce);
+    this.invalidate(2);
+
+    const label = ["LOW", "MEDIUM", "HIGH"][tier] ?? tier;
+    console.info(`[SceneRenderer] quality tier → ${label} (DPR ×${dprScale})`);
+  }
+
+  /**
+   * Called each frame with the GPU render time (ms).
+   * Maintains a rolling window and adjusts quality tier as needed.
+   *
+   * Downgrade: p75 > 33ms (< 30 fps)  with tierDownCooldown guard
+   * Upgrade:   p75 < 20ms (> 50 fps)  with tierUpCooldown guard
+   */
+  private evaluateQualityTier(frameMs: number): void {
+    this.frameSamples.push(frameMs);
+    if (this.frameSamples.length > this.frameSampleMax) {
+      this.frameSamples.shift();
+    }
+    // Need a full window before drawing conclusions
+    if (this.frameSamples.length < this.frameSampleMax) return;
+
+    const sorted = [...this.frameSamples].sort((a, b) => a - b);
+    const p75 = sorted[Math.floor(sorted.length * 0.75)];
+    const now = performance.now();
+
+    if (p75 > 33 && this.qualityTier > 0 && now - this.lastTierChange > this.tierDownCooldown) {
+      this.setQualityTier(this.qualityTier - 1);
+    } else if (p75 < 20 && this.qualityTier < 2 && now - this.lastTierChange > this.tierUpCooldown) {
+      this.setQualityTier(this.qualityTier + 1);
+    }
   }
 
   private setupGround(): void {
@@ -834,7 +899,7 @@ export class SceneRenderer {
       const h = canvas.clientHeight;
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setPixelRatio(window.devicePixelRatio * this.perfCurrent);
+      this.renderer.setPixelRatio(window.devicePixelRatio * (this.qualityTier >= 2 ? 1.0 : this.qualityTier === 1 ? 0.75 : 0.5));
       this.renderer.setSize(w, h, false);
       // PostProcessing resizes automatically with renderer.setSize()
       this.invalidate(2);
@@ -954,7 +1019,7 @@ export class SceneRenderer {
         console.error("[SceneRenderer] render error:", err);
       }
       const frameMs = performance.now() - frameStart;
-      if (frameMs > this.frameBudgetMs) this.regress();
+      this.evaluateQualityTier(frameMs);
     });
   }
 }
