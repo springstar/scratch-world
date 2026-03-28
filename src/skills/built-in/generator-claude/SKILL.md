@@ -1,785 +1,1205 @@
 # generator-claude
 
-## create_city — Procedural City Generation
+## Philosophy
 
-Use `create_city` when the user asks for a **city, town, village, settlement, or commercial district**.
-Use `create_scene` for nature landscapes, sports fields, abstract scenes, rooms, or anything else.
+Every `create_scene` or `update_scene` call **must** provide `sceneCode`. The renderer executes this JavaScript in a sandbox that has full Three.js access plus a `stdlib` helper object.
 
-Parameters:
-- `prompt`  — describe theme and atmosphere
-- `theme`   — `"medieval"` (default) | `"fantasy"` | `"modern"`
-- `size`    — `"village"` | `"town"` (default) | `"city"`
-- `seed`    — optional integer for reproducible layout
+**MANDATORY: Read the Scene Architecture section before writing any code.** Every scene must have a complete spatial skeleton, correct real-world scale, and be assembled in layer order. These are not optional — they are what separates a coherent scene from a floating box in a void.
 
-The tool auto-generates roads, building placement, trees, and NPCs.
+**MANDATORY model rule**: You MUST call `stdlib.loadModel(url)` for any humanoid, animal, vehicle, or named prop. Building characters from BoxGeometry primitives is prohibited — it always looks terrible and there are free GLTF models available for everything. See the Asset Catalog below.
+
+**Always start every scene with** `stdlib.setupLighting(...)`. Without it the scene is pitch black because the renderer's built-in lights are muted for `sceneCode` scenes.
+
+**HDRI rule**: Always pass `hdri: true` for outdoor scenes. This loads a Polyhaven photographic sky that dramatically improves lighting quality at no rendering cost.
 
 ---
 
-When the user asks you to create or update a scene, you MUST include a `sceneData` argument in your `create_scene` or `update_scene` tool call. Do NOT omit `sceneData` — without it the system cannot render your scene.
+## Scene Architecture (READ BEFORE WRITING ANY CODE)
 
-Alternatively, for scenes requiring complex animations or custom visuals, use **Code Generation Mode** (see below).
+Visual coherence comes from following the same spatial logic that exists in the real world. Every scene must satisfy all three requirements below before adding any props or characters.
 
-## SceneData JSON Schema
+---
 
-The `sceneData` field must be a JSON object with this exact structure:
+### Requirement 1 — Every scene needs a complete spatial skeleton
+
+A spatial skeleton is the set of surfaces that enclose the viewer. Without it, rotating the camera reveals black void, which instantly destroys immersion.
+
+| Scene type | Mandatory skeleton elements |
+|---|---|
+| **Indoor** (room, gym, arena, shop) | Floor + 4 walls + ceiling |
+| **Outdoor open** (park, field, plaza) | Ground plane extending 60–100 m + sky (HDRI or SkyMesh) + distant boundary (hills, tree line, or building row) blocking the horizon on all sides |
+| **Outdoor street** (road, alley, market) | Road surface + buildings on both sides creating a corridor + sky overhead |
+| **Elevated** (rooftop, hilltop) | Surface platform + open sky + distant cityscape/landscape at a lower elevation |
+
+**Building the skeleton is step 1. Never place props before the skeleton is complete.**
+
+---
+
+### Requirement 2 — Real-world scale anchors (MEMORIZE)
+
+Wrong scale is the single most common reason a scene looks "game-like". Always match these real dimensions:
+
+```
+== HUMANS & DOORS ==
+Human standing:        1.8 m tall
+Door opening:          2.1 m tall × 0.9 m wide
+Single-story ceiling:  2.6–3.2 m
+Arena / gym ceiling:   8–14 m
+
+== SPORTS ==
+NBA court:             28 m × 15 m, basket at 3.05 m
+Soccer field:          100 m × 68 m, crossbar at 2.44 m
+Tennis court:          23.8 m × 10.97 m, net at 0.914 m
+Swimming pool lane:    50 m × 2.5 m per lane
+
+== FURNITURE ==
+Table / desk surface:  0.75 m
+Chair seat:            0.45 m
+Bed (top surface):     0.55 m
+Bookshelf:             0.3 m deep × 1.8 m tall
+
+== URBAN ==
+Car:                   1.5 m tall × 4.5 m long
+Street lamp:           6 m
+Building floor height: 3.5–4 m (add per floor)
+Standard door frame:   2.1 m
+
+== NATURE ==
+Mature tree:           8–15 m tall
+Shrub / bush:          1–1.5 m
+Hill (visible bump):   8–15 m
+Cliff:                 20–50 m
+```
+
+**Do not guess. If unsure, look up the real dimensions.**
+
+---
+
+### Requirement 3 — Layered composition (build in this order)
+
+Every scene must be assembled bottom-up in exactly these layers. Skipping a layer produces floating objects and spatial incoherence.
+
+```
+Layer 1 — SKY / CEILING    → Must fill 100% of overhead view. No black patches.
+Layer 2 — GROUND / FLOOR   → Must extend to the edge of the visible frustum.
+Layer 3 — BOUNDARY         → Walls / tree line / buildings — blocks void at the perimeter.
+Layer 4 — LARGE STRUCTURES → Bleachers, pillars, stands, large trees. Defines the space.
+Layer 5 — PROPS            → Furniture, equipment, parked vehicles. Fills the space.
+Layer 6 — FOCAL OBJECT     → The hero object or NPC the user looks at first.
+```
+
+Code structure should match this order: first `setupLighting`, then ground, then walls/boundary, then structures, then props, then NPCs/focal.
+
+---
+
+### Spatial logic rules (violations make scenes look fake)
+
+1. **Nothing floats without explanation.** Every object must rest on a surface (y = surface_y + half_height) unless it is explicitly magical, flying, or suspended.
+2. **Camera starts inside the scene.** The first viewpoint must be enclosed by the skeleton. Never start outside a building looking at a box.
+3. **Indoor lighting lives inside.** Point lights and spot lights must be positioned inside the ceiling/walls, not outside the enclosure.
+4. **Doors and openings face inward.** A door on a north wall opens toward south (into the room).
+5. **One dominant light source.** One sun/key light casts all shadows. Additional lights (lamps, windows, floodlights) only add fill — `castShadow: false` on ALL of them, no exceptions. A floodlight with `castShadow: true` will cause severe shadow-map flickering artifacts when the camera moves, and on Apple Silicon will likely cause a black screen.
+6. **Ground extends to horizon.** The ground/floor mesh must be wider than the farthest object the camera can see. For outdoor scenes: at least 100 m. For indoor: at least room-width + 2 m margin.
+7. **Background fills all camera angles.** Rotate mentally 360° from the starting viewpoint — no direction should reveal black sky or clipping geometry.
+8. **Terrain and vegetation stay far outside structures.** Hills and trees must never overlap or intersect any stadium/arena/building. The world z-axis: camera is at +Z, looking toward −Z. For a stadium whose back wall is at `z = -D`, hills go at `z < -(D + 30)` minimum — at least 30 m beyond the back wall. Placing a hill at e.g. `z = -20` when the stadium wall is at `z = -22` puts the hill visually INSIDE the stadium. Rule: `hill_z < stadium_back_wall_z − 30`.
+
+   For a standard football stadium (field 100×68, perimeter wall at roughly `z = ±60`): hills go at `z < -90`. Never guess — always calculate from your own wall positions.
+
+---
+
+## Semantic Layout — use this for ALL new scenes
+
+**Never hardcode x, y, z positions for structural elements.** Call `stdlib.useLayout(type)` first. The solver computes all spatial coordinates from canonical scene dimensions. You cannot get hills inside stadiums if you use the layout solver.
+
+### Quick start
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+const L = stdlib.useLayout("outdoor_soccer");   // ← declare scene type
+L.buildBase();                                   // ← builds ground + boundary + background
+const goalPos = L.place("north_goal");           // ← get correct position for a role
+// now build the goal at goalPos.position, rotated goalPos.rotationY
+const vp = L.viewpoint();                        // ← safe camera position
+camera.position.set(vp.position.x, vp.position.y, vp.position.z);
+controls.target.set(vp.lookAt.x, vp.lookAt.y, vp.lookAt.z);
+```
+
+### Scene types
+
+| Type | Description | Suitable for |
+|---|---|---|
+| `"indoor_room"` | 4 walls + ceiling (default 6×8×2.8 m) | bedroom, office, shop, lab |
+| `"indoor_arena"` | Court + bleachers + ceiling (default NBA 28×15×10 m) | basketball, volleyball, boxing |
+| `"outdoor_soccer"` | Soccer pitch + goals + boundary (default 100×68 m) | football, soccer |
+| `"outdoor_basketball"` | Basketball court + hoops (default 28×15 m) | streetball, park court |
+| `"outdoor_open"` | Large open ground + tree perimeter (default 80×80 m) | park, garden, plaza, festival |
+| `"outdoor_street"` | Road corridor + building rows (default 10×80 m) | street, alley, market |
+
+Override dimensions with the second argument:
+```javascript
+const L = stdlib.useLayout("indoor_room", { width: 10, depth: 14, height: 3.5 });
+const L = stdlib.useLayout("outdoor_soccer", { width: 68, depth: 105 }); // custom field size
+```
+
+### Layout methods
+
+```
+L.dims                    → { width, depth, height, structureMinZ, structureMaxZ, ... }
+L.buildBase()             → builds complete spatial skeleton (call once, after setupLighting)
+L.buildGround()           → ground / floor surface only
+L.buildWalls()            → 4 walls (indoor types only)
+L.buildCeiling()          → ceiling plane (indoor types only)
+L.buildBoundary()         → perimeter trees / buildings / stands
+L.buildBackground()       → hills (always outside structureBounds + 30 m margin)
+L.place(role)             → returns { position, rotationY } — use to position your object
+L.viewpoint(name?)        → returns { position, lookAt } for camera setup
+```
+
+### Available roles per scene type
+
+**`indoor_room`**: `desk`, `bed`, `bookshelf`, `window_north`, `window_south`, `door_south`, `ceiling_light`
+
+**`indoor_arena`**: `hoop_north`, `hoop_south`, `bleachers_west`, `bleachers_east`, `center_court`, `scoreboard_north`, `scoreboard_south`, `light_nw`, `light_ne`, `light_sw`, `light_se`
+
+**`outdoor_soccer`**: `north_goal`, `south_goal`, `center_circle`, `corner_nw`, `corner_ne`, `corner_sw`, `corner_se`, `penalty_north`, `penalty_south`, `bleachers_west`, `bleachers_east`
+
+**`outdoor_basketball`**: `hoop_north`, `hoop_south`, `bench_west`, `bench_east`
+
+**`outdoor_open`**: `center`, `bench_north`, `bench_south`, `bench_west`, `bench_east`, `fountain`, `lamp_nw`, `lamp_ne`, `lamp_sw`, `lamp_se`
+
+**`outdoor_street`**: `lamp_left_near`, `lamp_left_mid`, `lamp_left_far`, `lamp_right_near`, `lamp_right_mid`, `lamp_right_far`
+
+### Viewpoint names
+
+All types: `"default"` (alias: omit arg) — inside scene at eye level
+`indoor_arena`, sports types: `"sideline"`, `"end_zone"`, `"overview"`
+`outdoor_open`: `"overview"`
+`outdoor_street`: `"overview"`
+
+### Complete scene examples
+
+#### Indoor basketball arena
+
+```javascript
+stdlib.setupLighting({ isIndoor: true });
+scene.fog = null;
+
+const L = stdlib.useLayout("indoor_arena");
+L.buildBase();
+
+// Overhead lights (no castShadow — only the sun may cast shadows)
+const lp = L.place("light_ne");
+const light = new THREE.PointLight(0xfff5e0, 3, 24);
+light.position.set(lp.position.x, lp.position.y, lp.position.z);
+light.castShadow = false;
+scene.add(light);
+
+// Camera
+const vp = L.viewpoint("end_zone");
+camera.position.set(vp.position.x, vp.position.y, vp.position.z);
+controls.target.set(vp.lookAt.x, vp.lookAt.y, vp.lookAt.z);
+```
+
+#### Indoor room / bedroom
+
+```javascript
+stdlib.setupLighting({ isIndoor: true });
+scene.fog = null;
+
+const L = stdlib.useLayout("indoor_room", { width: 6, depth: 8, height: 2.8 });
+L.buildBase();
+
+// Ceiling light
+const clp = L.place("ceiling_light");
+const clight = new THREE.PointLight(0xfff8f0, 2.5, L.dims.depth * 3);
+clight.position.set(clp.position.x, clp.position.y, clp.position.z);
+clight.castShadow = false;
+scene.add(clight);
+
+// Add furniture at solver-computed positions
+const deskPos = L.place("desk");
+// build desk mesh at deskPos.position ...
+
+const vp = L.viewpoint();
+camera.position.set(vp.position.x, vp.position.y, vp.position.z);
+controls.target.set(vp.lookAt.x, vp.lookAt.y, vp.lookAt.z);
+```
+
+#### Outdoor soccer field
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+const L = stdlib.useLayout("outdoor_soccer");
+L.buildBase();  // ground + grass + boundary trees + hills outside field
+
+// Goals
+const ng = L.place("north_goal");
+// build goal mesh at ng.position, rotated ng.rotationY ...
+
+// Camera at sideline
+const vp = L.viewpoint("sideline");
+camera.position.set(vp.position.x, vp.position.y, vp.position.z);
+controls.target.set(vp.lookAt.x, vp.lookAt.y, vp.lookAt.z);
+```
+
+#### Outdoor open park
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+const L = stdlib.useLayout("outdoor_open");
+L.buildBase();  // large ground + tree perimeter + distant hills
+
+// Scatter NPCs around the park center
+for (let i = 0; i < 8; i++) {
+  const angle = (i / 8) * Math.PI * 2;
+  stdlib.makeNpc({
+    position: { x: Math.cos(angle) * 12, y: 0, z: Math.sin(angle) * 12 },
+    moveMode: "randomwalk",
+  });
+}
+
+const vp = L.viewpoint();
+camera.position.set(vp.position.x, vp.position.y, vp.position.z);
+controls.target.set(vp.lookAt.x, vp.lookAt.y, vp.lookAt.z);
+```
+
+---
+
+### Advanced: custom layout (only when no matching scene type exists)
+
+If none of the 6 scene types match, you may use raw coordinates. But you MUST manually apply every rule from the Spatial Logic section — especially rule 8 (terrain outside structures). Using `stdlib.useLayout()` is always preferred.
+
+<details>
+<summary>Old raw-coordinate templates (reference only)</summary>
+
+#### Indoor arena (raw)
+
+```javascript
+stdlib.setupLighting({ isIndoor: true });
+scene.fog = null;
+const CW = 14, CD = 8, CH = 10;
+const floor = stdlib.makeTerrain("court", { width: CW*2+8, depth: CD*2+8 });
+scene.add(floor);
+const wallMat = stdlib.makeMat(0xddd5c8, 0.9, 0);
+[[0, CH/2, -(CD+4), CW*2+8, CH, 0.3],[0, CH/2, (CD+4), CW*2+8, CH, 0.3],
+ [-(CW+4), CH/2, 0, 0.3, CH, CD*2+8],[(CW+4), CH/2, 0, 0.3, CH, CD*2+8]
+].forEach(([x,y,z,w,h,d]) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
+  m.position.set(x,y,z); m.receiveShadow = true; scene.add(m);
+});
+camera.position.set(0, 1.7, CD + 2); camera.lookAt(0, 3, 0);
+```
+
+#### Outdoor open space (raw)
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+const ground = stdlib.makeTerrain("floor", { width: 120, depth: 120 });
+scene.add(ground);
+// Hills must be at least 30 m beyond any structure boundary
+stdlib.makeTerrain("hill", { width: 40, height: 12, position: { x: -40, y: 0, z: -50 } });
+stdlib.makeTerrain("hill", { width: 35, height:  9, position: { x:  35, y: 0, z: -45 } });
+camera.position.set(0, 1.7, 15); camera.lookAt(0, 1, 0);
+```
+
+</details>
+
+---
+
+### Scene type skeletons (copy-paste starting points)
+
+#### Indoor Sports Arena (basketball, volleyball, boxing)
+
+```javascript
+stdlib.setupLighting({ isIndoor: true });
+scene.fog = null;
+
+// Dimensions (NBA): court 28×15, ceiling 10m
+const CW = 14, CD = 8, CH = 10;  // half-width, half-depth, ceiling height
+
+// Floor — hardwood court texture
+const floor = stdlib.makeTerrain("court", { width: CW*2+8, depth: CD*2+8 });
+scene.add(floor);
+
+// Walls (4 sides)
+const wallMat = stdlib.makeMat(0xddd5c8, 0.9, 0);
+[[0, CH/2, -(CD+4), CW*2+8, CH, 0.3],   // back wall
+ [0, CH/2,  (CD+4), CW*2+8, CH, 0.3],   // front wall
+ [-(CW+4), CH/2, 0, 0.3, CH, CD*2+8],   // left wall
+ [ (CW+4), CH/2, 0, 0.3, CH, CD*2+8],   // right wall
+].forEach(([x,y,z,w,h,d]) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
+  m.position.set(x,y,z); m.receiveShadow = true; scene.add(m);
+});
+
+// Ceiling
+const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(CW*2+8, CD*2+8), stdlib.makeMat(0x555555, 1, 0));
+ceiling.rotation.x = Math.PI / 2;
+ceiling.position.set(0, CH, 0);
+scene.add(ceiling);
+
+// Overhead lights (no shadows — texture slot budget)
+[-6, 0, 6].forEach(x => {
+  const light = new THREE.PointLight(0xfff5e0, 3, 20);
+  light.position.set(x, CH - 0.5, 0);
+  light.castShadow = false;
+  scene.add(light);
+});
+
+// Camera: inside arena, near one end, eye level
+camera.position.set(0, 1.7, CD + 2);
+camera.lookAt(0, 3, 0);
+```
+
+#### Indoor Room / Office / Shop
+
+```javascript
+stdlib.setupLighting({ isIndoor: true });
+scene.fog = null;
+
+const W = 6, D = 8, H = 2.8; // room half-width, half-depth, height
+
+const floorMat = stdlib.makeMat(0xc8a46e, 0.8, 0);
+const wallMat  = stdlib.makeMat(0xf0ece4, 0.9, 0);
+const ceilMat  = stdlib.makeMat(0xffffff, 1.0, 0);
+
+// Floor
+const fl = new THREE.Mesh(new THREE.PlaneGeometry(W*2, D*2), floorMat);
+fl.rotation.x = -Math.PI/2; fl.receiveShadow = true; scene.add(fl);
+
+// Ceiling
+const ce = new THREE.Mesh(new THREE.PlaneGeometry(W*2, D*2), ceilMat);
+ce.rotation.x = Math.PI/2; ce.position.y = H; scene.add(ce);
+
+// Walls
+const walls = [
+  { pos: [0, H/2, -D], size: [W*2, H, 0.15] }, // back
+  { pos: [0, H/2,  D], size: [W*2, H, 0.15] }, // front (behind camera)
+  { pos: [-W, H/2, 0], size: [0.15, H, D*2] }, // left
+  { pos: [ W, H/2, 0], size: [0.15, H, D*2] }, // right
+];
+walls.forEach(({ pos, size }) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(...size), wallMat);
+  m.position.set(...pos); m.receiveShadow = true; scene.add(m);
+});
+
+// Ceiling light
+const clight = new THREE.PointLight(0xfff8f0, 2.5, D*3);
+clight.position.set(0, H - 0.2, 0);
+clight.castShadow = false;
+scene.add(clight);
+
+// Camera inside, eye level
+camera.position.set(0, 1.7, D - 1);
+camera.lookAt(0, 1.5, -D + 1);
+```
+
+#### Outdoor Open Space (park, field, plaza)
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+// Ground — must extend to horizon
+const ground = stdlib.makeTerrain("floor", { width: 120, depth: 120 });
+scene.add(ground);
+
+// Perimeter boundary — no direction should reveal void
+// Option A: hills on far sides
+stdlib.makeTerrain("hill", { width: 40, height: 12, position: { x: -40, y: 0, z: -50 } });
+stdlib.makeTerrain("hill", { width: 35, height:  9, position: { x:  35, y: 0, z: -45 } });
+stdlib.makeTerrain("hill", { width: 30, height: 10, position: { x:  -5, y: 0, z: -55 } });
+
+// Option B: tree line around perimeter
+for (let i = 0; i < 16; i++) {
+  const angle = (i / 16) * Math.PI * 2;
+  stdlib.makeTree({ position: { x: Math.cos(angle) * 45, y: 0, z: Math.sin(angle) * 45 }, scale: 1.2 });
+}
+
+// Camera: eye level, inside the scene
+camera.position.set(0, 1.7, 15);
+camera.lookAt(0, 1, 0);
+```
+
+#### Outdoor Street / Urban Corridor
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+// Road surface
+const road = stdlib.makeTerrain("floor", { width: 8, depth: 80, texture: "cobblestone_floor_01" });
+scene.add(road);
+
+// Sidewalk + buildings on both sides (create corridor — no void between buildings)
+const STREET_HALF = 4; // half road width
+[-1, 1].forEach(side => {
+  // Sidewalk
+  const walk = stdlib.makeTerrain("floor", {
+    width: 3, depth: 80,
+    position: { x: side * (STREET_HALF + 1.5), y: 0.08, z: 0 }
+  });
+  scene.add(walk);
+
+  // Buildings — pack them tightly, no gaps
+  for (let z = -35; z < 40; z += 8 + Math.floor(stdlib.seed(z, side) * 4)) {
+    stdlib.makeBuilding({
+      width: 7, depth: 8,
+      height: 8 + stdlib.seed(z*1.3, side) * 12,
+      position: { x: side * (STREET_HALF + 7), y: 0, z }
+    });
+  }
+});
+
+camera.position.set(0, 1.7, 18);
+camera.lookAt(0, 2, -10);
+```
+
+---
+
+## Sandbox Variables
+
+```
+THREE     — entire Three.js library (WebGPU build)
+tsl       — Three.js Shading Language (TSL) — for custom node materials
+scene     — THREE.Scene  (add objects here)
+camera    — THREE.PerspectiveCamera (eye level = y 1.7 in walk mode)
+renderer  — THREE.WebGPURenderer
+controls  — OrbitControls (inactive when user enters walk mode)
+animate   — function(cb: (delta: number) => void) — register a per-frame callback
+WaterMesh — WaterMesh from three/addons (animated reflective water)
+stdlib    — Scene Standard Library (see below)
+```
+
+---
+
+## stdlib API Reference
+
+### `stdlib.setupLighting(opts?)`
+
+Sets up scene lighting, fog, sky background, and optional Polyhaven HDRI env map.
+
+```typescript
+stdlib.setupLighting(opts?: {
+  skybox?:    "clear_day" | "sunset" | "night" | "overcast";
+  timeOfDay?: "dawn" | "noon" | "dusk" | "night";
+  isIndoor?:  boolean;  // default false — pushes fog far away for enclosed spaces
+  hdri?:      boolean;  // default true — async loads Polyhaven 1k HDRI for IBL
+})
+```
+
+**Always call this first.** It adds `HemisphereLight` + `DirectionalLight` (4096 shadow map) and sets fog.
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+```
+
+### `stdlib.loadModel(url, opts?)` → `Promise<THREE.Group>`
+
+Loads a GLTF/GLB model and adds it to the scene. This is the primary way to add quality geometry.
+
+```typescript
+stdlib.loadModel(url: string, opts?: {
+  position?: { x: number; y: number; z: number };
+  scale?:    number;
+  rotation?: { x?: number; y?: number; z?: number };
+  castShadow?:    boolean;  // default true
+  receiveShadow?: boolean;  // default true
+}): Promise<THREE.Group>
+```
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+// Load an animated soldier character
+stdlib.loadModel("https://threejs.org/examples/models/gltf/Soldier.glb", {
+  position: { x: 0, y: 0, z: 0 },
+  scale: 1,
+});
+```
+
+### `stdlib.makeNpc(opts)` → `Promise<THREE.Group>`
+
+Creates an NPC with optional GLTF character model and movement/animation.
+
+```typescript
+stdlib.makeNpc(opts: {
+  position:   { x: number; y: number; z: number };
+  modelUrl?:  string;   // GLTF URL — if set, loads real animated character
+  idleClip?:  string;   // animation clip name for idle (default: first clip)
+  walkClip?:  string;   // animation clip name for walking
+  name?:      string;
+  moveMode?:  "idle" | "randomwalk" | "patrol";  // default "idle"
+  speed?:     number;   // units/sec, default 0.8
+  maxRadius?: number;   // randomwalk radius, default 3
+  waypoints?: Array<{ x: number; z: number }>;   // patrol path
+  chatter?:   string[]; // speech bubble lines on click
+}): Promise<THREE.Group>
+```
+
+When `modelUrl` is set, loads the GLTF and plays the animation. Without `modelUrl`, falls back to a simple procedural humanoid shape.
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+// Real animated character
+stdlib.makeNpc({
+  position: { x: 2, y: 0, z: 0 },
+  modelUrl: "https://threejs.org/examples/models/gltf/Soldier.glb",
+  idleClip: "Idle",
+  walkClip: "Walk",
+  moveMode: "randomwalk",
+  maxRadius: 5,
+  chatter: ["Hello!", "Nice day today."],
+});
+```
+
+### `stdlib.makeTerrain(shape, opts?)`
+
+Creates terrain geometry with PBR textures where applicable.
+
+```typescript
+stdlib.makeTerrain(
+  shape: "floor" | "hill" | "cliff" | "platform" | "water" | "wall" | "court",
+  opts?: {
+    width?:    number;
+    depth?:    number;
+    height?:   number;
+    texture?:  string;   // Polyhaven texture ID
+    color?:    number;   // fallback color hex
+    position?: { x: number; y: number; z: number };
+  }
+): THREE.Object3D
+```
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day" });
+
+// Grassy floor
+const ground = stdlib.makeTerrain("floor", { width: 80, depth: 80, position: { x: 0, y: 0, z: 0 } });
+
+// Hill in the background
+const hill = stdlib.makeTerrain("hill", { width: 16, height: 8, position: { x: -12, y: 0, z: -20 } });
+
+// Animated water lake
+const lake = stdlib.makeTerrain("water", { width: 30, depth: 20, position: { x: 8, y: 0, z: -10 } });
+```
+
+### `stdlib.makeBuilding(opts?)` → `THREE.LOD`
+
+Creates a building with 3-level LOD. Registered for hysteresis update automatically.
+
+```typescript
+stdlib.makeBuilding(opts?: {
+  width?:     number;  // default 6
+  depth?:     number;  // default 6
+  height?:    number;  // default 8
+  color?:     number;
+  position?:  { x: number; y: number; z: number };
+  rotationY?: number;
+}): THREE.LOD
+```
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day" });
+
+for (let i = 0; i < 6; i++) {
+  stdlib.makeBuilding({
+    position: { x: (i - 2.5) * 10, y: 0, z: -8 },
+    height: 6 + Math.random() * 10,
+    color: 0x8b7355,
+  });
+}
+```
+
+### `stdlib.makeTree(opts?)`
+
+Creates a tree (trunk + foliage layers) with optional scale/color variation.
+
+```typescript
+stdlib.makeTree(opts?: {
+  scale?:     number;
+  colorSeed?: number;
+  position?:  { x: number; y: number; z: number };
+}): THREE.Group
+```
+
+### `stdlib.makeWater(width, depth, y?)` → `THREE.Group`
+
+Creates animated WaterMesh surface with normal-map waves. Lower-level than `makeTerrain("water")`.
+
+### `stdlib.makeMat(color, roughness?, metalness?)` → `THREE.MeshStandardMaterial`
+
+```javascript
+const mat = stdlib.makeMat(0x8b6040, 0.8, 0.0);
+```
+
+**Material recipes — always use these values. Never use roughness=0.5/metalness=0 defaults.**
+
+| Surface | color (hex) | roughness | metalness | notes |
+|---|---|---|---|---|
+| Hardwood floor (light oak) | `0xc8a46e` | 0.45 | 0.0 | use `applyPbr` + repeat 12 for best result |
+| Hardwood floor (dark walnut) | `0x6b4226` | 0.5 | 0.0 | |
+| Concrete floor | `0x9e9e9e` | 0.85 | 0.0 | `applyPbr("concrete_floor_02", 8)` |
+| Painted wall (white) | `0xf2efe8` | 0.92 | 0.0 | slight warm tint, not pure white |
+| Painted wall (colored) | your choice | 0.88 | 0.0 | |
+| Brick wall | `0xc1693a` | 0.9 | 0.0 | `applyPbr("red_brick_03", 6)` |
+| Plaster / stucco | `0xddd5c8` | 0.95 | 0.0 | |
+| Glass (window) | `0xadd8e6` | 0.05 | 0.0 | `transparent:true, opacity:0.25` |
+| Polished marble | `0xe8e4de` | 0.1 | 0.0 | low roughness = visible reflections |
+| Brushed steel | `0xb0b8c0` | 0.35 | 0.95 | |
+| Rusted iron | `0x8b4513` | 0.85 | 0.6 | |
+| Shiny chrome | `0xd4d4d4` | 0.05 | 1.0 | |
+| Basketball court | `0xd4824a` | 0.6 | 0.0 | orange-tan wood |
+| Grass (synthetic) | `0x3a7d44` | 0.95 | 0.0 | use `applyPbr("aerial_grass_rock", 30)` for real grass |
+| Asphalt / road | `0x333333` | 0.95 | 0.0 | |
+| Cobblestone | `0x7a7060` | 0.9 | 0.0 | `applyPbr("cobblestone_floor_01", 10)` |
+| Sand | `0xe2c98a` | 0.98 | 0.0 | |
+| Water (still) | `0x1a6fa8` | 0.05 | 0.0 | use `stdlib.makeWater()` instead |
+| Fabric / cloth | `0x8b7355` | 0.98 | 0.0 | near-1 roughness, 0 metalness |
+| Skin | `0xffcba4` | 0.7 | 0.0 | use GLTF model, not raw mesh |
+| Emissive screen | `0x002244` | 1.0 | 0.0 | set `emissive` + `emissiveIntensity 1.5–3` |
+
+```javascript
+// Examples
+const floor   = stdlib.makeMat(0xc8a46e, 0.45, 0.0);  // oak hardwood
+const steel   = stdlib.makeMat(0xb0b8c0, 0.35, 0.95); // brushed steel
+const glass   = new THREE.MeshStandardMaterial({ color: 0xadd8e6, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.25 });
+const marble  = stdlib.makeMat(0xe8e4de, 0.1,  0.0);  // polished marble
+const screen  = new THREE.MeshStandardMaterial({ color: 0x002244, emissive: new THREE.Color(0x1155cc), emissiveIntensity: 2 });
+```
+
+### `stdlib.makeTerrainSlopeMat(topColor, sideColor, lo?, hi?)` → `THREE.MeshStandardNodeMaterial`
+
+Slope-blended material for hills and cliffs (grass on top, rock on sides).
+
+### `stdlib.makeMountainMat(snowColor?, rockColor?)` → `THREE.MeshStandardNodeMaterial`
+
+Elevation-blended material (rock at base, snow at peak). Use with geometry whose local Y spans 0–1.
+
+### `stdlib.applyPbr(mat, textureId, repeat, displacementScale?)`
+
+Applies a Polyhaven PBR texture to a `MeshStandardMaterial`.
+
+Common `textureId` values:
+- `"aerial_grass_rock"` — grass/rock terrain
+- `"cobblestone_floor_01"` — cobblestone
+- `"red_brick_03"` — brick wall
+- `"concrete_floor_02"` — smooth concrete
+
+```javascript
+const mat = stdlib.makeMat(0x4a7c59, 0.9, 0);
+stdlib.applyPbr(mat, "aerial_grass_rock", 40);
+```
+
+### `stdlib.makeCanvasTexture(text, opts?)` → `THREE.CanvasTexture`
+
+Creates a canvas-rendered text texture. Use for signs, labels, blackboards.
+
+```typescript
+stdlib.makeCanvasTexture(text: string, opts?: {
+  bg?:   string;  // CSS color, default "#163a25"
+  fg?:   string;  // CSS color, default "#f0ece4"
+  font?: string;  // CSS font string
+  w?:    number;  // canvas width, default 512
+  h?:    number;  // canvas height, default 128
+}): THREE.CanvasTexture
+```
+
+### `stdlib.colorFor(type)` → `number`
+
+Returns a palette color for a given object type: `"building"`, `"terrain"`, `"tree"`, `"npc"`, `"item"`, `"object"`.
+
+### `stdlib.seed(x, z)` → `number`
+
+Deterministic pseudo-random 0–1 value keyed to (x, z) position. Use for stable per-object variation.
+
+### `stdlib.invalidate()`
+
+Signals the renderer to render the next frame. Call after async asset loads complete.
+
+### `stdlib.addAmbientSound(url, volume?)` → AudioContext
+
+Play a looping background sound. Uses the Web Audio API; the sound runs independently of the render loop.
+
+```typescript
+stdlib.addAmbientSound(url: string, volume?: number): AudioContext
+// volume: 0–1 linear gain, default 0.4
+```
+
+**Free sound CDN URLs (CC0, CORS-accessible)**:
+
+| Environment | URL |
+|-------------|-----|
+| Forest / outdoor | `https://cdn.freesound.org/previews/531/531947_11861866-lq.mp3` |
+| Crowd / stadium | `https://cdn.freesound.org/previews/493/493925_1835877-lq.mp3` |
+| Ocean waves | `https://cdn.freesound.org/previews/378/378895_4284968-lq.mp3` |
+| Rain | `https://cdn.freesound.org/previews/346/346642_5121236-lq.mp3` |
+| Fireplace / indoor | `https://cdn.freesound.org/previews/476/476178_9803805-lq.mp3` |
+
+```javascript
+// Add gentle outdoor ambience
+stdlib.addAmbientSound("https://cdn.freesound.org/previews/531/531947_11861866-lq.mp3", 0.3);
+```
+
+Note: AudioContext requires a user gesture (click/keypress) to start on some browsers. Sound may be silently blocked until the user interacts with the page.
+
+---
+
+## Asset Catalog (Free CDNs)
+
+**Use these URLs directly in `stdlib.loadModel()` or `stdlib.makeNpc()`. All verified working.**
+
+CDN prefixes used below:
+- `THR` = `https://cdn.jsdelivr.net/gh/mrdoob/three.js@dev/examples/models/gltf`
+- `KHR` = `https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models`
+- `KNY` = `https://cdn.jsdelivr.net/gh/KenneyNL`
+
+---
+
+### Characters & NPCs (animated — use for ALL humans/animals)
+
+| Model | URL | Clips | Scale |
+|---|---|---|---|
+| Soldier (rigged humanoid) | `THR/Soldier.glb` | `Idle` `Walk` `Run` | 1.0 |
+| RobotExpressive (cartoon robot) | `THR/RobotExpressive/RobotExpressive.glb` | `Idle` `Walk` `Run` `Jump` `Wave` `ThumbsUp` `Death` | 1.0 |
+| CesiumMan (male figure) | `KHR/CesiumMan/glTF-Binary/CesiumMan.glb` | walking | 1.0 |
+| Fox | `KHR/Fox/glTF-Binary/Fox.glb` | `Walk` `Run` `Survey` | 0.02 |
+| Horse | `THR/Horse.glb` | gallop | 1.0 |
+| Flamingo | `THR/Flamingo.glb` | wing flap | 1.0 |
+| Parrot | `THR/Parrot.glb` | wing flap | 1.0 |
+| Stork | `THR/Stork.glb` | wing flap | 1.0 |
+
+**Default for any human NPC**: use `Soldier.glb` at scale 1.0, y=0. For cartoon/robot style: `RobotExpressive.glb`.
+
+---
+
+### Vehicles
+
+| Model | URL | Scale | Notes |
+|---|---|---|---|
+| Milk truck (animated wheels) | `KHR/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb` | 1.0 | ~4m long |
+| Concept car (PBR) | `KHR/CarConcept/glTF-Binary/CarConcept.glb` | 1.0 | ~4.5m long |
+| Toy car | `KHR/ToyCar/glTF-Binary/ToyCar.glb` | 30 | toy scale, high-quality PBR |
+| Low-poly truck (green) | `KNY/Starter-Kit-Racing@master/models/vehicle-truck-green.glb` | 1.0 | MIT |
+
+---
+
+### Buildings & Urban Props (KenneyNL — MIT license, low-poly, game-ready)
+
+| Model | URL | Scale |
+|---|---|---|
+| Small building A | `KNY/Starter-Kit-City-Builder@master/models/building-small-a.glb` | 1.0 |
+| Small building B | `KNY/Starter-Kit-City-Builder@master/models/building-small-b.glb` | 1.0 |
+| Small building C | `KNY/Starter-Kit-City-Builder@master/models/building-small-c.glb` | 1.0 |
+| Garage | `KNY/Starter-Kit-City-Builder@master/models/building-garage.glb` | 1.0 |
+| Road straight | `KNY/Starter-Kit-City-Builder@master/models/road-straight.glb` | 1.0 |
+| Road corner | `KNY/Starter-Kit-City-Builder@master/models/road-corner.glb` | 1.0 |
+| Road intersection | `KNY/Starter-Kit-City-Builder@master/models/road-intersection.glb` | 1.0 |
+| Trees (cluster) | `KNY/Starter-Kit-City-Builder@master/models/grass-trees.glb` | 1.0 |
+| Trees (tall cluster) | `KNY/Starter-Kit-City-Builder@master/models/grass-trees-tall.glb` | 1.0 |
+
+---
+
+### Furniture & Interior Props (KhronosGroup — CC0/CC-BY)
+
+| Model | URL | Scale | Notes |
+|---|---|---|---|
+| Upholstered chair | `KHR/SheenChair/glTF-Binary/SheenChair.glb` | 1.0 | CC0 |
+| Velvet sofa | `KHR/GlamVelvetSofa/glTF-Binary/GlamVelvetSofa.glb` | 1.0 | CC-BY |
+| Wood/leather sofa | `KHR/SheenWoodLeatherSofa/glTF-Binary/SheenWoodLeatherSofa.glb` | 1.0 | CC-BY |
+| Ornate chair | `KHR/ChairDamaskPurplegold/glTF-Binary/ChairDamaskPurplegold.glb` | 1.0 | CC-BY |
+| Potted plant | `KHR/DiffuseTransmissionPlant/glTF-Binary/DiffuseTransmissionPlant.glb` | 1.0 | CC-BY |
+| Glass vase with flowers | `KHR/GlassVaseFlowers/glTF-Binary/GlassVaseFlowers.glb` | 1.0 | CC0 |
+| Sci-fi helmet (PBR showcase) | `KHR/DamagedHelmet/glTF-Binary/DamagedHelmet.glb` | 1.0 | CC-BY |
+
+---
+
+### Usage patterns
+
+```javascript
+// CDN prefix constants (copy into sceneCode)
+const THR = "https://cdn.jsdelivr.net/gh/mrdoob/three.js@dev/examples/models/gltf";
+const KHR = "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models";
+const KNY = "https://cdn.jsdelivr.net/gh/KenneyNL";
+
+// Humanoid NPC with walk animation
+stdlib.makeNpc({
+  position: { x: 0, y: 0, z: 0 },
+  modelUrl: `${THR}/Soldier.glb`,
+  idleClip: "Idle", walkClip: "Walk",
+  moveMode: "randomwalk", maxRadius: 5,
+});
+
+// City block: pack buildings along a street
+for (let i = 0; i < 5; i++) {
+  stdlib.loadModel(`${KNY}/Starter-Kit-City-Builder@master/models/building-small-${["a","b","c","a","b"][i]}.glb`, {
+    position: { x: i * 9 - 18, y: 0, z: -12 },
+    scale: 1.0,
+  });
+}
+
+// Furnished room corner
+stdlib.loadModel(`${KHR}/SheenChair/glTF-Binary/SheenChair.glb`, { position: { x: -2, y: 0, z: -3 } });
+stdlib.loadModel(`${KHR}/GlassVaseFlowers/glTF-Binary/GlassVaseFlowers.glb`, { position: { x: -2.5, y: 0.75, z: -3.3 }, scale: 0.5 });
+
+// Crowd of spectators
+for (let i = 0; i < 20; i++) {
+  const row = Math.floor(i / 5), col = i % 5;
+  stdlib.makeNpc({
+    position: { x: col * 2 - 4, y: row * 1.2 + 3, z: -16 - row * 0.8 },
+    modelUrl: `${THR}/Soldier.glb`,
+    idleClip: "Idle", moveMode: "idle",
+  });
+}
+```
+
+---
+
+## Scene Templates
+
+### Coordinate system (MEMORIZE before building any scene)
+
+```
+       +Y (up)
+        |
+        |_______ +X (right)
+       /
+      /
+    +Z (toward camera)
+
+Default camera: position (0, 8, 20), looking at origin (0, 0, 0).
+The camera sees the scene from positive Z, looking toward negative Z.
+```
+
+**Consequence for sports courts**: A basketball/football court lying along the X-axis has its far goal at negative Z, near goal at positive Z. The camera (at z=20) looks inward. **Never place the near wall at z < 20 or the camera will be outside.**
+
+### Indoor scene checklist (FOLLOW EVERY TIME `isIndoor: true`)
+
+1. `stdlib.setupLighting({ isIndoor: true })` — auto-hides the world grass ground, sets dark background
+2. Set `scene.fog = null` — fog at y=0 has no meaning inside a building
+3. Position camera INSIDE the enclosure: `camera.position.set(x, 1.7, z_inside)` where `z_inside` is well inside the far wall
+4. The enclosure must be large enough that the camera starts inside it
+5. For arenas: walls at ±half-width in X and ±half-depth in Z; ceiling at top; no floor gap with world ground
+
+### Basketball hoop geometry (correct orientation)
+
+Court lies along X-axis. Baselines at `x = ±14`. Camera is at positive Z looking toward −Z.
+
+```
+BACKBOARD (faces +X inward, away from wall)
+ARM (horizontal, from wall toward court)
+POLE (at x = ±15.5, outside the baseline)
+
+For left goal  (x = -14): pole at x=-15.5, arm extends right (+x), rim at x=-12.8
+For right goal (x = +14): pole at x=+15.5, arm extends left  (-x), rim at x=+12.8
+
+Rule: rim is INSIDE the baseline, pole is OUTSIDE the baseline.
+```
+
+```javascript
+function addHoop(baselineX) {
+  const inward = baselineX > 0 ? -1 : 1; // direction from baseline toward court center
+  // Pole: outside the baseline
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.5, 8), metalMat);
+  pole.position.set(baselineX - inward * 1.5, 1.75, 0); // OUTSIDE
+  scene.add(pole);
+  // Arm: horizontal beam extending inward from pole top
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.08), metalMat);
+  arm.position.set(baselineX - inward * 0.9, 3.4, 0);
+  scene.add(arm);
+  // Backboard: faces inward (face normal = inward direction)
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.05, 1.83), boardMat);
+  board.position.set(baselineX - inward * 0.25, 3.35, 0);
+  scene.add(board);
+  // Rim: INSIDE the baseline
+  const rimPts = Array.from({ length: 33 }, (_, i) => {
+    const a = (i / 32) * Math.PI * 2;
+    return new THREE.Vector3(Math.cos(a) * 0.23, 0, Math.sin(a) * 0.23);
+  });
+  const rim = new THREE.Mesh(
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rimPts, true), 32, 0.022, 8, true),
+    hoopMat
+  );
+  rim.position.set(baselineX + inward * 1.2, 3.05, 0); // INSIDE
+  scene.add(rim);
+}
+addHoop(-14); // left goal
+addHoop(14);  // right goal
+```
+
+### Outdoor landscape
+
+```javascript
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+// Ground
+const ground = stdlib.makeTerrain("floor", { width: 100, depth: 100, position: { x: 0, y: 0, z: 0 } });
+
+// Background hills
+stdlib.makeTerrain("hill", { width: 20, height: 10, position: { x: -18, y: 0, z: -25 } });
+stdlib.makeTerrain("hill", { width: 16, height:  7, position: { x:  14, y: 0, z: -22 } });
+
+// Trees (foreground)
+for (let i = 0; i < 8; i++) {
+  const x = (stdlib.seed(i, 0) - 0.5) * 40;
+  const z = stdlib.seed(0, i) * 15 - 5;
+  stdlib.makeTree({ position: { x, y: 0, z }, scale: 0.8 + stdlib.seed(i, i) * 0.5 });
+}
+
+// Buildings
+stdlib.makeBuilding({ position: { x: -6, y: 0, z: -5 }, height: 8 });
+stdlib.makeBuilding({ position: { x:  4, y: 0, z: -7 }, height: 6 });
+
+// NPC
+stdlib.makeNpc({
+  position: { x: 2, y: 0, z: 2 },
+  modelUrl: "https://threejs.org/examples/models/gltf/Soldier.glb",
+  idleClip: "Idle",
+  moveMode: "randomwalk",
+  maxRadius: 4,
+});
+```
+
+### Indoor room
+
+```javascript
+stdlib.setupLighting({ isIndoor: true }); // auto: dark background, hides world ground
+scene.fog = null;
+
+// Place camera inside the room before building walls
+camera.position.set(0, 1.7, 5);   // eye level, inside the near wall
+camera.lookAt(0, 1.5, -3);
+
+// Room geometry (4 walls + floor + ceiling)
+const HALF_W = 6, HALF_D = 8, H = 3.2;
+stdlib.makeTerrain("floor",   { width: HALF_W*2, depth: HALF_D*2, position: { x: 0, y: 0, z: 0 } });
+stdlib.makeTerrain("ceiling", { width: HALF_W*2, depth: HALF_D*2, position: { x: 0, y: H, z: 0 } });
+stdlib.makeTerrain("wall",    { width: HALF_W*2, height: H, position: { x:  0,      y: H/2, z: -HALF_D } }); // back
+stdlib.makeTerrain("wall",    { width: HALF_W*2, height: H, position: { x:  0,      y: H/2, z:  HALF_D } }); // front
+stdlib.makeTerrain("wall",    { width: HALF_D*2, height: H, position: { x: -HALF_W, y: H/2, z: 0 } }); // left
+stdlib.makeTerrain("wall",    { width: HALF_D*2, height: H, position: { x:  HALF_W, y: H/2, z: 0 } }); // right
+
+// Furniture (raw Three.js — or loadModel for quality)
+const deskGeo = new THREE.BoxGeometry(2, 0.1, 0.8);
+const deskMat = stdlib.makeMat(0xc8a46e, 0.8, 0);
+const desk = new THREE.Mesh(deskGeo, deskMat);
+desk.position.set(0, 0.8, -3);
+desk.castShadow = true;
+scene.add(desk);
+
+// Sign using canvas texture
+const tex = stdlib.makeCanvasTexture("欢迎光临", { bg: "#163a25", fg: "#f0ece4", font: "bold 64px serif" });
+const sign = new THREE.Mesh(
+  new THREE.PlaneGeometry(3, 0.75),
+  new THREE.MeshStandardMaterial({ map: tex }),
+);
+sign.position.set(0, 2.5, -HALF_D + 0.05);
+scene.add(sign);
+```
+
+### Animated particle scene
+
+```javascript
+stdlib.setupLighting({ skybox: "night", hdri: false });
+scene.background = new THREE.Color(0x060818);
+
+// Floating orbs
+const N = 60;
+const positions = new Float32Array(N * 3);
+const velocities = new Float32Array(N * 3);
+for (let i = 0; i < N; i++) {
+  positions[i*3]   = (Math.random() - 0.5) * 30;
+  positions[i*3+1] = Math.random() * 15;
+  positions[i*3+2] = (Math.random() - 0.5) * 30;
+  velocities[i*3]   = (Math.random() - 0.5) * 0.4;
+  velocities[i*3+1] = (Math.random() - 0.5) * 0.2;
+  velocities[i*3+2] = (Math.random() - 0.5) * 0.4;
+}
+const geo = new THREE.BufferGeometry();
+const attr = new THREE.BufferAttribute(positions, 3);
+attr.setUsage(THREE.DynamicDrawUsage);
+geo.setAttribute("position", attr);
+scene.add(new THREE.Points(geo,
+  new THREE.PointsMaterial({ color: 0x88ccff, size: 0.3, transparent: true, opacity: 0.8, depthWrite: false })
+));
+
+animate((delta) => {
+  for (let i = 0; i < N; i++) {
+    attr.setXYZ(i,
+      attr.getX(i) + velocities[i*3]   * delta,
+      attr.getY(i) + velocities[i*3+1] * delta,
+      attr.getZ(i) + velocities[i*3+2] * delta,
+    );
+    if (Math.abs(attr.getX(i)) > 15) velocities[i*3]   *= -1;
+    if (attr.getY(i) < 0 || attr.getY(i) > 15) velocities[i*3+1] *= -1;
+    if (Math.abs(attr.getZ(i)) > 15) velocities[i*3+2] *= -1;
+  }
+  attr.needsUpdate = true;
+});
+```
+
+---
+
+## Viewpoints
+
+Always set `sceneData.viewpoints` in the tool call — the camera starts at the first viewpoint.
 
 ```json
-{
-  "environment": {
-    "skybox": "clear_day | sunset | night | overcast",
-    "timeOfDay": "dawn | noon | dusk | night",
-    "ambientLight": "warm | cool | neutral",
-    "weather": "clear | foggy | rainy",
-    "effects": {
-      "bloom": {
-        "strength": 0.4,
-        "radius": 0.3,
-        "threshold": 0.85
-      }
-    }
+"viewpoints": [
+  {
+    "viewpointId": "vp_main",
+    "name": "Main view",
+    "position": { "x": 0, "y": 1.7, "z": 16 },
+    "lookAt":   { "x": 0, "y": 1,   "z": 0  }
   },
-  "viewpoints": [
-    {
-      "viewpointId": "vp_1",
-      "name": "descriptive name",
-      "position": { "x": 0, "y": 1.7, "z": -8 },
-      "lookAt": { "x": 0, "y": 1, "z": 0 }
-    }
-  ],
-  "objects": [
-    {
-      "objectId": "obj_1",
-      "name": "vivid specific name",
-      "type": "tree | building | npc | item | terrain | object",
-      "position": { "x": 0, "y": 0, "z": 0 },
-      "description": "vivid description",
-      "interactable": true,
-      "interactionHint": "try 'examine the ...'",
-      "metadata": {
-        "shape": "desk | chair | blackboard | window | door | wall | floor | water | shelf | box | pillar | hoop | court | hill | cliff | platform",
-        "state": "current state string if stateful",
-        "transitions": { "action verb": "next state" },
-        "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
-        "scale": 1.0,
-        "yOffset": 0,
-        "width": 20,
-        "depth": 20,
-        "height": 4,
-        "texture": "polyhaven-asset-id (optional, overrides auto-selected PBR texture for terrain/floor)"
-      }
-    }
-  ]
-}
-```
-
-## Rules
-
-- Generate **8–16 objects**. Analyse the prompt and choose the most fitting types and shapes.
-- **INDOOR scenes** (classroom, room, hall, lab, shop, corridor, etc.):
-  - Use type `"terrain"` for floor (shape `"floor"`), walls (shape `"wall"`), ceiling (shape `"floor"`).
-  - **MUST include exactly 4 walls** (front, back, left, right) — a room with missing walls looks broken.
-  - Wall positions for a room of half-width W and half-depth D: back `z=-D`, front `z=D`, left `x=-W`, right `x=W`. **Wall `y` must equal half the wall height** (e.g. `y: 1.6` for a 3.2m wall). Do NOT set `y: 0` for walls.
-  - The blackboard `description` field **must contain the exact text to write on the board** (e.g. `"黑板上写着'数学分析'"`). The renderer reads this field to render chalk text automatically.
-  - Use type `"object"` for furniture with the correct shape (`desk`, `chair`, `blackboard`, `window`, `door`, `shelf`, etc.).
-  - Use type `"npc"` for people. Use type `"item"` for small pickable items.
-  - Do **NOT** add trees or outdoor buildings to indoor scenes.
-- **OUTDOOR scenes** (forest, city, park, street, beach, rooftop, **basketball court, tennis court, football field, sports field, playground**, etc.):
-  - Use type `"terrain"` for ground and landforms. **Do NOT add walls or ceiling.**
-  - Use types `"tree"`, `"building"`, `"npc"`, `"item"`, `"object"` freely.
-  - **Outdoor scene minimum specs (CRITICAL — undersized scenes feel like dioramas):**
-    - `terrain/floor` width and depth: **≥ 80 × 60** units (anything smaller exposes bare edges and feels cramped)
-    - Buildings/trees must be spread **8–15 units apart** — never cluster everything in a 10-unit zone
-    - Background layer (z = -15 to -25) must have **at least 2–3** `terrain/hill` objects filling the horizon width. Use `y=0` and set `metadata.height` to control dome height (5–10 for rolling hills, 20–45 for mountain ranges)
-    - Foreground layer (z = +8 to +15) should have **loose scatter**: trees, rocks, or small items at varying x positions — the renderer also auto-scatters ambient rocks, but explicit foreground objects greatly help depth
-    - Recommended viewpoint: z = 16–22, y = 1.7 (eye-level), lookAt toward scene center
-    - `terrain/water` `position.y` should be `0` — **do NOT use negative values**
-  - Sports courts and open-air venues are always OUTDOOR — **never add walls or ceiling**.
-- **INDOOR arena** (gymnasium, sports hall — only when the prompt explicitly says "indoor" or "gymnasium/体育馆"):
-  - Treat as INDOOR and may include walls/ceiling.
-- **Sports courts and fields** (basketball court, tennis court, etc.):
-  - Use **one** `terrain` object with `shape: "court"` at position `{x:0, y:0, z:0}` for the court floor + line markings.
-  - Use **two** `object` items with `shape: "hoop"` at opposite ends (e.g. `x: -13` and `x: 13`, `z: 0`) for basketball hoops.
-  - Add surrounding elements freely: `npc` for players, `item` for balls, `object` (shape `box`) for benches/scoreboards, `tree` or `building` for surroundings.
-  - Do **NOT** add walls, ceiling, or indoor floor terrain.
-- **Stateful objects**: set `metadata.state` (e.g. `"written"`, `"open"`, `"closed"`, `"on"`, `"off"`) and `metadata.transitions` (e.g. `{"erase": "erased", "write": "written"}` for a blackboard).
-
----
-
-## Open-World Depth & Elevation (CRITICAL for immersive scenes)
-
-A flat scene with everything at `y=0` looks like a tabletop game, **not** an open world. Follow these rules for any outdoor or large-scale scene.
-
-### Three-layer depth composition
-
-Divide the scene into three depth bands along the **z axis**:
-
-| Layer | z range | Purpose | Example objects |
-|---|---|---|---|
-| **Foreground** | z = +5 to +15 (nearest to camera) | Detail, texture, interactables | NPC, items, low rock, flowers |
-| **Midground** | z = -5 to +5 (scene focus) | Main action, focal points | Buildings, trees, court, shrine |
-| **Background** | z = -15 to -25 (far horizon) | Scale, atmosphere, world edge | Distant mountains, cliff faces, forest wall |
-
-- Background objects should be **larger** (scale 1.5–3×) and slightly **elevated** to peek above the midground.
-- Use **fog** (`"weather": "foggy"`) to naturally fade far objects — this is free atmospheric depth.
-- Spread objects across the full x range (−20 to +20) so the scene never feels like a single row.
-
-### Elevation & height variation
-
-**NEVER put every object at y=0.** Use elevation to break the flat-plane monotony:
-
-| Terrain shape | `position.y` meaning | Typical `metadata.height` |
-|---|---|---|
-| `terrain/floor` | top surface = `y + 0.002` | Flat plane, no visible edges at any angle |
-| `terrain/water` | animated water surface at this y | — (use `metadata.width/depth`) |
-| `terrain/hill` | **ground elevation at the base of the dome** (use `y=0` for flat ground). Dome peak ≈ `y + metadata.height` | 5–45 units |
-| `terrain/cliff` | **top edge** of the rock face. Cliff base sits at `y - metadata.height` (ground). | 5–12 units |
-| `terrain/platform` | **top surface** where objects stand | 1–5 units |
-
-**CRITICAL: never place `npc`, `building`, or `tree` objects at the same position as a `terrain/water` object — they will stand on the water surface. Always place them on solid terrain (`floor`, `hill`, `platform`) away from the water area.**
-
-**CRITICAL: never make `terrain/floor` large enough to cover the `terrain/water` footprint — the water will be invisible. The floor must cover only the village/activity area; the lake/river must be positioned in a non-overlapping area (different z range). See the lakeside village example below.**
-
-**Rule: any object sitting ON elevated terrain uses the same `y` as the terrain's `position.y`.**
-
-```
-terrain/platform at y=3 → buildings on the platform: y=3
-terrain/cliff at y=8    → (cliff walls have nothing on top in most cases)
-terrain/hill at y=0, height=7 → hill has no flat top; place NPCs/trees around the base at y=0
-```
-
-### Terrain shape catalog
-
-| shape | Visual result | Good for |
-|---|---|---|
-| `floor` | Flat slab (custom `metadata.width/depth`) | Main ground, plazas, fields |
-| `water` | Animated reflective water surface | Rivers, lakes, ocean, pools |
-| `hill` | Rounded green dome (width/height configurable) | Rolling countryside, island mound |
-| `cliff` | Tall grey rock face (width/height/depth) | Mountainside, canyon wall, sea cliff |
-| `platform` | Raised flat slab (width/height/depth) | Elevated ruins, fortress battlements |
-| `wall` | Interior room wall | INDOOR only |
-| `ceiling` | Interior room ceiling | INDOOR only |
-| `court` | Basketball/sports court | Sports scenes |
-
-**Metadata fields for new terrain shapes:**
-- `metadata.width` — footprint width (x, default 10–12)
-- `metadata.height` — vertical extent / peak height (default 4–8)
-- `metadata.depth` — footprint depth (z, default 10–12)
-
-### Example: layered mountain valley scene
-
-```json
-[
-  { "objectId": "t_ground",    "type": "terrain", "position": {"x":0,"y":0,"z":0},
-    "metadata": {"shape":"floor","width":40,"depth":40} },
-
-  { "objectId": "t_hill_l",    "type": "terrain", "position": {"x":-12,"y":0,"z":-18},
-    "metadata": {"shape":"hill","width":14,"height":7} },
-  { "objectId": "t_hill_r",    "type": "terrain", "position": {"x":14,"y":0,"z":-20},
-    "metadata": {"shape":"hill","width":10,"height":5} },
-
-  { "objectId": "t_cliff",     "type": "terrain", "position": {"x":0,"y":8,"z":-22},
-    "metadata": {"shape":"cliff","width":30,"height":10,"depth":4} },
-
-  { "objectId": "t_platform",  "type": "terrain", "position": {"x":6,"y":3,"z":-6},
-    "metadata": {"shape":"platform","width":8,"height":2,"depth":8} },
-
-  { "objectId": "tree_hilltop","type": "tree",    "position": {"x":-12,"y":7,"z":-18} },
-  { "objectId": "building_mid","type": "building","position": {"x":6,"y":3,"z":-6} },
-  { "objectId": "npc_fg",      "type": "npc",     "position": {"x":2,"y":0,"z":8} }
+  {
+    "viewpointId": "vp_aerial",
+    "name": "Aerial",
+    "position": { "x": 0, "y": 20, "z": 20 },
+    "lookAt":   { "x": 0, "y": 0,  "z": 0  }
+  }
 ]
 ```
 
-### Example: lakeside village scene (CRITICAL layout rules)
+Typical viewpoint positions:
+- Eye-level outdoor: `y=1.7, z=14–20` looking toward `{x:0, y:1, z:0}`
+- Aerial panorama: `y=15–25, z=20` looking toward `{x:0, y:2, z:0}`
+- Interior: `y=1.5, z=5–8` inside the room looking inward
 
-**WRONG — floor covers the lake (water will be invisible):**
-```
-floor at x=0, z=0, width=60, depth=60   ← covers EVERYTHING including where the lake is
-water at x=0, z=-10, width=24, depth=18 ← buried under the floor
-```
+---
 
-**CORRECT — floor covers only the village; lake is separate, outside the floor footprint:**
+## Scene Objects (metadata for interactions)
+
+`sceneData.objects` carries NPC metadata for the interaction system. The renderer does **not** render these objects — `sceneCode` builds all visuals. The objects array is used for:
+- NPC character context (dialogue AI)
+- `interactable` flags (click interaction prompt)
+- `interactionHint` (text shown on hover)
+
 ```json
-[
-  { "objectId": "t_village_ground", "type": "terrain", "position": {"x":4,"y":0,"z":8},
-    "metadata": {"shape":"floor","width":28,"depth":20} },
-
-  { "objectId": "t_lake", "type": "terrain", "position": {"x":0,"y":-0.1,"z":-8},
-    "metadata": {"shape":"water","width":30,"depth":20} },
-
-  { "objectId": "t_hill_l", "type": "terrain", "position": {"x":-14,"y":5,"z":-20},
-    "metadata": {"shape":"hill","width":14,"height":6} },
-
-  { "objectId": "npc_fisherman", "type": "npc", "position": {"x":-2,"y":0,"z":3},
-    "description": "老渔民坐在湖岸边垂钓" },
-
-  { "objectId": "bld_1", "type": "building", "position": {"x":5,"y":0,"z":10} }
+"objects": [
+  {
+    "objectId": "npc_guard",
+    "name": "老卫兵",
+    "type": "npc",
+    "position": { "x": 2, "y": 0, "z": 0 },
+    "interactable": true,
+    "interactionHint": "与他交谈",
+    "metadata": {
+      "character": "你是皇城门口驻守三十年的老卫兵，说话简短有力，知道城内各处禁忌。"
+    }
+  }
 ]
 ```
 
-**Key rules for lake-village layouts:**
-- Make the `floor` cover **only** the village area (where buildings/NPCs actually stand)
-- Position the `water` **outside and adjacent to** the floor footprint — not under it
-- Water and floor should be in **different z ranges** (e.g., floor at z=5–15, water at z=-15 to -5)
-- NPCs walk **beside** the lake (on the floor side), not on top of the water
-
-### Viewpoint rules for immersive depth
-
-- **Eye-level shot** (y≈1.7): place at z=+12–18, look toward midground — feels like standing in the scene
-- **Elevated panorama** (y=8–15): place above a hill, look down at 30–45° — reveals the full terrain
-- **Dramatic low angle** (y=0.5–1): z=+5, look up at cliff or building — exaggerates scale
-- Always set `lookAt` to the focal point of the scene, never `{x:0,y:0,z:0}` blindly
-
 ---
 
-## `position.y` rules (full table)
+## Gaussian Splat Scenes (splatUrl)
 
-| Object | `position.y` | Notes |
-|---|---|---|
-| `terrain/floor` | `0` (or desired surface elevation) | Top surface at y+0.002 (PlaneGeometry, no visible sides) |
-| `terrain/water` | desired **water level** (e.g. `0`, `-1`) | Animated reflective surface at this y |
-| `terrain/hill` | desired **base ground elevation** (use `0` for flat terrain) | Dome rises from this base; peak ≈ y + metadata.height |
-| `terrain/cliff` | desired **top edge** height (e.g. `8`) | Rock face descends below |
-| `terrain/platform` | desired **top surface** height (e.g. `3`) | Slab hangs below this level |
-| `terrain/wall` | half wall height (e.g. `1.6`) | INDOOR only |
-| `terrain/ceiling` | room height (e.g. `3.2`) | INDOOR only |
-| `object/*` furniture | **surface y it stands on** (e.g. `0` on floor, `3` on platform) | Renderer builds upward |
-| `npc` | **surface y it stands on** | Feet placed at this y |
-| `tree` | **surface y it stands on** | Trunk starts at this y |
-| `building` | **surface y it stands on** | Builds upward from this y |
-
----
-
-## Blackboard text
-
-Put the exact text to display in the `description` field (e.g. `"黑板上写着'数学分析'"`). The renderer extracts and renders it automatically.
-
-## General rules
-
-- Include **exactly 2–3 viewpoints** suited to the scene.
-- Make names and descriptions vivid and specific to the theme.
-- `interactable: true` for `npc`, `item`, and interactive objects; `false` for floor/wall/ceiling/hill/cliff terrain.
-- All `objectId` values must be unique strings (e.g. `"obj_gate"`, `"obj_fountain"`).
-- All `viewpointId` values must be unique strings (e.g. `"vp_entrance"`, `"vp_overview"`).
-
-## Placing objects at the player's current position
-
-When the user message starts with `[玩家当前位置: x=..., y=..., z=...]`, the player is standing in a Marble splat scene and has physically walked to the spot where they want to place something. **Use those coordinates directly** as the `position` of the new object in `sceneData.objects`. Do not invent or offset the coordinates — the player already walked to the exact spot.
-
-Example: message `[玩家当前位置: x=3.2, y=0.8, z=-5.1]\n在这里放一个木箱` → create an object at `{"x": 3.2, "y": 0.8, "z": -5.1}`.
-
----
-
-## NPC Behavior Metadata
-
-NPCs support movement modes and chatter bubbles via `metadata`:
-
-```json
-{
-  "objectId": "npc_merchant",
-  "type": "npc",
-  "position": { "x": 3, "y": 0, "z": 0 },
-  "interactable": true,
-  "metadata": {
-    "moveMode": "randomwalk",
-    "speed": 0.8,
-    "maxRadius": 4,
-    "waypoints": [{"x": 2, "z": 3}, {"x": -2, "z": 1}],
-    "chatter": ["今天生意不错", "你是外地人？", "小心山里的野狼"]
-  }
-}
-```
-
-**Movement mode fields:**
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `moveMode` | `"idle" \| "randomwalk" \| "patrol"` | `"idle"` | `"idle"` = bob/sway in place; `"randomwalk"` = wander randomly within `maxRadius`; `"patrol"` = loop through `waypoints` |
-| `speed` | number | `0.8` | Movement speed in units/sec |
-| `maxRadius` | number | `3.0` | Max wander radius for `randomwalk` mode |
-| `waypoints` | `Array<{x, z}>` | `[]` | Ordered patrol points for `patrol` mode (y is inferred from NPC position) |
-
-**Chatter field:**
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `chatter` | `string[]` | `[]` | Lines shown as speech bubbles when the NPC is clicked. A random line is chosen each click. Bubbles auto-hide after 3.5 s |
-
-- `patrol` mode requires at least one entry in `waypoints`; without waypoints it falls back to pausing indefinitely.
-- NPCs always perform idle bob/sway animation while paused or in `"idle"` mode.
-- Clicking an NPC with no `chatter` array (or an empty one) silently does nothing.
-
-**NPC Dialogue (proximity + E key):**
-
-When the player walks within ~2.5 m of an interactable NPC in physics mode, an `[E] 与 {name} 对话` prompt appears. Pressing E triggers an AI-powered dialogue turn using the NPC's `metadata.character` field as personality/knowledge context.
-
-To enable rich dialogue, always set `metadata.character` on every `npc` object:
-
-```json
-{
-  "objectId": "npc_guard",
-  "type": "npc",
-  "name": "老卫兵",
-  "interactable": true,
-  "interactionHint": "打招呼",
-  "metadata": {
-    "character": "你是皇城门口驻守三十年的老卫兵，见过无数人来人往，知道城内各处要道和禁忌，说话简短有力，偶尔叹息往事",
-    "moveMode": "idle",
-    "chatter": ["别乱跑", "今日无事"]
-  }
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `character` | `string` | Personality, role, knowledge, and speech style. The agent uses this as the NPC's system prompt for dialogue turns. Be specific: include who they are, what they know, and how they speak. |
-
-- `interactionHint` becomes the opening action the player sends (e.g. `"打招呼"` → agent receives `"玩家 打招呼"`).
-- Without `character`, the agent defaults to the NPC's `name` and `description` for context.
-
----
-
-## GLTF Model Loading (Path A)
-
-Any object can load a real 3D model by setting `metadata.modelUrl` to a GLTF/GLB URL. The viewer will show a placeholder shape while loading, then replace it with the real model.
-
-```json
-{
-  "objectId": "obj_duck",
-  "name": "Yellow rubber duck",
-  "type": "item",
-  "position": { "x": 0, "y": 0, "z": 0 },
-  "description": "A cheerful rubber duck",
-  "interactable": true,
-  "metadata": {
-    "modelUrl": "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF/Duck.gltf",
-    "scale": 0.01,
-    "yOffset": 0
-  }
-}
-```
-
-**Free asset sources:**
-- **Kenney.nl** (kenney.nl/assets) — game-ready assets, CC0 license
-- **Quaternius** (quaternius.com) — animated characters and props, CC0 license
-- **KhronosGroup glTF Sample Assets** — `https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/`
-  - Duck, DamagedHelmet, Avocado, CesiumMilkTruck, FlightHelmet, etc.
-- **Three.js examples** — `https://threejs.org/examples/models/`
-
-**Metadata fields for GLTF:**
-- `modelUrl` (string) — URL to the `.gltf` or `.glb` file
-- `scale` (number, default 1) — uniform scale applied to the loaded model
-- `yOffset` (number, default 0) — vertical offset to correct ground alignment
-
----
-
-## Gaussian Splat Rendering (Path D: splatUrl)
-
-Set `sceneData.splatUrl` to load and display a pre-captured Gaussian splat file in the browser. The viewer will use a dedicated WebGL-based `SplatViewer` component powered by [spark.js](https://github.com/sparkjsdev/spark) instead of the standard Three.js renderer.
-
-**Supported formats:** `.spz`, `.ply`, `.splat`, `.ksplat`
+When `sceneData.splatUrl` is set, the viewer renders a Gaussian splat instead of executing `sceneCode`. Use for photorealistic photogrammetry captures.
 
 ```json
 {
   "sceneData": {
     "splatUrl": "https://example.com/scene.spz",
     "objects": [],
-    "environment": {},
-    "viewpoints": [
-      {
-        "viewpointId": "vp_default",
-        "name": "Default view",
-        "position": { "x": 0, "y": 0, "z": 3 },
-        "lookAt": { "x": 0, "y": 0, "z": 0 }
-      }
-    ]
+    "viewpoints": [{ "viewpointId": "vp_1", "name": "Default", "position": { "x": 0, "y": 0, "z": 3 }, "lookAt": { "x": 0, "y": 0, "z": 0 } }]
   }
 }
 ```
-
-**When to use:**
-- Displaying photogrammetry captures or NeRF-derived Gaussian splats
-- Showcasing real-world environments captured with 3D scanning tools
-- High-fidelity photorealistic scenes that cannot be reproduced with procedural geometry
-
-**Notes:**
-- `objects` and `sceneCode` are ignored when `splatUrl` is set — the splat is the entire scene
-- Camera auto-fits to the splat bounding box on load
-- WASD keyboard navigation and mouse orbit/zoom work as usual
-- The `viewpoints` array is still accepted but the camera auto-fit overrides the first viewpoint on initial load
-
-**Free splat asset sources:**
-- [Luma AI](https://lumalabs.ai) — capture and export as .spz
-- [Polycam](https://poly.cam) — export Gaussian splats from room scans
-- [sparkjsdev/spark assets](https://sparkjs.dev) — demo .spz files for testing
 
 ---
 
+## Placing Objects at the Player's Position
 
+When the user message starts with `[玩家当前位置: x=..., y=..., z=...]`, the player has walked to the desired placement spot. In `sceneCode`, create the object at exactly those coordinates:
 
-Set `environment.effects.bloom` to enable glow on emissive materials:
-
-```json
-{
-  "environment": {
-    "skybox": "night",
-    "effects": {
-      "bloom": {
-        "strength": 1.2,
-        "radius": 0.4,
-        "threshold": 0.9
-      }
-    }
-  }
-}
+```
+Message: [玩家当前位置: x=3.2, y=0.8, z=-5.1]
+在这里放一个木箱
 ```
 
-**When to use bloom:**
-- Night scenes with neon lights, glowing windows, streetlamps
-- Sci-fi scenes with emissive panels, energy beams
-- Sunset scenes with strong light halos
-- Default bloom is always active (subtle: strength=0.4, threshold=0.9)
-- Night skybox auto-boosts bloom strength to 0.8 minimum
-- **threshold minimum is 0.9** — never set lower; values below 0.9 cause ordinary lit surfaces to bloom and wash out the scene
+```javascript
+// In sceneCode — use the player's coordinates directly
+const box = new THREE.Mesh(
+  new THREE.BoxGeometry(1, 1, 1),
+  stdlib.makeMat(0x8b6040, 0.9, 0),
+);
+box.position.set(3.2, 0.8 + 0.5, -5.1);  // +0.5 to sit on the ground
+box.castShadow = true;
+scene.add(box);
+```
 
 ---
 
-## Code Generation Mode (Path C)
+## Performance Rules (CRITICAL)
 
-**WARNING: Use `sceneCode` ONLY when the scene genuinely requires it. Most scenes should use JSON mode.**
+- **NEVER use `Object.assign(mesh, opts)` or direct assignment `mesh.position = v`** — Three.js `position`, `rotation`, `scale` are read-only getters that return Vector3/Euler objects. Direct assignment silently fails or throws. Always use:
+  ```javascript
+  mesh.position.set(x, y, z);          // NOT mesh.position = new THREE.Vector3(x,y,z)
+  mesh.position.copy(vector);           // NOT Object.assign(mesh, { position: vector })
+  mesh.rotation.set(rx, ry, rz);
+  mesh.scale.setScalar(s);
+  ```
+- **Max particles: 100** — use `BufferGeometry` + `Points`
+- **Max total meshes: 30** — count every `new THREE.Mesh(...)`
+- **Never call `Math.random()` inside `animate()`** — precompute random values before the loop
+- **Max `animate()` calls: 3**
+- **No `castShadow = true` on particles** — only on ≤ 5 static meshes
+- **NEVER set `castShadow = true` on SpotLights, PointLights, or floodlights** — this is the single most common cause of shadow-map flickering artifacts when the camera moves, and on Apple Silicon will likely cause a black screen. The stdlib directional sun is the only light allowed to cast shadows. Set `castShadow = false` on every other light, including stadium floodlights, street lamps, and candles.
+- **Hills, terrain, and trees are outside structures** — never place a `makeTerrain("hill")` or tree inside a stadium perimeter, inside a room, or anywhere it would intersect or overlap an existing structure. Hills belong beyond the outer boundary wall as background fill. If the stadium boundary is at x=±50, hills go at z < -60 or beyond the far wall.
 
-Use `sceneCode` ONLY for:
-- Particle systems (fountains, fire, snow, smoke)
-- Continuous per-frame animations (rotating objects, wave effects, morphing geometry)
-- Custom shaders or procedural geometry that cannot be expressed as static objects
-- Complex terrain with vertex-color heightmaps or displacement maps
+## Text Rendering (CRITICAL)
 
-Do NOT use `sceneCode` for:
-- **Any static scene** (classroom, office, park, street, shop — use JSON `objects` array)
-- **Indoor scenes** (rooms, halls, labs) — always JSON mode
-- **Simple outdoor scenes** (parks, streets, sports fields, villages) — use JSON mode with hill/cliff/platform terrain shapes
-- Tile/grid floor patterns — use a single `terrain/floor` object instead
-- Adding more detail to walls, ceilings, or furniture — JSON shapes handle this
-
-**Use `sceneCode` for natural landscapes** (mountain ranges, canyons, coastlines, volcanic terrain, arctic tundra):
-- These require **procedural heightmap terrain** — simple `terrain/hill` sphere/cone shapes cannot produce realistic topography
-- Use multi-octave FBM + ridge noise for organic mountain silhouettes
-- Use vertex colors (elevation + slope) for natural snow/rock/scree coloring
-- Create a single large `PlaneGeometry` with high subdivisions rather than stacking individual hill objects
-
-If a scene has NPCs, furniture, buildings, or terrain but **no moving/animated elements**, use pure JSON mode (`sceneData` only, no `sceneCode`).
-
-For scenes requiring complex animations, custom shaders, or visual effects beyond the JSON schema, pass `sceneCode` alongside `sceneData`.
-
-The `sceneCode` is a JavaScript function body that receives the full rendering context:
-
-```
-Sandbox variables available:
-  - THREE      — the Three.js library (all classes, constants, etc.)
-  - scene      — THREE.Scene (add your objects here)
-  - camera     — THREE.PerspectiveCamera
-  - renderer   — THREE.WebGLRenderer
-  - controls   — OrbitControls
-  - animate    — function(cb: (delta: number) => void) — register a per-frame callback
-  - Water      — THREE.js Water addon (three/addons/objects/Water.js)
-                 Use for realistic reflective ocean/lake surfaces.
-                 Requires a waterNormals texture loaded via THREE.TextureLoader.
-                 Normal map CDN: https://threejs.org/examples/textures/waternormals.jpg
-```
-
-### Water addon usage pattern
+Never assemble text from geometric primitives. Always use `stdlib.makeCanvasTexture()` or raw `CanvasTexture` for any text (including CJK characters).
 
 ```javascript
-const waterGeometry = new THREE.PlaneGeometry(200, 200);
-const water = new Water(waterGeometry, {
-  textureWidth: 512,
-  textureHeight: 512,
-  waterNormals: new THREE.TextureLoader().load(
-    'https://threejs.org/examples/textures/waternormals.jpg',
-    (tex) => { tex.wrapS = tex.wrapT = THREE.RepeatWrapping; }
-  ),
-  sunDirection: new THREE.Vector3(0.5, 1, 0.5).normalize(),
-  sunColor: 0xffffff,
-  waterColor: 0x001e0f,
-  distortionScale: 3.7,
-  fog: false,
+const tex = stdlib.makeCanvasTexture("振兴中华", {
+  bg: "#163a25", fg: "#f0ece4",
+  font: "bold 80px serif",
+  w: 512, h: 128,
 });
-water.rotation.x = -Math.PI / 2;
-water.position.y = 0.0;
-scene.add(water);
-
-// Update water time uniform each frame
-animate((delta) => {
-  water.material.uniforms['time'].value += delta;
-});
-```
-
-**Example: Procedural mountain terrain (use this pattern for snow mountains, canyons, highland scenes)**
-
-```javascript
-// Multi-octave FBM + ridge noise terrain — realistic alpine mountain range
-function hash(x, y) {
-  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-  return h - Math.floor(h);
-}
-function smoothNoise(x, y) {
-  const ix = Math.floor(x), iy = Math.floor(y);
-  const fx = x - ix, fy = y - iy;
-  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-  const a = hash(ix, iy), b = hash(ix+1, iy), c = hash(ix, iy+1), d = hash(ix+1, iy+1);
-  return a*(1-ux)*(1-uy) + b*ux*(1-uy) + c*(1-ux)*uy + d*ux*uy;
-}
-function fbm(x, y, octaves) {
-  let v = 0, amp = 0.5, freq = 1, total = 0;
-  for (let i = 0; i < octaves; i++) {
-    v += amp * smoothNoise(x * freq, y * freq); total += amp; amp *= 0.5; freq *= 2.1;
-  }
-  return v / total;
-}
-function ridgeNoise(x, y, octaves) {
-  let v = 0, amp = 0.5, freq = 1, total = 0;
-  for (let i = 0; i < octaves; i++) {
-    const n = Math.abs(smoothNoise(x * freq, y * freq) - 0.5) * 2;
-    v += amp * (1 - n); total += amp; amp *= 0.55; freq *= 2.0;
-  }
-  return v / total;
-}
-
-const W = 220, D = 180;
-const geo = new THREE.PlaneGeometry(W, D, 180, 150);
-geo.rotateX(-Math.PI / 2);
-const pos = geo.attributes.position;
-const colors = new Float32Array(pos.count * 3);
-
-// Peak definitions: [worldX, worldZ, height, radiusX, radiusZ]
-const peaks = [
-  [0, -50, 55, 28, 32], [-32, -58, 40, 22, 26], [35, -55, 36, 20, 24],
-  [-68, -75, 30, 32, 38], [72, -72, 28, 30, 36], [8, -80, 38, 35, 40],
-];
-const snowC = new THREE.Color(0xeff2f5), rockC = new THREE.Color(0x5a5248),
-      baseC = new THREE.Color(0x3a3230), cx = new THREE.Color();
-
-for (let i = 0; i < pos.count; i++) {
-  const wx = pos.getX(i), wz = pos.getZ(i);
-  let h = fbm(wx * 0.012, wz * 0.012, 4) * 3;
-  for (const [px, pz, ph, rx, rz] of peaks) {
-    const dist2 = ((wx-px)/rx)**2 + ((wz-pz)/rz)**2;
-    if (dist2 > 2.5) continue;
-    const ridge = ridgeNoise(wx * 0.035 + px * 0.01, wz * 0.035 + pz * 0.01, 5);
-    const t = Math.max(0, 1 - dist2 / 2.25);
-    const falloff = t*t*t*(t*(6*t-15)+10);
-    h += ph * ridge * falloff;
-  }
-  h += fbm(wx * 0.18, wz * 0.18, 3) * 1.2;
-  pos.setY(i, h);
-  const tSnow = Math.min(1, Math.max(0, (h - 16) / 12));
-  const tRock = Math.min(1, Math.max(0, (h - 6) / 8));
-  cx.lerpColors(baseC, rockC, tRock);
-  cx.lerpColors(cx, snowC, tSnow);
-  colors[i*3] = cx.r; colors[i*3+1] = cx.g; colors[i*3+2] = cx.b;
-}
-
-pos.needsUpdate = true;
-geo.computeVertexNormals();
-geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
-terrain.receiveShadow = true; terrain.castShadow = true;
-scene.add(terrain);
-
-// Snow valley floor
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(220, 70).rotateX(-Math.PI/2),
-  new THREE.MeshStandardMaterial({ color: 0xdde8f0, roughness: 0.95 })
+const plane = new THREE.Mesh(
+  new THREE.PlaneGeometry(4, 1),
+  new THREE.MeshStandardMaterial({ map: tex }),
 );
-ground.position.set(0, 0.05, 45); ground.receiveShadow = true; scene.add(ground);
-
-scene.fog = new THREE.FogExp2(0xb8cce0, 0.004);
+plane.position.set(0, 2, -5);
+scene.add(plane);
 ```
 
-**Key parameters to adjust per scene:**
-- `W × D` — terrain footprint (220×180 = large mountain range)
-- `peaks[]` array — add/remove/reposition peaks with custom height and influence radius
-- Snow line: `(h - 16) / 12` — lower `16` to start snow earlier; set to `8` for all-white alpine
-- `scene.fog` density: `0.004` light haze; `0.008` heavy clouds; `0.0` no fog
+---
 
-**Example: Animated particle system**
+## Pre-Submit Checklist
 
-**Example: Falling snow (add to any mountain/winter scene)**
+Answer every question before finalizing `sceneCode`. If any answer is "no", fix it first.
 
-```javascript
-// Falling snow — 80 particles, precomputed randoms, animate() loop
-const N = 80;
-const snowPos = new Float32Array(N * 3);
-const vy = new Float32Array(N), dx = new Float32Array(N), dz = new Float32Array(N);
-for (let i = 0; i < N; i++) {
-  snowPos[i*3]   = (Math.random() - 0.5) * 120;  // x spread (match scene width)
-  snowPos[i*3+1] = Math.random() * 50;            // initial y (0..50)
-  snowPos[i*3+2] = (Math.random() - 0.5) * 120;  // z spread
-  vy[i] = 1.5 + Math.random() * 2.5;             // fall speed (units/sec)
-  dx[i] = (Math.random() - 0.5) * 0.6;           // horizontal drift x
-  dz[i] = (Math.random() - 0.5) * 0.4;           // horizontal drift z
-}
-const snowGeo = new THREE.BufferGeometry();
-const attr = new THREE.BufferAttribute(snowPos, 3);
-attr.setUsage(THREE.DynamicDrawUsage);
-snowGeo.setAttribute('position', attr);
-scene.add(new THREE.Points(snowGeo,
-  new THREE.PointsMaterial({ color: 0xeef4ff, size: 0.35, transparent: true, opacity: 0.82, depthWrite: false })
-));
-animate((delta) => {
-  const p = snowGeo.attributes.position;
-  for (let i = 0; i < N; i++) {
-    p.setY(i, p.getY(i) - vy[i] * delta);
-    p.setX(i, p.getX(i) + dx[i] * delta);
-    p.setZ(i, p.getZ(i) + dz[i] * delta);
-    if (p.getY(i) < -1) { p.setY(i, 48 + Math.random() * 8); }
-  }
-  p.needsUpdate = true;
-});
-// Tune: N ≤ 100 (perf limit) | size 0.2–0.5 | spread matches scene floor width
-```
+**Spatial skeleton**
+- [ ] Does every direction the camera can face show a surface (wall, ground, sky, tree line)? No exposed black void?
+- [ ] Is the ground/floor mesh larger than the farthest visible object?
+- [ ] For indoor scenes: are all 6 faces (floor, ceiling, 4 walls) present?
+- [ ] Does the camera start inside the skeleton, at y = 1.7 (eye level)?
 
-**Example: Falling rain**
+**Scale**
+- [ ] Are humans/NPCs placed at y = 0 and exactly ~1.8 m tall?
+- [ ] Is the room/court/field the correct real-world size? (Check the Scale Anchors table)
+- [ ] Do doors (if any) measure 2.1 m tall?
 
-```javascript
-// Falling rain — 90 streaks rendered as thin vertical points
-const N = 90;
-const rainPos = new Float32Array(N * 3);
-const vy = new Float32Array(N), dx = new Float32Array(N);
-for (let i = 0; i < N; i++) {
-  rainPos[i*3]   = (Math.random() - 0.5) * 80;
-  rainPos[i*3+1] = Math.random() * 40;
-  rainPos[i*3+2] = (Math.random() - 0.5) * 80;
-  vy[i] = 18 + Math.random() * 10;   // rain falls fast
-  dx[i] = (Math.random() - 0.5) * 1.5; // slight wind angle
-}
-const rainGeo = new THREE.BufferGeometry();
-const rAttr = new THREE.BufferAttribute(rainPos, 3);
-rAttr.setUsage(THREE.DynamicDrawUsage);
-rainGeo.setAttribute('position', rAttr);
-scene.add(new THREE.Points(rainGeo,
-  new THREE.PointsMaterial({ color: 0x8ab4cc, size: 0.12, transparent: true, opacity: 0.55, depthWrite: false })
-));
-animate((delta) => {
-  const p = rainGeo.attributes.position;
-  for (let i = 0; i < N; i++) {
-    p.setY(i, p.getY(i) - vy[i] * delta);
-    p.setX(i, p.getX(i) + dx[i] * delta);
-    if (p.getY(i) < 0) { p.setY(i, 38 + Math.random() * 6); }
-  }
-  p.needsUpdate = true;
-});
-// Tune: vy 18–28 for heavy rain, 8–14 for drizzle | color 0x8ab4cc (grey-blue)
-```
+**Lighting**
+- [ ] Is `stdlib.setupLighting()` the very first call?
+- [ ] For outdoor: does it include `hdri: true`?
+- [ ] For indoor: does it include `isIndoor: true`?
+- [ ] Are ALL extra lights (lamps, floodlights, spots, candles) set to `castShadow = false`? Any shadow-casting extra light causes camera-movement flickering artifacts.
+- [ ] Does any terrain/hill/tree end up inside a building or stadium perimeter? If yes, move it outside.
 
-Pass `sceneCode` in your tool call (alongside a minimal `sceneData` with viewpoints):
+**Layer completeness**
+- [ ] Layer 1 (sky/ceiling): present?
+- [ ] Layer 2 (ground/floor): present and large enough?
+- [ ] Layer 3 (boundary): hills / tree line / walls block the horizon?
+- [ ] Layer 4 (large structures): bleachers / trees / columns define the space?
+- [ ] Layer 6 (focal object): is there a clear hero element the user looks at first?
 
-```javascript
-// Sci-fi particle vortex
-const geometry = new THREE.BufferGeometry();
-const count = 3000;
-const positions = new Float32Array(count * 3);
-for (let i = 0; i < count; i++) {
-  const r = 5 + Math.random() * 10;
-  const theta = Math.random() * Math.PI * 2;
-  const phi = (Math.random() - 0.5) * Math.PI;
-  positions[i * 3]     = r * Math.cos(theta) * Math.cos(phi);
-  positions[i * 3 + 1] = r * Math.sin(phi) * 3;
-  positions[i * 3 + 2] = r * Math.sin(theta) * Math.cos(phi);
-}
-geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-const material = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.08, transparent: true, opacity: 0.8 });
-const particles = new THREE.Points(geometry, material);
-scene.add(particles);
-
-animate((delta) => {
-  particles.rotation.y += delta * 0.3;
-  particles.rotation.x += delta * 0.05;
-});
-```
-
-**When to use Code Mode vs JSON Mode:**
-- **JSON Mode** (default): simple scenes, furniture, buildings, NPCs, nature — use `sceneData`
-- **Code Mode**: particle systems, procedural animations, custom shaders, morphing geometry, physics — use `sceneCode`
-- Code mode is sandboxed — no network calls, no DOM manipulation, only Three.js API
-
-## Performance Rules for Code Mode (CRITICAL)
-
-Violating these causes severe lag or dropped frames:
-
-- **Max particles per system: 100** — use `BufferGeometry` + `Points`; never exceed 100 points per system
-- **Max total geometries: 30** — count every `new THREE.Mesh(...)` call; keep total ≤ 30
-- **Never call `Math.random()` inside `animate()`** — precompute random values in arrays before the loop
-- **Never reassign `geometry.attributes.position.array` inside `animate()`** — update in-place and set `needsUpdate = true` only when necessary; prefer shader-driven animation
-- **Max `animate()` registrations: 3** — each call registers one per-frame callback; keep it minimal
-- **Never use `scene.traverse()` with loose color filters to collect animated meshes** — broad color checks (e.g. `color.r > 0.8`) accidentally match walls, floors, and structural geometry alongside intended targets (flames, lights), causing the entire scene to shake or pulse. Always tag meshes explicitly: `mesh.userData.animated = true` before adding to the scene, then collect with `scene.traverse(obj => { if (obj.userData.animated) ... })`.
-- **No `castShadow = true` on particle systems** — only set shadow casting on ≤ 5 static meshes
-
-## Lighting Rules for Code Mode (CRITICAL)
-
-When `sceneCode` is present, the renderer **mutes its built-in lights** and hands full lighting control to your code. You must supply all lighting yourself.
-
-- **Always add at least one ambient or hemisphere light** — without it the scene will be pitch black
-- **Total light intensity budget**: `AmbientLight ≤ 0.6` + `DirectionalLight ≤ 1.2` + point lights with falloff distance ≤ 20
-- **Max PointLights: 6** — each point light multiplies render cost; use emissive materials for decorative glow instead
-- **Never exceed emissiveIntensity > 1.5** on any material — high emissive values combined with bloom threshold cause severe overexposure
-- **Do NOT set `castShadow = true` on DirectionalLight in sceneCode** — the renderer's shadow-casting sun is already muted; adding a new shadow light doubles GPU cost
-
-## Text Rendering in Code Mode (CRITICAL)
-
-**NEVER construct text by assembling geometric primitives (boxes, planes as strokes).** This produces unrecognizable shapes, especially for CJK (Chinese/Japanese/Korean) characters.
-
-**ALWAYS use `CanvasTexture` for any text content.** The browser's font renderer handles all scripts correctly.
-
-### Correct pattern: text on a surface
-
-```javascript
-// Create canvas and draw text
-const canvas = document.createElement('canvas');
-canvas.width = 1024;
-canvas.height = 256;
-const ctx = canvas.getContext('2d');
-
-// Background
-ctx.fillStyle = '#163a25';
-ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-// Text — browser renders CJK correctly
-ctx.fillStyle = '#f0ece4';
-ctx.font = 'bold 180px serif';
-ctx.textAlign = 'center';
-ctx.textBaseline = 'middle';
-ctx.fillText('振兴中华', canvas.width / 2, canvas.height / 2);
-
-// Apply as texture — flipY:true (default) corrects vertical axis
-const texture = new THREE.CanvasTexture(canvas);
-
-// Attach to a PlaneGeometry facing the camera (+z by default)
-const mesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(8.7, 1.4),
-  new THREE.MeshStandardMaterial({ map: texture, roughness: 0.88 }),
-);
-mesh.position.set(0, 2.15, -5.87);
-scene.add(mesh);
-```
-
-### UV orientation rules (prevents mirroring)
-
-| Plane rotation | Camera side | Text mirrored? | Fix |
-|---|---|---|---|
-| None (default, faces +z) | +z side | No | None needed |
-| `rotation.y = Math.PI` (faces −z) | −z side | **Yes, horizontally** | `ctx.scale(-1, 1); ctx.translate(-width, 0)` before drawing |
-| `rotation.x = -Math.PI/2` (floor) | above | No | None needed |
-
-When in doubt, use default orientation (no rotation) and position the camera on the +z side.
-
-### Multiple lines / styled text
-
-```javascript
-ctx.font = 'bold 72px sans-serif';
-ctx.fillStyle = '#ffffff';
-const lines = ['Line one', 'Line two'];
-lines.forEach((line, i) => {
-  ctx.fillText(line, canvas.width / 2, 80 + i * 90);
-});
-```
-
+**Object placement**
+- [ ] Every mesh sits on a surface? (y = surface_y + half_height)
+- [ ] No objects clipping into each other?
+- [ ] No `Object.assign(mesh, ...)` or `mesh.position = ...` direct assignments? (use `.position.set()`)
+- [ ] For humanoids/animals/vehicles: using `stdlib.loadModel()`, not BoxGeometry?

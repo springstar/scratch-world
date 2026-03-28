@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-28
+**Last Updated:** 2026-03-29
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -47,6 +47,7 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Session Manager** | `src/session/session-manager.ts` | Maintains per-user state, dispatches to agent, injects active skills | `SessionManager` |
 | **Agent Factory** | `src/agent/agent-factory.ts` | Wires Claude with scene tools | `createAgent()` |
 | **Scene Tools** | `src/agent/tools/*.ts` | Tool implementations (create, update, get, list, navigate, interact, share) | Tool functions |
+| **Scene Validator** | `src/agent/scene-validator.ts` | Static analysis of sceneCode before storage; catches spatial and code-quality violations so agent can self-correct | `validateSceneCode()`, `formatViolations()` |
 | **Scene Manager** | `src/scene/scene-manager.ts` | Scene CRUD, orchestrates provider calls (sync and async), versioning | `SceneManager` |
 | **Scene Types** | `src/scene/types.ts` | Core domain interfaces with async fields (Scene.status, operationId) | Type definitions |
 | **Scene Schema** | `src/scene/schema.ts` | Typebox validation schemas for API | Schema validators |
@@ -58,7 +59,9 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Storage Repos** | `src/storage/*.ts` | Scene and Session persistence | `SceneRepository`, `SessionRepository` |
 | **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat | Hono app |
 | **Chat Route** | `src/viewer-api/routes/chat.ts` | POST /chat endpoint for web UI | `chatRoute()` |
-| **Scene Renderer** | `viewer/src/renderer/scene-renderer.ts` | Three.js scene construction from SceneData | `loadScene()`, `renderScene()` |
+| **Scene Renderer** | `viewer/src/renderer/scene-renderer.ts` | Three.js WebGPU scene construction from SceneData; executes sceneCode sandbox; post-processing pipeline (bloom → SMAA → film grain → vignette) | `SceneRenderer` |
+| **Scene Stdlib** | `viewer/src/renderer/scene-stdlib.ts` | Standard library injected into sceneCode sandbox as `stdlib`; lighting, terrain, buildings, NPCs, trees, layout | `createStdlib()`, `StdlibApi` |
+| **Layout Solver** | `viewer/src/renderer/layout-solver.ts` | Semantic layout engine — AI declares scene type, solver computes all x/y/z positions for structural elements | `createLayout()`, `SceneLayout` |
 | **Splat Viewer** | `viewer/src/components/SplatViewer.tsx` | Gaussian splat viewer using @sparkjsdev/spark | `SplatViewer` |
 | **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer | UI component |
 | **Chat Drawer** | `viewer/src/components/ChatDrawer.tsx` | Bottom sheet chat UI (peek/open states, streaming) | `ChatDrawer` |
@@ -181,44 +184,42 @@ Without one of the above, returns `403 Forbidden`.
 
 ### Core Functions
 
-- **`loadScene(sceneData: SceneData)`** — Async; parses SceneData and populates Three.js scene
-  - If `sceneData.sceneCode` present: calls `executeCode()` sandbox instead
-  - Otherwise: iterates `sceneData.objects`, calls `buildObject()` for each
-  - Configures environment (sky, lighting, fog) via `resolveEnvPreset()`
-  - Detects indoor scenes (ceiling object present): adjusts fog, sun, ambient, bloom radius
-  - Initialises LOD visibility on load (all levels start visible=true; init sets correct one)
+- **`loadScene(sceneData: SceneData)`** — Async; configures environment then executes sceneCode sandbox
+  - Mutes renderer's built-in lights; all lighting is owned by `stdlib.setupLighting()`
+  - Calls `executeCode()` then traverses `codeGroup` to force `castShadow=false` on all lights
+  - Detects indoor scenes via `scene.userData["isIndoor"]` flag or presence of PointLights;
+    applies tighter bloom (strength=0.12, radius=0.05, threshold=1.3) automatically
 
-- **`buildSceneObject(obj: SceneObject)`** — Returns THREE.Object3D for one object
-  - Delegates to `buildGeometry()` for base shape
-  - If `metadata.modelUrl` present: loads GLTF model asynchronously, replaces base
-  - If stateful object: renders state-specific visuals (e.g., blackboard with/without chalk)
-  - Applies user data and interaction data
+- **`executeCode(code: string)`** — Sandbox for sceneCode execution
+  - Available globals: `THREE`, `tsl`, `scene`, `camera`, `renderer`, `controls`, `animate()`, `WaterMesh`, `stdlib`
+  - `scene.add()` is proxied to `codeGroup` so all code-added objects are tracked and cleared on reload
+  - `scene.background`, `scene.fog`, `scene.environment` still reach the real Scene object
 
-- **`buildGeometry(type, shape, metadata)`** — Creates base mesh (fallback if model fails)
-  - Handles all 15+ supported shapes: desk, chair, blackboard, window, door, shelf, pillar, hoop, court, floor, wall, ceiling, etc.
-  - Uses PBR materials (MeshStandardMaterial) with color palette
-  - Applies shadows and scale variations
+- **`setupPostProcessing()`** — WebGPU PostProcessing pipeline (TSL node graph)
+  - Pipeline: `bloom → SMAA → film grain → vignette`
+  - Bloom defaults: strength=0.2, radius=0.2, threshold=1.1
+  - Night scenes: bloom strength boosted to max(0.8, configured) automatically
+  - Indoor scenes: overridden post-executeCode to strength=0.12, radius=0.05, threshold=1.3
 
-- **`resolveEnvPreset(skybox?, timeOfDay?)`** — Looks up environment preset
-  - Returns `EnvPreset`: sky color, sun color/position/intensity, fog, ambient light
-  - Supports: clear_day, sunset, night, overcast
-  - Supports timeOfDay: dawn, noon, dusk, night
+- **`resolveEnvPreset(skybox?, timeOfDay?)`** — Environment preset lookup
+  - Returns sky color, sun color/position/intensity, fog, ambient
+  - Supports: clear_day, sunset, night, overcast, noon, dawn/dusk
 
-- **`setupPostProcessing()`** — Initializes WebGPU PostProcessing + BloomNode (TSL)
-  - Bloom configurable via `environment.effects.bloom` (strength, radius, threshold)
-  - Bloom threshold clamped to minimum 1.5 in linear HDR space — prevents ordinary lit
-    surfaces (walls, floors) from triggering bloom; only emissive lights (intensity ≥ 2) glow
-  - Indoor scenes (detected by presence of ceiling object): bloom radius 0.12, sun at 5%,
-    fog pushed to 300–600 u, ambient reduced 70% — prevents the "glowing scene box" effect
+### Validation–Correction Loop
 
-- **`executeCode(code: string, sandbox: SandboxContext)`** — Sandbox for custom code
-  - Available: THREE, tsl, scene, camera, renderer, controls, animate(), WaterMesh
-  - Used for particle systems, custom animations, procedural geometry
-  - No network access, no DOM manipulation
-  - **Pitfall**: never use `scene.traverse()` with loose color-channel filters to collect
-    animated meshes — gold/stone/marble colors can match flame heuristics, causing unintended
-    objects to animate. Tag meshes explicitly: `mesh.userData.animated = true`, then collect
-    with `scene.traverse(obj => { if (obj.userData.animated) ... })`
+All sceneCode passes through `scene-validator.ts` before storage:
+1. `create_scene` / `update_scene` tools call `validateSceneCode(sceneCode)`
+2. Violations returned in tool result JSON as `violations` field
+3. Agent system prompt instructs immediate `update_scene` call to fix all errors before responding
+
+### Semantic Layout System
+
+`stdlib.useLayout(type, opts)` returns a `SceneLayout` (from `layout-solver.ts`):
+- AI declares scene type (`"outdoor_soccer"`, `"indoor_arena"`, etc.); solver computes all positions
+- `buildBase()` — full structural skeleton (ground + walls/boundary + background hills)
+- `place(role)` — semantic placement (`"north_goal"`, `"bleachers_south"`, etc.) with solver-computed position
+- `viewpoint(name?)` — safe camera positions (`"overview"`, `"sideline"`, `"end_zone"`, `"center"`)
+- Hills and boundary elements are always placed outside `structureBounds` — impossible to overlap structures
 
 ### Gaussian Splat Rendering (SplatViewer)
 

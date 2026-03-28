@@ -24,6 +24,8 @@ After each tool call, respond naturally in character — describe what the user 
 
 When sharing a scene link, format it as: [View scene](url)
 When sharing a public scene link, format it as: [Share link](url) — anyone with this link can view the scene.
+
+IMPORTANT: If a tool result contains a "violations" field, you MUST call update_scene immediately with corrected sceneCode that fixes every listed violation. Do not respond to the user until all violations are resolved.
 `.trim();
 
 export function createAgent(

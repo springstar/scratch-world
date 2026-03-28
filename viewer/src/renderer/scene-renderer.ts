@@ -1,42 +1,19 @@
 import * as THREE from "three/webgpu";
 import * as TSL from "three/tsl";
-import { color, normalLocal, positionLocal, mix, uv, pass } from "three/tsl";
+import { color, normalLocal, mix, uv, pass } from "three/tsl";
 import { bloom }  from "three/addons/tsl/display/BloomNode.js";
 import { smaa }   from "three/addons/tsl/display/SMAANode.js";
+import { film }   from "three/examples/jsm/tsl/display/FilmNode.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { loadEnvMap, loadSkyBackground } from "./hdri-cache.js";
 import { applyTerrainPbr, applyTerrainPbrNode, setupUv2 } from "./texture-cache.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { SkyMesh }   from "three/addons/objects/SkyMesh.js";
 import { WaterMesh } from "three/addons/objects/WaterMesh.js";
 import type { SceneData, SceneObject, Viewpoint } from "../types.js";
+import { createStdlib } from "./scene-stdlib.js";
 
-// Colour palette keyed by object type
-const TYPE_COLORS: Record<string, number> = {
-  building: 0x8b7355,
-  terrain: 0x4a7c59,
-  tree: 0x2d5a27,
-  npc: 0xe8c97e,
-  item: 0xd4af37,
-  object: 0x9b9b9b,
-};
-const FALLBACK_COLOR = 0xaaaaaa;
-
-function colorFor(type: string): number {
-  return TYPE_COLORS[type] ?? FALLBACK_COLOR;
-}
-
-function makeMat(color: number, rough = 0.8, metal = 0.1): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
-}
-
-/**
- * Slope-blended terrain material using TSL NodeMaterial.
- *
- * normalLocal.y blends between sideColor (cliffs / earth) and topColor (grass / stone top)
- * via smoothstep(lo, hi). WebGPU-native — no onBeforeCompile needed.
- */
 function makeTerrainSlopeMat(
   topColor: number,
   sideColor: number,
@@ -50,885 +27,6 @@ function makeTerrainSlopeMat(
   return mat;
 }
 
-/**
- * Elevation-blended mountain material using positionLocal.y (local space 0..1).
- *
- * Blends three zones from base to peak:
- *   0.00–snowLo : baseColor  (rock / scree at the bottom)
- *   snowLo–snowHi: transition zone
- *   snowHi–1.00 : snowColor  (snow cap at the top)
- *
- * Use with geometry whose local Y spans 0 (base) to 1 (apex) before mesh.scale.
- */
-function makeMountainMat(
-  snowColor = 0xf0f0ee,
-  rockColor = 0x5a5248,
-  snowLo = 0.52,
-  snowHi = 0.80,
-  roughness = 0.88,
-): THREE.MeshStandardNodeMaterial {
-  const mat = new THREE.MeshStandardNodeMaterial({ roughness, metalness: 0 });
-  const elevBlend = positionLocal.y.smoothstep(snowLo, snowHi);
-  mat.colorNode = mix(color(rockColor), color(snowColor), elevBlend);
-  return mat;
-}
-
-function inferShape(name: string): string {
-  const n = name.toLowerCase();
-  if (n.includes("blackboard") || n.includes("chalkboard")) return "blackboard";
-  if (n.includes("desk") || n.includes("table")) return "desk";
-  if (n.includes("chair") || n.includes("stool") || n.includes("seat")) return "chair";
-  if (n.includes("window")) return "window";
-  if (n.includes("door")) return "door";
-  if (n.includes("wall")) return "wall";
-  if (n.includes("court") || n.includes("hardwood")) return "court";
-  if (n.includes("floor") || n.includes("ceiling")) return "floor";
-  if (n.includes("shelf") || n.includes("bookcase")) return "shelf";
-  if (n.includes("pillar") || n.includes("column")) return "pillar";
-  if (n.includes("hoop") || n.includes("basket") || n.includes("rim")) return "hoop";
-  return "box";
-}
-
-function buildObjectByShape(
-  obj: SceneObject,
-  x: number,
-  y: number,
-  z: number,
-  invalidate?: () => void,
-): THREE.Object3D {
-  const shape = (obj.metadata.shape as string | undefined) ?? inferShape(obj.name);
-  const state = obj.metadata.state as string | undefined;
-
-  switch (shape) {
-    case "blackboard":
-    case "chalkboard": {
-      const group = new THREE.Group();
-      // Board surface
-      const board = new THREE.Mesh(
-        new THREE.BoxGeometry(4, 2.5, 0.1),
-        makeMat(0x1a3a2a, 0.9, 0),
-      );
-      board.position.y = 1.5;
-      board.castShadow = true;
-      board.receiveShadow = true;
-      group.add(board);
-      // Wooden frame
-      const frameMat = makeMat(0x8b6040, 0.8, 0);
-      for (const [fw, fh, fx2, fy2] of [
-        [4.12, 0.08, 0, 2.76], [4.12, 0.08, 0, 0.24],
-        [0.08, 2.5,  -2.02, 1.5], [0.08, 2.5, 2.02, 1.5],
-      ] as [number, number, number, number][]) {
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(fw, fh, 0.06), frameMat);
-        bar.position.set(fx2, fy2, 0.08);
-        group.add(bar);
-      }
-      // Chalk tray
-      const tray = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.06, 0.14), frameMat);
-      tray.position.set(0, 0.3, 0.1);
-      group.add(tray);
-
-      // Text on board using CanvasTexture
-      if (state !== "erased" && state !== "clean") {
-        // Extract text from description or name
-        const rawText: string = (obj.description ?? obj.name ?? "").trim();
-        // Pull out CJK chars or short Latin words that look like board content
-        const cjkMatch = rawText.match(/[\u4e00-\u9fff\u3040-\u30ff]{2,}/g);
-        const quotedMatch = rawText.match(/[「"'《]([^」"'》]{1,20})[」"'》]/);
-        const boardText = quotedMatch
-          ? quotedMatch[1]
-          : cjkMatch
-          ? cjkMatch[0]
-          : "";
-
-        const canvas = document.createElement("canvas");
-        canvas.width = 1024;
-        canvas.height = 640;
-        const ctx = canvas.getContext("2d")!;
-        // Board background
-        ctx.fillStyle = "#1a3a2a";
-        ctx.fillRect(0, 0, 1024, 640);
-        if (boardText) {
-          // Main chalk text — large, centred
-          ctx.fillStyle = "rgba(230,255,230,0.88)";
-          ctx.font = `bold ${boardText.length <= 6 ? 140 : 100}px serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(boardText, 512, 280);
-        }
-        // Chalk scribble lines (decorative)
-        ctx.strokeStyle = "rgba(200,240,200,0.22)";
-        ctx.lineWidth = 2;
-        for (let li = 0; li < 6; li++) {
-          ctx.beginPath();
-          ctx.moveTo(60, 420 + li * 28);
-          ctx.lineTo(960, 420 + li * 28);
-          ctx.stroke();
-        }
-        const tex = new THREE.CanvasTexture(canvas);
-        const writing = new THREE.Mesh(
-          new THREE.PlaneGeometry(3.8, 2.38),
-          new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 }),
-        );
-        writing.position.set(0, 1.5, 0.056);
-        group.add(writing);
-      }
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    case "desk":
-    case "table": {
-      const group = new THREE.Group();
-      const topMat = makeMat(0xc8a46e, 0.7, 0);
-      const top = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2, 0.06, 0.7),
-        topMat,
-      );
-      top.position.y = 0.76;
-      top.castShadow = true;
-      top.receiveShadow = true;
-      if (invalidate) applyTerrainPbr(topMat, "wood_floor", 2, invalidate);
-      group.add(top);
-      for (const [lx, lz] of [[-0.55, -0.3], [0.55, -0.3], [-0.55, 0.3], [0.55, 0.3]] as [number, number][]) {
-        const leg = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.03, 0.03, 0.76, 6),
-          makeMat(0xb08050, 0.8, 0),
-        );
-        leg.position.set(lx, 0.38, lz);
-        group.add(leg);
-      }
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    case "chair":
-    case "stool": {
-      const group = new THREE.Group();
-      const woodMat = makeMat(0xb08050, 0.8, 0);
-      if (invalidate) applyTerrainPbr(woodMat, "wood_floor", 2, invalidate);
-      const seat = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.05, 0.45),
-        woodMat,
-      );
-      seat.position.y = 0.45;
-      group.add(seat);
-      const back = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.5, 0.04),
-        woodMat,
-      );
-      back.position.set(0, 0.73, -0.22);
-      group.add(back);
-      for (const [lx, lz] of [[-0.19, -0.19], [0.19, -0.19], [-0.19, 0.19], [0.19, 0.19]] as [number, number][]) {
-        const leg = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.025, 0.025, 0.45, 6),
-          makeMat(0x8b6040, 0.9, 0),
-        );
-        leg.position.set(lx, 0.225, lz);
-        group.add(leg);
-      }
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    case "window": {
-      const group = new THREE.Group();
-      const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(1.6, 2.0, 0.1),
-        makeMat(0xd4c5a0, 0.8, 0),
-      );
-      frame.position.y = 1.4;
-      group.add(frame);
-      const glass = new THREE.Mesh(
-        new THREE.BoxGeometry(1.4, 1.8, 0.04),
-        new THREE.MeshStandardMaterial({ color: 0xadd8e6, roughness: 0.05, metalness: 0.1, opacity: 0.45, transparent: true, emissive: 0x88aacc, emissiveIntensity: 0.3 }),
-      );
-      glass.position.y = 1.4;
-      group.add(glass);
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    case "door": {
-      const group = new THREE.Group();
-      const woodMat = makeMat(0x8b6040, 0.8, 0);
-      const frameMat = makeMat(0x6a4828, 0.85, 0);
-      // Door frame
-      const frameTop = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.1, 0.1), frameMat);
-      frameTop.position.set(0, 2.15, 0);
-      group.add(frameTop);
-      for (const fx of [-0.5, 0.5]) {
-        const frameSide = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.2, 0.1), frameMat);
-        frameSide.position.set(fx, 1.1, 0);
-        group.add(frameSide);
-      }
-      // Door panel with inset detail
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.88, 2.05, 0.07), woodMat);
-      panel.position.set(0, 1.025, 0);
-      group.add(panel);
-      // Inset panels (upper and lower)
-      for (const py of [0.55, 1.52]) {
-        const inset = new THREE.Mesh(
-          new THREE.BoxGeometry(0.68, 0.7, 0.03),
-          makeMat(0x7a5535, 0.85, 0),
-        );
-        inset.position.set(0, py, 0.04);
-        group.add(inset);
-      }
-      // Door knob
-      const knob = new THREE.Mesh(
-        new THREE.SphereGeometry(0.04, 8, 6),
-        makeMat(0xc8a832, 0.3, 0.8),
-      );
-      knob.position.set(0.36, 1.05, 0.07);
-      group.add(knob);
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    case "wall": {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(20, 3.2, 0.2),
-        makeMat(0xe8e0d0, 0.95, 0),
-      );
-      mesh.position.set(x, y, z);
-      if (Math.abs(x) > Math.abs(z)) {
-        mesh.rotation.y = Math.PI / 2;
-      }
-      mesh.receiveShadow = true;
-      return mesh;
-    }
-
-    case "floor":
-    case "ceiling": {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(20, 0.15, 20),
-        makeMat(shape === "ceiling" ? 0xf5f0e8 : 0xc8b89a, 1, 0),
-      );
-      mesh.position.set(x, shape === "ceiling" ? y + 3 : y + 0.075, z);
-      mesh.receiveShadow = true;
-      return mesh;
-    }
-
-    case "shelf":
-    case "bookcase": {
-      const group = new THREE.Group();
-      const woodMat = makeMat(0xb8864e, 0.75, 0);
-      if (invalidate) applyTerrainPbr(woodMat, "wood_floor", 3, invalidate);
-      // Back panel
-      const back = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.0, 0.05), woodMat);
-      back.position.set(0, 1.0, -0.15);
-      group.add(back);
-      // Side panels
-      for (const sx of [-0.575, 0.575]) {
-        const side = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.0, 0.35), woodMat);
-        side.position.set(sx, 1.0, 0);
-        group.add(side);
-      }
-      // Shelves (top, 3 mid, bottom)
-      const shelfYs = [0.05, 0.55, 1.05, 1.55, 1.98];
-      for (const sy of shelfYs) {
-        const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.04, 0.32), woodMat);
-        shelf.position.set(0, sy, 0);
-        group.add(shelf);
-      }
-      // Books on each middle shelf
-      const bookColors = [0xcc3333, 0x3366cc, 0x228844, 0xdd8822, 0x8833aa, 0x336688, 0xaa4422];
-      let bci = 0;
-      for (const sy of [0.59, 1.09, 1.59]) {
-        let bx = -0.48;
-        while (bx < 0.46) {
-          const bw = 0.06 + ((bci * 7 + 3) % 5) * 0.01;
-          const bh = 0.28 + ((bci * 3 + 1) % 4) * 0.04;
-          const book = new THREE.Mesh(
-            new THREE.BoxGeometry(bw, bh, 0.22),
-            makeMat(bookColors[bci % bookColors.length], 0.9, 0),
-          );
-          book.position.set(bx + bw / 2, sy + bh / 2 + 0.04, 0);
-          group.add(book);
-          bx += bw + 0.005;
-          bci++;
-        }
-      }
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    case "pillar":
-    case "column": {
-      const pillarMat = makeMat(0xd4ccc0, 0.9, 0);
-      const mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.25, 0.25, 3, 8),
-        pillarMat,
-      );
-      if (invalidate) applyTerrainPbr(pillarMat, "cobblestone_floor_01", 2, invalidate);
-      mesh.position.set(x, y + 1.5, z);
-      return mesh;
-    }
-
-    case "hoop": {
-      const group = new THREE.Group();
-      // Support pole
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.05, 3.5, 8),
-        makeMat(0x888888, 0.6, 0.4),
-      );
-      pole.position.y = 1.75;
-      group.add(pole);
-      // Horizontal arm from pole to backboard
-      const arm = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2, 0.06, 0.06),
-        makeMat(0x888888, 0.6, 0.4),
-      );
-      arm.position.set(0.6, 3.2, 0);
-      group.add(arm);
-      // Backboard
-      const board = new THREE.Mesh(
-        new THREE.BoxGeometry(0.04, 1.08, 1.84),
-        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.1, opacity: 0.7, transparent: true }),
-      );
-      board.position.set(1.2, 3.2, 0);
-      group.add(board);
-      // Orange border on backboard
-      const border = new THREE.Mesh(
-        new THREE.BoxGeometry(0.02, 1.1, 1.86),
-        makeMat(0xff6600, 0.5, 0.2),
-      );
-      border.position.set(1.19, 3.2, 0);
-      group.add(border);
-      // Inner box on backboard
-      const innerBox = new THREE.Mesh(
-        new THREE.BoxGeometry(0.02, 0.45, 0.59),
-        makeMat(0xff6600, 0.5, 0.2),
-      );
-      innerBox.position.set(1.18, 3.15, 0);
-      group.add(innerBox);
-      // Rim (torus lying horizontally)
-      const rim = new THREE.Mesh(
-        new THREE.TorusGeometry(0.225, 0.017, 8, 24),
-        makeMat(0xff6600, 0.5, 0.3),
-      );
-      rim.rotation.x = Math.PI / 2;
-      rim.position.set(1.37, 3.05, 0);
-      group.add(rim);
-      // Net (simplified as thin cylinder)
-      const net = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.225, 0.12, 0.45, 12, 1, true),
-        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, opacity: 0.4, transparent: true, side: THREE.DoubleSide }),
-      );
-      net.position.set(1.37, 2.82, 0);
-      group.add(net);
-      // Mirror for right-side hoop (positive x)
-      if (x > 0) group.rotation.y = Math.PI;
-      group.position.set(x, 0, z);
-      return group;
-    }
-
-    default: {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.8, 0.8, 0.8),
-        makeMat(colorFor("object")),
-      );
-      mesh.position.set(x, y + 0.4, z);
-      mesh.castShadow = true;
-      return mesh;
-    }
-  }
-}
-
-function applyUserData(obj: THREE.Object3D, objectId: string, interactable: boolean): void {
-  obj.userData = { objectId, interactable };
-  obj.traverse((child) => {
-    child.userData = { objectId, interactable };
-  });
-}
-
-function buildObject(obj: SceneObject, invalidate?: () => void): THREE.Object3D {
-  const { objectId, type, position, interactable, metadata: meta } = obj;
-  const x = position.x;
-  const y = position.y;
-  const z = position.z;
-
-  let root: THREE.Object3D;
-
-  switch (type) {
-    case "tree": {
-      const group = new THREE.Group();
-      // Trunk — slightly tapered
-      const trunkMat = makeMat(0x5c3d1e, 0.9, 0);
-      const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.28, 2.2, 12),
-        trunkMat,
-      );
-      trunk.position.y = 1.1;
-      trunk.castShadow = true;
-      group.add(trunk);
-      if (invalidate) applyTerrainPbr(trunkMat, "bark_brown_02", 2, invalidate);
-      // Multi-layer foliage — 3 overlapping spheroid clusters
-      const leafMat = makeMat(colorFor("tree"), 0.95, 0);
-      const layers: [number, number, number, number][] = [
-        [0,    2.8, 0, 1.4],
-        [0.3,  3.6, 0.2, 1.1],
-        [-0.2, 4.3, -0.1, 0.85],
-      ];
-      for (const [lx, ly, lz, lr] of layers) {
-        const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 12, 9), leafMat);
-        leaf.scale.y = 0.78;
-        leaf.position.set(lx, ly, lz);
-        leaf.castShadow = true;
-        group.add(leaf);
-      }
-      // Random scale/rotation for visual variety using position as seed
-      const seed = Math.abs(x * 7 + z * 13) % 1;
-      group.scale.setScalar(0.85 + seed * 0.45);
-      group.rotation.y = seed * Math.PI * 2;
-      group.position.set(x, y, z);
-      root = group;
-      break;
-    }
-
-    case "building": {
-      // Seeded color variation — deterministic per building position
-      const colorSeed = Math.abs(Math.round(x * 3.7 + z * 5.3)) % 5;
-      const wallColors = [0xb5472a, 0x8a7560, 0xd4c4a8, 0x7a6050, 0xb89070];
-      const roofColors = [0x6b3a2a, 0x4a3020, 0x5a4a30, 0x3a2a20, 0x7a5535];
-      const wallMat = makeMat(wallColors[colorSeed], 0.85, 0.05);
-      if (invalidate) applyTerrainPbr(wallMat, "red_brick_03", 3, invalidate);
-      const roofMat = makeMat(roofColors[colorSeed], 0.8, 0);
-
-      // Building dimensions from citygen metadata
-      const bw     = (meta?.buildingWidth  as number | undefined) ?? 5;
-      const bd     = (meta?.buildingDepth  as number | undefined) ?? 5;
-      const bh     = (meta?.buildingHeight as number | undefined) ?? 4;
-      const bStyle = (meta?.buildingStyle  as string | undefined) ?? "house";
-      const rotY   = (meta?.rotationY      as number | undefined) ?? 0;
-      const roofR  = Math.max(bw, bd) * 0.55;
-      const roofH  = bStyle === "tower" ? bh * 0.6 : 1.8;
-
-      // ── LOD Level 0 — full detail (< 20 u): body + roof + windows + door ──
-      const full = new THREE.Group();
-      const body0 = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), wallMat);
-      body0.position.y = bh / 2;
-      body0.castShadow = true;
-      body0.receiveShadow = true;
-      full.add(body0);
-      const roof0 = new THREE.Mesh(new THREE.ConeGeometry(roofR, roofH, 4), roofMat);
-      roof0.position.y = bh + roofH / 2;
-      roof0.rotation.y = Math.PI / 4;
-      roof0.castShadow = true;
-      full.add(roof0);
-      if (bw >= 2 && bd >= 2 && bh >= 2) {
-        const sw = bw / 5;
-        const sh = bh / 4;
-        const glassMat = new THREE.MeshStandardMaterial({
-          color: 0x88bbdd, roughness: 0.05, metalness: 0.2,
-          transparent: true, opacity: 0.6,
-          emissive: 0x224466, emissiveIntensity: 0.15,
-        });
-        const winPositions: [number, number, number][] = [
-          [-1.2*sw, 2.8*sh,  bd/2+0.01], [1.2*sw, 2.8*sh,  bd/2+0.01],
-          [-1.2*sw, 1.2*sh,  bd/2+0.01], [1.2*sw, 1.2*sh,  bd/2+0.01],
-          [-1.2*sw, 2.8*sh, -bd/2-0.01], [1.2*sw, 2.8*sh, -bd/2-0.01],
-          [-1.2*sw, 1.2*sh, -bd/2-0.01], [1.2*sw, 1.2*sh, -bd/2-0.01],
-        ];
-        for (const [wx, wy, wz] of winPositions) {
-          const win = new THREE.Mesh(new THREE.PlaneGeometry(0.9*sw, 0.8*sh), glassMat);
-          win.position.set(wx, wy, wz);
-          if (wz < 0) win.rotation.y = Math.PI;
-          full.add(win);
-        }
-        const door = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.7*sw, 1.6*sh), makeMat(0x5a3318, 0.9, 0),
-        );
-        door.position.set(0, 0.8*sh, bd/2+0.02);
-        full.add(door);
-      }
-
-      // ── LOD Level 1 — medium (20–50 u): body + roof, no glass ────────────
-      const med = new THREE.Group();
-      const body1 = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), wallMat);
-      body1.position.y = bh / 2;
-      body1.receiveShadow = true;
-      med.add(body1);
-      const roof1 = new THREE.Mesh(new THREE.ConeGeometry(roofR, roofH, 4), roofMat);
-      roof1.position.y = bh + roofH / 2;
-      roof1.rotation.y = Math.PI / 4;
-      med.add(roof1);
-
-      // ── LOD Level 2 — low (50–80 u): single box silhouette ───────────────
-      const totalH = bh + roofH * 0.5;
-      const low = new THREE.Mesh(new THREE.BoxGeometry(bw, totalH, bd), wallMat);
-      low.position.y = totalH / 2;
-
-      const lod = new THREE.LOD();
-      lod.autoUpdate = false; // disable built-in per-frame update; our hysteresis system manages levels
-      lod.addLevel(full,  0);
-      lod.addLevel(med,  20);
-      lod.addLevel(low,  50);
-      lod.rotation.y = rotY;
-      lod.position.set(x, y, z);
-      root = lod;
-      break;
-    }
-
-    case "npc": {
-      const group = new THREE.Group();
-      // Deterministic color from position to keep appearance stable across re-renders
-      const seed = Math.abs(Math.round(x * 3 + z * 7)) % 12;
-      const shirtColors = [0xcc3333, 0x3366cc, 0x228844, 0xdd8822, 0x8833aa, 0x336688,
-                           0xee5544, 0x4488cc, 0x33aa66, 0xcc7722, 0x6644bb, 0x228899];
-      const pantsColors = [0x222244, 0x334422, 0x443322, 0x111111, 0x444466, 0x224422,
-                           0x221133, 0x223311, 0x332211, 0x000000, 0x443355, 0x112233];
-      const skinTones  = [0xf5c5a0, 0xe8a87c, 0xc68642, 0x8d5524, 0xf0d0b0, 0xd4956a];
-      const skinMat  = makeMat(skinTones[seed % skinTones.length], 0.9, 0);
-      const shirtMat = makeMat(shirtColors[seed], 0.8, 0);
-      const pantsMat = makeMat(pantsColors[seed % pantsColors.length], 0.85, 0);
-      const hairMat  = makeMat([0x1a0a00, 0x3d1c02, 0xf5c518, 0x444444, 0xcc5500, 0x111111][seed % 6], 0.9, 0);
-
-      // Legs
-      for (const lx of [-0.1, 0.1]) {
-        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.07, 0.55, 7), pantsMat);
-        leg.position.set(lx, 0.275, 0);
-        group.add(leg);
-      }
-      // Torso
-      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.42, 0.22), shirtMat);
-      torso.position.set(0, 0.76, 0);
-      group.add(torso);
-      // Arms
-      for (const ax of [-0.22, 0.22]) {
-        const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.38, 6), shirtMat);
-        arm.rotation.z = ax > 0 ? -0.25 : 0.25;
-        arm.position.set(ax, 0.7, 0);
-        group.add(arm);
-      }
-      // Neck
-      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.12, 7), skinMat);
-      neck.position.set(0, 1.02, 0);
-      group.add(neck);
-      // Head
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 16, 12), skinMat);
-      head.position.set(0, 1.23, 0);
-      group.add(head);
-      // Hair cap
-      const hair = new THREE.Mesh(
-        new THREE.SphereGeometry(0.162, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.52),
-        hairMat,
-      );
-      hair.position.set(0, 1.31, 0);
-      group.add(hair);
-
-      group.position.set(x, y, z);
-      // castShadow must be set on each Mesh child — Group has no geometry,
-      // so setting it only on the group has no effect on shadow rendering.
-      group.traverse((child) => { if ((child as THREE.Mesh).isMesh) child.castShadow = true; });
-      root = group;
-      break;
-    }
-
-    case "item": {
-      const mesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.3, 0.5, 1.2, 6),
-        makeMat(colorFor("item"), 0.6, 0.3),
-      );
-      mesh.position.set(x, y + 0.6, z);
-      mesh.castShadow = true;
-      root = mesh;
-      break;
-    }
-
-    case "terrain": {
-      const shape = obj.metadata.shape as string | undefined;
-      if (shape === "wall") {
-        const wallMat = makeMat(0xe8e0d0, 0.95, 0);
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(20, 3.2, 0.2),
-          wallMat,
-        );
-        mesh.position.set(x, y, z);
-        if (Math.abs(x) > Math.abs(z)) {
-          mesh.rotation.y = Math.PI / 2;
-        }
-        mesh.receiveShadow = true;
-        if (invalidate) applyTerrainPbr(wallMat, "plastered_wall_02", 4, invalidate);
-        root = mesh;
-      } else if (shape === "ceiling") {
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(20, 0.15, 20),
-          makeMat(0xf5f0e8, 1, 0),
-        );
-        mesh.position.set(x, y + 3.075, z);
-        root = mesh;
-      } else if (shape === "court") {
-        const group = new THREE.Group();
-        // Hardwood floor — NBA standard 28m × 15m
-        const floor = new THREE.Mesh(
-          new THREE.BoxGeometry(28, 0.1, 15),
-          makeMat(0xc8822a, 0.85, 0.05),
-        );
-        floor.position.y = 0.05;
-        floor.receiveShadow = true;
-        group.add(floor);
-        const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
-        // Center line
-        const centerLine = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 15), lineMat);
-        centerLine.position.y = 0.11;
-        group.add(centerLine);
-        // Center circle
-        const centerCircle = new THREE.Mesh(
-          new THREE.TorusGeometry(1.8, 0.05, 8, 48),
-          lineMat,
-        );
-        centerCircle.rotation.x = Math.PI / 2;
-        centerCircle.position.y = 0.11;
-        group.add(centerCircle);
-        // Key areas (paint) — one each end
-        for (const side of [-1, 1]) {
-          const paint = new THREE.Mesh(
-            new THREE.BoxGeometry(5.8, 0.02, 4.9),
-            makeMat(0xb06020, 0.9, 0),
-          );
-          paint.position.set(side * 11.1, 0.11, 0);
-          group.add(paint);
-          // Free-throw line
-          const ftLine = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 4.9), lineMat);
-          ftLine.position.set(side * 8.2, 0.115, 0);
-          group.add(ftLine);
-          // Baseline
-          const baseline = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 15), lineMat);
-          baseline.position.set(side * 14, 0.115, 0);
-          group.add(baseline);
-          // Three-point arc (semicircle)
-          const arc = new THREE.Mesh(
-            new THREE.TorusGeometry(7.24, 0.05, 8, 48, Math.PI),
-            lineMat,
-          );
-          arc.rotation.x = Math.PI / 2;
-          arc.rotation.z = side > 0 ? 0 : Math.PI;
-          arc.position.set(side * 7.5, 0.115, 0);
-          group.add(arc);
-        }
-        // Sidelines
-        for (const side of [-1, 1]) {
-          const sideline = new THREE.Mesh(new THREE.BoxGeometry(28, 0.02, 0.05), lineMat);
-          sideline.position.set(0, 0.115, side * 7.5);
-          group.add(sideline);
-        }
-        group.position.set(x, y, z);
-        root = group;
-      } else if (shape === "hill") {
-        const hw = (obj.metadata.width  as number | undefined) ?? 10;
-        const hh = (obj.metadata.height as number | undefined) ?? 4;
-        const radius = hw * 0.5;
-        const isMountain = hh / radius >= 1.2
-          || (obj.metadata.texture as string | undefined) === "snow";
-
-        let mesh: THREE.Mesh;
-        if (isMountain) {
-          // Pointed mountain peak via LatheGeometry.
-          // Profile in normalised coords (r, y): y 0=base, 1=apex; r 0=axis.
-          // After mesh.scale.set(hw, hh, 1) in XZ we set actual scale below.
-          const pts = [
-            new THREE.Vector2(0,     1.00),  // apex
-            new THREE.Vector2(0.05,  0.88),  // just below tip — very steep
-            new THREE.Vector2(0.14,  0.72),  // upper slope
-            new THREE.Vector2(0.28,  0.52),  // mid slope
-            new THREE.Vector2(0.42,  0.32),  // lower slope
-            new THREE.Vector2(0.50,  0.12),  // flare-out toward base
-            new THREE.Vector2(0.50,  0.00),  // base edge
-          ];
-          const geo = new THREE.LatheGeometry(pts, 20);
-          setupUv2(geo);
-          const mat = makeMountainMat();
-          mesh = new THREE.Mesh(geo, mat);
-          // LatheGeometry profile already spans y 0..1; scale to world size.
-          mesh.scale.set(hw, hh, hw);
-          mesh.position.set(x, y, z);  // base sits at position.y (profile y=0)
-        } else {
-          // Gentle hill — partial sphere dome. Bottom rim at local y ≈ cos(0.55π).
-          const geo = new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
-          setupUv2(geo);
-          const hillMat = makeTerrainSlopeMat(0x4a7a3a, 0x6e5030, 0.35, 0.75);
-          mesh = new THREE.Mesh(geo, hillMat);
-          mesh.scale.set(hw, hh, hw);
-          // Anchor bottom rim at position.y
-          mesh.position.set(x, y - Math.cos(Math.PI * 0.55) * hh, z);
-          if (invalidate) applyTerrainPbrNode(hillMat, "aerial_grass_rock", 4, 0x4a7a3a, 0x6e5030, 0.35, 0.75, invalidate);
-        }
-        mesh.receiveShadow = true;
-        mesh.castShadow = true;
-        root = mesh;
-      } else if (shape === "cliff") {
-        const cw = (obj.metadata.width  as number | undefined) ?? 12;
-        const ch = (obj.metadata.height as number | undefined) ?? 8;
-        const cd = (obj.metadata.depth  as number | undefined) ?? 3;
-        // Subdivided box with per-vertex noise jitter for natural rock-face silhouette.
-        const cliffGeo = new THREE.BoxGeometry(cw, ch, cd, 8, 10, 3);
-        // Jitter vertices — keep top and bottom rows pinned to preserve clean edges.
-        const cliffPos = cliffGeo.attributes.position;
-        const jitterAmp = Math.min(cw, cd) * 0.06;
-        // Simple deterministic noise: hash on vertex index
-        for (let vi = 0; vi < cliffPos.count; vi++) {
-          const vy = cliffPos.getY(vi);
-          const edgeFade = Math.min(
-            Math.abs(vy - ch * 0.5) / (ch * 0.12),   // top edge
-            Math.abs(vy + ch * 0.5) / (ch * 0.12),   // bottom edge
-            1,
-          );
-          if (edgeFade < 0.01) continue;
-          const hx = Math.sin(vi * 127.1) * 43758.5453;
-          const hz = Math.sin(vi * 311.7) * 43758.5453;
-          const hy = Math.sin(vi * 591.3) * 43758.5453;
-          cliffPos.setX(vi, cliffPos.getX(vi) + (hx - Math.floor(hx) - 0.5) * jitterAmp * edgeFade);
-          cliffPos.setY(vi, cliffPos.getY(vi) + (hy - Math.floor(hy) - 0.5) * jitterAmp * 0.4 * edgeFade);
-          cliffPos.setZ(vi, cliffPos.getZ(vi) + (hz - Math.floor(hz) - 0.5) * jitterAmp * edgeFade);
-        }
-        cliffPos.needsUpdate = true;
-        cliffGeo.computeVertexNormals();
-        setupUv2(cliffGeo);
-        const cliffMat = makeTerrainSlopeMat(0x908070, 0x5a4a3c, 0.7, 0.9);
-        const mesh = new THREE.Mesh(cliffGeo, cliffMat);
-        mesh.position.set(x, y - ch * 0.5 + 0.1, z);
-        mesh.receiveShadow = true;
-        mesh.castShadow = true;
-        if (invalidate) applyTerrainPbrNode(cliffMat, "aerial_grass_rock", 3, 0x908070, 0x5a4a3c, 0.7, 0.9, invalidate);
-        root = mesh;
-      } else if (shape === "platform") {
-        const pw = (obj.metadata.width  as number | undefined) ?? 10;
-        const ph = (obj.metadata.height as number | undefined) ?? 2;
-        const pd = (obj.metadata.depth  as number | undefined) ?? 10;
-        const platformGeo = new THREE.BoxGeometry(pw, ph, pd, 4, 2, 4);
-        setupUv2(platformGeo);
-        const platformMat = makeTerrainSlopeMat(0xb0a282, 0x7a6a58, 0.6, 0.85);
-        const mesh = new THREE.Mesh(
-          platformGeo,
-          platformMat,
-        );
-        mesh.position.set(x, y - ph * 0.5, z);
-        mesh.receiveShadow = true;
-        mesh.castShadow = true;
-        if (invalidate) applyTerrainPbrNode(platformMat, "cobblestone_floor_01", 4, 0xb0a282, 0x7a6a58, 0.6, 0.85, invalidate);
-        root = mesh;
-      } else if (shape === "floor") {
-        const fw = (obj.metadata.width as number | undefined) ?? 20;
-        const fd = (obj.metadata.depth as number | undefined) ?? 20;
-        // Infer surface type from name/description for texture selection
-        const nameStr = (obj.name + " " + (obj.description ?? "")).toLowerCase();
-        const isIndoor = nameStr.includes("wood") || nameStr.includes("hardwood")
-          || nameStr.includes("indoor") || nameStr.includes("室内")
-          || nameStr.includes("floor") && (nameStr.includes("office") || nameStr.includes("classroom") || nameStr.includes("教室") || nameStr.includes("办公"));
-        const isStone = nameStr.includes("stone") || nameStr.includes("marble")
-          || nameStr.includes("tile") || nameStr.includes("cobble")
-          || nameStr.includes("plaza") || nameStr.includes("广场");
-        // metadata.texture overrides auto-detection
-        const texId = (obj.metadata.texture as string | undefined)
-          ?? (isIndoor ? "wood_floor" : isStone ? "cobblestone_floor_01" : "aerial_grass_rock");
-        const floorColor = isIndoor ? 0xd4b896 : isStone ? 0xb0a080 : 0xc8b89a;
-        const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 1, metalness: 0 });
-        // Subdivide for displacement mapping (~2 unit quads, capped at 32 segs each axis)
-        const segsW = Math.min(Math.ceil(fw / 2), 32);
-        const segsD = Math.min(Math.ceil(fd / 2), 32);
-        const floorGeo = new THREE.PlaneGeometry(fw, fd, segsW, segsD);
-        setupUv2(floorGeo);
-        const mesh = new THREE.Mesh(floorGeo, floorMat);
-        mesh.rotation.x = -Math.PI / 2;
-        mesh.position.set(x, y + 0.002, z);
-        mesh.receiveShadow = true;
-        const repeat = Math.round(Math.max(fw, fd) / 2);
-        const dispScale = isIndoor ? 0.02 : isStone ? 0.04 : 0.07;
-        if (invalidate) applyTerrainPbr(floorMat, texId, repeat, invalidate, dispScale);
-        root = mesh;
-      } else {
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(8, 0.5, 8),
-          makeMat(colorFor("terrain"), 1, 0),
-        );
-        mesh.position.set(x, y + 0.25, z);
-        mesh.receiveShadow = true;
-        root = mesh;
-      }
-      break;
-    }
-
-    case "road": {
-      const rlen   = (meta?.length   as number  | undefined) ?? 8;
-      const rw     = (meta?.width    as number  | undefined) ?? 2;
-      const rotY   = (meta?.rotationY as number | undefined) ?? 0;
-      const isHwy  = (meta?.highway  as boolean | undefined) ?? false;
-      const roadMat = makeMat(isHwy ? 0x2e2e2e : 0x3d3828, 0.92, 0);
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(rlen, 0.06, rw), roadMat);
-      mesh.position.set(x, y + 0.03, z);
-      mesh.rotation.y = rotY;
-      mesh.receiveShadow = true;
-      root = mesh;
-      break;
-    }
-
-    case "object": {
-      root = buildObjectByShape(obj, x, y, z, invalidate);
-      break;
-    }
-
-    default: {
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.8, 12, 8),
-        makeMat(FALLBACK_COLOR),
-      );
-      mesh.position.set(x, y + 0.8, z);
-      mesh.castShadow = true;
-      root = mesh;
-      break;
-    }
-  }
-
-  applyUserData(root, objectId, interactable);
-
-  // Random Y rotation for organic look (skip terrain, npcs, road, and indoor objects)
-  if (type !== "terrain" && type !== "npc" && type !== "object" && type !== "road" && type !== "building") {
-    root.rotation.y = Math.random() * Math.PI * 2;
-  }
-  // Scale jitter ±15% for trees only
-  if (type === "tree") {
-    const s = 0.85 + Math.random() * 0.3;
-    root.scale.set(s, s, s);
-  }
-
-  return root;
-}
-
-// ── NPC Mob System ────────────────────────────────────────────────────────────
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-interface NpcMobState {
-  root:       THREE.Object3D;
-  baseY:      number;
-  phase:      number;           // idle anim phase offset
-  mode:       "idle" | "randomwalk" | "patrol";
-  speed:      number;           // units/sec
-  origin:     THREE.Vector3;    // randomwalk: 原点
-  maxRadius:  number;           // randomwalk: 游荡半径
-  waypoints:  THREE.Vector3[];  // patrol: 路径点
-  wpIdx:      number;           // patrol: 当前路径点索引
-  walkState:  "walking" | "pausing";
-  pauseTimer: number;           // 剩余暂停秒数
-  target:     THREE.Vector3 | null;
-  elapsed:    number;           // 自身计时器（腿部动画）
-  chatter:    string[];
-  chatSprite: THREE.Sprite | null;
-  chatTimer:  number;           // >0 时显示气泡
-}
 
 // ── Environment presets ──────────────────────────────────────────────────────
 
@@ -1043,11 +141,56 @@ export interface PickResult {
 
 const TRANSITION_DURATION = 800; // ms
 
+// Minimal sceneCode for scenes with no sceneCode — sets up lighting and shows a reference cube.
+const DEFAULT_SCENE_CODE = `
+stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+scene.fog = null;
+
+// Placeholder pedestal
+const geoBase = new THREE.CylinderGeometry(1.2, 1.5, 0.3, 32);
+const matBase = stdlib.makeMat(0x8c8070, 0.85, 0.05);
+const base = new THREE.Mesh(geoBase, matBase);
+base.position.set(0, 0.15, 0);
+base.castShadow = true;
+base.receiveShadow = true;
+scene.add(base);
+
+// Rotating orb
+const geoOrb = new THREE.SphereGeometry(0.7, 32, 32);
+const matOrb = new THREE.MeshStandardNodeMaterial({ roughness: 0.2, metalness: 0.8 });
+const { color: tslColor, time, oscSine } = tsl;
+matOrb.colorNode = tslColor(0x88aaff).mul(oscSine(time.mul(0.8)).remapClamp(0, 1, 0.6, 1.4));
+const orb = new THREE.Mesh(geoOrb, matOrb);
+orb.position.set(0, 1.2, 0);
+orb.castShadow = true;
+scene.add(orb);
+
+// Canvas label
+const tex = stdlib.makeCanvasTexture("Ask the agent to regenerate this scene", {
+  bg: "#0d1117", fg: "#8080c0", font: "bold 32px sans-serif", w: 512, h: 128
+});
+const sign = new THREE.Mesh(
+  new THREE.PlaneGeometry(4, 1),
+  new THREE.MeshStandardMaterial({ map: tex, side: 2 })
+);
+sign.position.set(0, 2.5, 0);
+sign.lookAt(0, 2.5, 5);
+scene.add(sign);
+
+// Ground
+const ground = stdlib.makeTerrain("floor", { width: 40, depth: 40 });
+scene.add(ground);
+
+animate((delta) => { orb.rotation.y += delta * 0.8; });
+`;
+
 export class SceneRenderer {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGPURenderer;
   private controls: OrbitControls;
+  private pointerLock!: PointerLockControls;
+  private fpActive = false;
   private hemi: THREE.HemisphereLight;
   private sun: THREE.DirectionalLight;
   private postProcessing!: THREE.PostProcessing;
@@ -1055,21 +198,19 @@ export class SceneRenderer {
   private bloomNode!: any; // BloomNode — access .strength.value / .radius.value / .threshold.value
   private sunDir = new THREE.Vector3(0, 1, 0); // updated per scene
   private sky: SkyMesh;
+  // Persistent world ground plane and background ridges — hidden for indoor scenes,
+  // restored to visible at the start of each new scene load.
+  private worldGroundMesh: THREE.Object3D | null = null;
+  private worldRidgeMeshes: THREE.Object3D[] = [];
   private canvas: HTMLCanvasElement;
   private initPromise: Promise<void> | null = null;
   private disposed = false;
-  private gltfLoader = new GLTFLoader();
-  // InstancedMesh batches for trees (cleared on each loadScene)
-  private treeInstances: THREE.InstancedMesh[] = [];
   // Group that owns everything added by sceneCode — cleared on every loadScene()
   private codeGroup = new THREE.Group();
   // Ambient scatter props (rocks) regenerated per outdoor scene load
   private scatterGroup = new THREE.Group();
   private objects = new Map<string, THREE.Object3D>(); // objectId → root
   private objectMeta = new Map<string, SceneObject>();
-  private lodObjects: THREE.LOD[] = [];               // buildings — custom hysteresis update each frame
-  private lodCurrentLevel: Map<THREE.LOD, number> = new Map(); // tracks committed level per LOD
-  private npcMobStates: NpcMobState[] = [];
   private loopRunning = false;
   private animSystems: AnimSystem[] = [];
   private raycaster = new THREE.Raycaster();
@@ -1133,7 +274,7 @@ export class SceneRenderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.5;
+    this.renderer.toneMappingExposure = 0.85;
 
     // OrbitControls for free camera exploration
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -1146,6 +287,26 @@ export class SceneRenderer {
     // each frame until damping fully settles. Without this guard, update() runs every
     // frame in the demand-render loop and accumulated float residual causes camera drift.
     this.controls.addEventListener("start",  () => { this.controlsNeedsUpdate = true; });
+
+    // PointerLockControls for first-person walk mode
+    this.pointerLock = new PointerLockControls(this.camera, document.body);
+    this.pointerLock.addEventListener("lock", () => {
+      this.fpActive = true;
+      this.controls.enabled = false;
+      // Lower camera to eye level (1.7 units) if currently orbiting high above
+      if (this.camera.position.y > 3) {
+        this.camera.position.y = 1.7;
+      }
+    });
+    this.pointerLock.addEventListener("unlock", () => {
+      this.fpActive = false;
+      this.controls.enabled = true;
+      // Sync OrbitControls target to where the camera is facing
+      const dir = new THREE.Vector3();
+      this.camera.getWorldDirection(dir);
+      this.controls.target.copy(this.camera.position).addScaledVector(dir, 5);
+      this.controlsNeedsUpdate = true;
+    });
 
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup",   this.onKeyUp);
@@ -1210,20 +371,24 @@ export class SceneRenderer {
     const scenePass  = pass(this.scene, this.camera);
     const sceneColor = scenePass.getTextureNode("output");
 
-    // BloomNode internally wraps strength/radius/threshold in uniform() —
-    // pass literal numbers here and update via .strength.value / .radius.value / .threshold.value
-    this.bloomNode = bloom(sceneColor, 0.4, 0.3, 0.85);
+    // Bloom — conservative defaults: threshold 1.1 (only true HDR overexposure),
+    // strength 0.2 and radius 0.2 keep glow subtle for typical scenes.
+    // Per-scene overrides are applied in loadScene() from environment.effects.bloom.
+    this.bloomNode = bloom(sceneColor, 0.2, 0.2, 1.1);
     const withBloom = sceneColor.add(this.bloomNode);
 
     // SMAA anti-aliasing
     const smaaNode = smaa(withBloom);
 
-    // Subtle screen-space vignette (pure TSL — no extra pass)
+    // Film grain — photographic noise (intensity 0.04 = very subtle)
+    const withGrain = film(smaaNode, 0.04);
+
+    // Subtle screen-space vignette
     const dist     = uv().sub(0.5).length().mul(1.55);
     const vignette = dist.smoothstep(0.8, 0.15).mul(0.24).add(0.76);
 
     const pp = new THREE.PostProcessing(this.renderer);
-    pp.outputNode = smaaNode.mul(vignette);
+    pp.outputNode = withGrain.mul(vignette);
     this.postProcessing = pp;
   }
 
@@ -1248,50 +413,34 @@ export class SceneRenderer {
     }
     this.objects.clear();
     this.objectMeta.clear();
-    this.lodObjects = [];
-    this.lodCurrentLevel.clear();
     this.animSystems = [];
-
-    // Dispose previous instanced tree batches
-    for (const im of this.treeInstances) {
-      this.scene.remove(im);
-      im.geometry.dispose();
-    }
-    this.treeInstances = [];
 
     // Remove all objects added by previous sceneCode execution
     this.codeGroup.clear();
     // Clear per-scene ambient scatter (rocks, shrubs)
     this.clearScatter();
+    // Restore fog in case previous sceneCode set scene.fog = null
+    if (!this.scene.fog) {
+      this.scene.fog = new THREE.Fog(0x87ceeb, 30, 90);
+    }
 
     // Apply environment settings first (needed for bloom boost logic)
     const env = data.environment ?? {};
     const preset = resolveEnvPreset(env.skybox, env.timeOfDay);
 
-    // Detect enclosed/indoor scenes: ceiling object present → fog should not be visible
-    const isIndoor = (data.objects ?? []).some(
-      o => (o.metadata?.shape === "ceiling") ||
-           (o.name ?? "").toLowerCase().includes("ceiling") ||
-           (o.name ?? "").toLowerCase().includes("indoor") ||
-           (o.name ?? "").toLowerCase().includes("interior"),
-    );
-
-    const fog = this.scene.fog as THREE.Fog;
-    fog.color.set(preset.fogColor);
-    // Indoor scenes: push fog far beyond any visible geometry so it never fires.
-    // Outdoor scenes: standard atmospheric distance (30–90 u).
-    fog.near = isIndoor ? 300 : 30;
-    fog.far  = isIndoor ? 600 : 90;
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) {
+      fog.color.set(preset.fogColor);
+      fog.near = 30;
+      fog.far  = 90;
+    }
 
     this.hemi.color.set(preset.skyColor);
     this.hemi.groundColor.set(preset.groundColor);
-    // Indoor: drastically reduce ambient to prevent over-lighting enclosed geometry.
-    this.hemi.intensity = isIndoor ? preset.ambientIntensity * 0.3 : preset.ambientIntensity;
+    this.hemi.intensity = preset.ambientIntensity;
 
     this.sun.color.set(preset.sunColor);
-    // Indoor: sun at 5% — prevents directional light from flooding wall/ceiling surfaces
-    // and pushing their linear output above the bloom threshold (causing the glow-box effect).
-    this.sun.intensity = isIndoor ? preset.sunIntensity * 0.05 : preset.sunIntensity;
+    this.sun.intensity = preset.sunIntensity;
 
     if (env.skyboxUrl) {
       // Equirectangular panorama from Matrix-3D or similar — highest priority, replaces procedural sky
@@ -1338,23 +487,18 @@ export class SceneRenderer {
 
     // Apply bloom settings from environment.effects
     const bloomCfg = env.effects?.bloom;
-    const baseStrength = bloomCfg?.strength ?? 0.4;
+    const baseStrength = bloomCfg?.strength ?? 0.2;
     const isNight = env.skybox === "night" || env.timeOfDay === "night";
     this.bloomNode.strength.value  = isNight ? Math.max(baseStrength, 0.8) : baseStrength;
-    // Indoor: tight glow (radius 0.12) so chandelier/candle lights don't spread across the room.
-    // Outdoor/night: standard radius (0.3) for wide atmospheric glow.
-    this.bloomNode.radius.value    = bloomCfg?.radius ?? (isIndoor ? 0.12 : 0.3);
-    // Clamp threshold: minimum 1.5 in linear HDR space.
-    // White wall (albedo 0.9) under sun intensity 1.2 → linear ≈ 1.1 — stays below threshold.
-    // Emissive chandelier/candle (emissiveIntensity ≥ 2) → linear ≥ 2.0 — still blooms.
-    // Prevents the "glowing box" effect where entire lit surfaces trigger bloom.
-    this.bloomNode.threshold.value = Math.max(bloomCfg?.threshold ?? 1.5, 1.5);
+    this.bloomNode.radius.value    = bloomCfg?.radius ?? 0.2;
+    // Threshold 1.1: only pixels that exceed 1.1 in HDR space bloom.
+    this.bloomNode.threshold.value = bloomCfg?.threshold ?? 1.1;
 
     // Upgrade scene.environment from RoomEnvironment baseline to a real Polyhaven
     // HDRI matched to the skybox preset.  Fire-and-forget: the baseline keeps
     // things looking reasonable while the ~200 KB 1k .hdr downloads.
-    // Skip for sceneCode scenes and panorama-URL scenes (they set their own environment).
-    if (!data.sceneCode && env.skybox && !env.skyboxUrl) {
+    // Skip for panorama-URL scenes — stdlib.setupLighting() handles HDRI for sceneCode scenes.
+    if (env.skybox && !env.skyboxUrl && !data.sceneCode) {
       const skyboxKey = env.skybox;
       // IBL: upgrade reflections / shading quality with PMREM HDR
       loadEnvMap(skyboxKey, this.renderer)
@@ -1380,470 +524,24 @@ export class SceneRenderer {
       }
     }
 
-    // Path C: execute sceneCode if present.
-    // Mute renderer's built-in lights so sceneCode has full lighting control.
-    if (data.sceneCode) {
-      this.hemi.intensity = 0;
-      this.sun.intensity = 0;
-      this.executeCode(data.sceneCode);
-      return;
-    }
-
-    // Path A + default: restore built-in lights (they were set above from preset)
-    // (intensities already applied by preset above — nothing to restore here)
-    const loadPromises: Promise<void>[] = [];
-
-    // Separate trees for InstancedMesh batching (R3F-inspired)
-    const treeObjects: SceneObject[] = [];
-
-    for (const obj of data.objects) {
-      const modelUrl = obj.metadata.modelUrl as string | undefined;
-
-      // Collect trees without modelUrl for instanced batching
-      if (obj.type === "tree" && !modelUrl) {
-        treeObjects.push(obj);
-        continue;
-      }
-
-      // Water terrain: handled inline to register per-frame animation callback
-      if (obj.type === "terrain" && (obj.metadata.shape as string) === "water") {
-        const water = this.buildWater(obj);
-        this.scene.add(water);
-        this.objects.set(obj.objectId, water);
-        this.objectMeta.set(obj.objectId, obj);
-        continue;
-      }
-
-      if (modelUrl) {
-        // Path A: load GLTF model — show placeholder while loading
-        const placeholder = buildObject(obj, () => this.invalidate(2));
-        this.scene.add(placeholder);
-        this.objects.set(obj.objectId, placeholder);
-        this.objectMeta.set(obj.objectId, obj);
-
-        const promise = this.loadGltfModel(obj, modelUrl, placeholder);
-        loadPromises.push(promise);
-      } else {
-        const node = buildObject(obj, () => this.invalidate(2));
-        this.scene.add(node);
-        this.objects.set(obj.objectId, node);
-        this.objectMeta.set(obj.objectId, obj);
-        if (node instanceof THREE.LOD) this.lodObjects.push(node);
-      }
-    }
-
-    // Batch trees as InstancedMesh (R3F-inspired: reduces N×4 draw calls → 4)
-    this.buildInstancedTrees(treeObjects);
-
-    // Ambient scatter: rocks + shrubs in the peripheral zone for outdoor scenes
-    this.scatterAmbientProps(data.objects);
-
-    // NPC mob system: random walk / patrol + idle animation + chatter bubbles
-    this.setupNpcSystem();
-
-    // LOD: hysteresis update — only switch level when distance exceeds threshold
-    // by 12% beyond the switch-in point, preventing ping-pong at boundaries.
-    if (this.lodObjects.length > 0) {
-      // Initialise every LOD to the correct level immediately (no hysteresis on first frame).
-      // Three.js creates all child objects as visible=true, so without this step all three
-      // detail levels would be visible simultaneously, causing the "shaking/scaling" artefact.
-      for (const lod of this.lodObjects) {
-        const dist = this.camera.position.distanceTo(lod.position);
-        const levels = lod.levels;
-        let initialLevel = levels.length - 1;
-        for (let i = 1; i < levels.length; i++) {
-          if (dist < levels[i].distance) { initialLevel = i - 1; break; }
-        }
-        levels.forEach((l, i) => { l.object.visible = i === initialLevel; });
-        this.lodCurrentLevel.set(lod, initialLevel);
-      }
-
-      this.registerSystem(400, () => {
-        const HYSTERESIS = 0.12;
-        for (const lod of this.lodObjects) {
-          const dist   = this.camera.position.distanceTo(lod.position);
-          const levels = lod.levels;
-          if (levels.length === 0) continue;
-
-          // Find the ideal level for this distance (same logic as THREE.LOD.update)
-          let targetLevel = levels.length - 1;
-          for (let i = 1; i < levels.length; i++) {
-            if (dist < levels[i].distance) { targetLevel = i - 1; break; }
-          }
-
-          const current = this.lodCurrentLevel.get(lod) ?? 0;
-          if (targetLevel === current) continue;
-
-          // Use the boundary between current and target levels for hysteresis.
-          // When moving farther (targetLevel > current): boundary = start of the next level.
-          // When moving closer (targetLevel < current): boundary = start of current level.
-          const boundary = targetLevel > current
-            ? levels[targetLevel].distance   // the threshold we just crossed going out
-            : levels[current].distance;      // the threshold we'd need to cross coming back in
-          const hysteresisDist = boundary * HYSTERESIS;
-
-          const crossedClearly = targetLevel > current
-            ? dist > boundary + hysteresisDist
-            : dist < boundary - hysteresisDist;
-
-          if (crossedClearly) {
-            levels.forEach((l, i) => { l.object.visible = i === targetLevel; });
-            this.lodCurrentLevel.set(lod, targetLevel);
-          }
-        }
-      });
-    }
-
-    // Wait for all GLTF loads (errors are caught inside loadGltfModel)
-    await Promise.all(loadPromises);
-
-    // Scene is ready — queue two frames so the first render fires immediately
+    // All scenes use sceneCode. stdlib.setupLighting() takes full control of
+    // scene illumination — mute renderer's built-in lights so they don't conflict.
+    // Also disable castShadow so the renderer's sun does not consume a shadow map
+    // texture slot — Apple Silicon WebGPU limits fragment shaders to 16 textures,
+    // and each shadow-casting light uses 2 slots (depth texture + comparison sampler).
+    // Hide the SkyMesh — sceneCode uses stdlib.setupLighting() for sky which sets
+    // scene.background directly (flat color → HDRI JPEG). SkyMesh visible on top
+    // of scene.background would obscure the Polyhaven sky texture.
+    this.sky.visible = false;
+    this.hemi.intensity = 0;
+    this.sun.intensity = 0;
+    this.sun.castShadow = false;
+    // sceneCode is responsible for its own ground geometry. Hide the persistent
+    // world ground plane so it doesn't z-fight with sceneCode-generated floors.
+    if (this.worldGroundMesh) this.worldGroundMesh.visible = false;
+    for (const r of this.worldRidgeMeshes) r.visible = false;
+    this.executeCode(data.sceneCode ?? DEFAULT_SCENE_CODE);
     this.invalidate(2);
-  }
-
-  private async loadGltfModel(obj: SceneObject, url: string, placeholder: THREE.Object3D): Promise<void> {
-    try {
-      const gltf = await this.gltfLoader.loadAsync(url);
-      const model = gltf.scene;
-
-      // Apply position from SceneObject
-      model.position.set(obj.position.x, obj.position.y, obj.position.z);
-
-      // Apply scale from metadata (default 1)
-      const scale = (obj.metadata.scale as number | undefined) ?? 1;
-      model.scale.setScalar(scale);
-
-      // Apply vertical offset for ground alignment
-      const yOffset = (obj.metadata.yOffset as number | undefined) ?? 0;
-      model.position.y += yOffset;
-
-      // Enable shadows on all meshes
-      model.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          child.castShadow = true;
-          child.receiveShadow = true;
-        }
-      });
-
-      applyUserData(model, obj.objectId, obj.interactable);
-
-      // Replace placeholder with real model
-      this.scene.remove(placeholder);
-      this.scene.add(model);
-      this.objects.set(obj.objectId, model);
-    } catch (err) {
-      console.warn(`[SceneRenderer] Failed to load GLTF from ${url}:`, err);
-      // Keep placeholder — already in scene
-    }
-  }
-
-  /**
-   * Build InstancedMesh batches for all trees in the scene.
-   * R3F-inspired: N trees → 4 draw calls (trunk + 3 foliage layers) instead of N×4.
-   * Trees are generally not interactive so we store phantom Groups for the objects map.
-   */
-  /**
-   * Set up the NPC mob system: random walk / patrol + idle animation + chatter bubbles.
-   * Replaces the old registerNpcIdleAnims().
-   */
-  private setupNpcSystem(): void {
-    this.npcMobStates = [];
-
-    for (const [id, root] of this.objects) {
-      const meta = this.objectMeta.get(id);
-      if (!meta || meta.type !== "npc") continue;
-
-      const phase = (id.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % 100) / 100 * Math.PI * 2;
-      const mode  = (meta.metadata.moveMode as string | undefined) ?? "idle";
-      const speed = (meta.metadata.speed    as number | undefined) ?? 0.8;
-      const maxR  = (meta.metadata.maxRadius as number | undefined) ?? 3.0;
-      const rawWp = (meta.metadata.waypoints as Array<{x: number; z: number}> | undefined) ?? [];
-      const waypoints = rawWp.map(w => new THREE.Vector3(w.x, root.position.y, w.z));
-      const chatter = (meta.metadata.chatter as string[] | undefined) ?? [];
-
-      this.npcMobStates.push({
-        root, baseY: root.position.y, phase,
-        mode: mode as NpcMobState["mode"], speed,
-        origin: root.position.clone(), maxRadius: maxR,
-        waypoints, wpIdx: 0,
-        walkState: "pausing", pauseTimer: Math.random() * 2,
-        target: null, elapsed: 0,
-        chatter, chatSprite: null, chatTimer: 0,
-      });
-    }
-
-    if (this.npcMobStates.length === 0) return;
-
-    this.registerSystem(SystemOrder.Simulation, (delta) => {
-      for (const s of this.npcMobStates) this.tickNpc(s, delta);
-    });
-
-    this.registerSystem(SystemOrder.Culling, () => {
-      this.updateDistanceCulling();
-      this.invalidate(1);
-    });
-  }
-
-  private tickNpc(s: NpcMobState, delta: number): void {
-    s.elapsed += delta;
-
-    // ── Chatter timer ──────────────────────────────────────────────
-    if (s.chatTimer > 0) {
-      s.chatTimer -= delta;
-      if (s.chatTimer <= 0 && s.chatSprite) s.chatSprite.visible = false;
-    }
-
-    // ── Idle mode: bob + sway ──────────────────────────────────────
-    if (s.mode === "idle") {
-      s.root.position.y = s.baseY + Math.sin(s.elapsed * 1.9 + s.phase) * 0.03;
-      s.root.rotation.z = Math.sin(s.elapsed * 2.5 + s.phase) * 0.035;
-      s.root.rotation.x = Math.sin(s.elapsed * 1.7 + s.phase + 1) * 0.018;
-      return;
-    }
-
-    // ── Movement modes ─────────────────────────────────────────────
-    if (s.walkState === "pausing") {
-      // 暂停时仍做 idle 动画
-      s.root.position.y = s.baseY + Math.sin(s.elapsed * 1.9 + s.phase) * 0.03;
-      s.root.rotation.z = Math.sin(s.elapsed * 2.5 + s.phase) * 0.035;
-      s.root.rotation.x = Math.sin(s.elapsed * 1.7 + s.phase + 1) * 0.018;
-      // reset legs
-      const legs = [s.root.children[0], s.root.children[1]];
-      legs.forEach(l => { if (l) l.rotation.x *= 0.85; });
-
-      s.pauseTimer -= delta;
-      if (s.pauseTimer > 0) return;
-
-      // 选取下一个目标
-      if (s.mode === "randomwalk") {
-        const angle = Math.random() * Math.PI * 2;
-        const dist  = Math.random() * s.maxRadius;
-        s.target = new THREE.Vector3(
-          s.origin.x + Math.cos(angle) * dist,
-          s.baseY,
-          s.origin.z + Math.sin(angle) * dist,
-        );
-      } else if (s.mode === "patrol" && s.waypoints.length > 0) {
-        s.target = s.waypoints[s.wpIdx].clone();
-        s.target.y = s.baseY;
-      }
-      s.walkState = "walking";
-
-    } else { // walking
-      if (!s.target) { s.walkState = "pausing"; return; }
-
-      const toTarget = s.target.clone().sub(s.root.position);
-      toTarget.y = 0;
-      const dist = toTarget.length();
-
-      if (dist < 0.15) {
-        // 到达目标
-        s.root.position.x = s.target.x;
-        s.root.position.z = s.target.z;
-        if (s.mode === "patrol") {
-          s.wpIdx = (s.wpIdx + 1) % (s.waypoints.length || 1);
-          s.target = s.waypoints[s.wpIdx].clone();
-          s.target.y = s.baseY;
-        } else {
-          s.walkState = "pausing";
-          s.pauseTimer = 2 + Math.random() * 3;
-          s.target = null;
-        }
-        return;
-      }
-
-      // 移动
-      const dir = toTarget.normalize();
-      s.root.position.x += dir.x * s.speed * delta;
-      s.root.position.z += dir.z * s.speed * delta;
-      s.root.position.y = s.baseY + Math.sin(s.elapsed * 8) * 0.02; // 走路微抖
-
-      // 朝向（smooth rotate）
-      const targetAngle = Math.atan2(dir.x, dir.z);
-      const curAngle    = s.root.rotation.y;
-      let diff = targetAngle - curAngle;
-      while (diff >  Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      s.root.rotation.y += diff * Math.min(delta * 8, 1);
-      // Normalise to [-π, π] to prevent float accumulation over long sessions
-      if (s.root.rotation.y > Math.PI)  s.root.rotation.y -= Math.PI * 2;
-      if (s.root.rotation.y < -Math.PI) s.root.rotation.y += Math.PI * 2;
-
-      // 走路时腿部摆动（children 0=左腿, 1=右腿）
-      const swing = Math.sin(s.elapsed * 6) * 0.5;
-      if (s.root.children[0]) s.root.children[0].rotation.x =  swing;
-      if (s.root.children[1]) s.root.children[1].rotation.x = -swing;
-      s.root.rotation.z = 0;
-      s.root.rotation.x = 0;
-    }
-  }
-
-  private updateDistanceCulling(): void {
-    const cam = this.camera.position;
-    // Per-type cull distances. "terrain" is intentionally absent — walls, floors,
-    // and ceilings form the scene structure and must never be culled by distance.
-    const showThresh: Record<string, number> = {
-      npc: 55, tree: 70, building: 80, item: 40, object: 50, road: 100,
-    };
-    // Hide threshold is 20% larger than show threshold to prevent rapid toggling
-    // when the camera hovers near the boundary (OrbitControls damping micro-jitter).
-    for (const [id, root] of this.objects) {
-      const meta = this.objectMeta.get(id);
-      if (!meta) continue;
-      const show = showThresh[meta.type];
-      if (show === undefined) continue; // terrain and unrecognised types: never cull
-      const dist = root.position.distanceTo(cam);
-      if (root.visible  && dist > show * 1.2) root.visible = false;
-      if (!root.visible && dist < show)        root.visible = true;
-    }
-  }
-
-  /**
-   * Trigger a chatter bubble on the NPC with the given objectId.
-   * Shows a random line from the NPC's chatter array as a Canvas Sprite above its head.
-   */
-  public triggerNpcChatter(objectId: string): void {
-    const s = this.npcMobStates.find(n => n.root.userData.objectId === objectId);
-    if (!s || s.chatter.length === 0) return;
-
-    const line = s.chatter[Math.floor(Math.random() * s.chatter.length)];
-
-    if (!s.chatSprite) {
-      const canvas = document.createElement("canvas");
-      canvas.width  = 256;
-      canvas.height = 80;
-      const tex = new THREE.CanvasTexture(canvas);
-      const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
-      const sp  = new THREE.Sprite(mat);
-      sp.scale.set(1.4, 0.44, 1);
-      sp.position.set(0, 1.65, 0);
-      s.root.add(sp);
-      s.chatSprite = sp;
-    }
-
-    // 重绘 canvas 文字
-    const mat = s.chatSprite.material as THREE.SpriteMaterial;
-    const canvas = (mat.map as THREE.CanvasTexture).image as HTMLCanvasElement;
-    const ctx = canvas.getContext("2d")!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // 白色圆角气泡背景
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    roundRect(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 12);
-    ctx.fill();
-    // 文字
-    ctx.fillStyle = "#1a1a1a";
-    ctx.font = "bold 22px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(line, canvas.width / 2, canvas.height / 2, canvas.width - 24);
-    (mat.map as THREE.CanvasTexture).needsUpdate = true;
-
-    s.chatSprite.visible = true;
-    s.chatTimer = 3.5;
-    this.invalidate(3);
-  }
-
-  /**
-   * Build an animated water surface using WaterMesh (WebGPU-native).
-   * Built-in TSL time node drives the normal-map animation — no registerSystem needed.
-   * The dark lake bed below gives the illusion of depth.
-   */
-  private buildWater(obj: SceneObject): THREE.Group {
-    const ww = (obj.metadata.width  as number | undefined) ?? 20;
-    const wd = (obj.metadata.depth  as number | undefined) ?? 20;
-    const waterY = Math.max(obj.position.y, 0);
-
-    const group = new THREE.Group();
-    group.position.set(obj.position.x, waterY, obj.position.z);
-
-    // Lake bed
-    const bed = new THREE.Mesh(
-      new THREE.PlaneGeometry(ww, wd),
-      new THREE.MeshStandardMaterial({ color: 0x071a28, roughness: 1, metalness: 0 }),
-    );
-    bed.rotation.x = -Math.PI / 2;
-    bed.position.y = -0.6;
-    group.add(bed);
-
-    // WaterMesh — built-in reflection + normal-map animation via TSL time node
-    const waterNormalsTex = new THREE.TextureLoader().load(
-      "https://threejs.org/examples/textures/waternormals.jpg",
-      (tex) => { tex.wrapS = tex.wrapT = THREE.RepeatWrapping; this.invalidate(2); },
-    );
-    const water = new WaterMesh(new THREE.PlaneGeometry(ww, wd), {
-      waterNormals: waterNormalsTex,
-      waterColor:   0x4a8fa8,
-      distortionScale: 4,
-    });
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = 0.005;
-    group.add(water);
-
-    applyUserData(group, obj.objectId, obj.interactable);
-    // No registerSystem needed — WaterMesh animates via built-in TSL time node
-    return group;
-  }
-
-  private buildInstancedTrees(trees: SceneObject[]): void {
-    if (trees.length === 0) return;
-
-    const count = trees.length;
-    const dummy = new THREE.Object3D();
-
-    const trunkMat = makeMat(0x5c3d1e, 0.9, 0);
-    const leafMat  = makeMat(colorFor("tree"), 0.95, 0);
-    applyTerrainPbr(trunkMat, "bark_brown_02", 2, () => this.invalidate(2));
-
-    // One InstancedMesh per part: trunk + 3 foliage layers
-    const trunkIM = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 12), trunkMat, count);
-    trunkIM.castShadow = true;
-
-    const foliageConfigs: [number, number, number, number, number][] = [
-      // lx, ly, lz, radius, scaleY
-      [0,    2.8, 0,    1.4, 0.78],
-      [0.3,  3.6, 0.2,  1.1, 0.78],
-      [-0.2, 4.3, -0.1, 0.85, 0.78],
-    ];
-    const foliageIMs = foliageConfigs.map(([, , , r]) =>
-      new THREE.InstancedMesh(new THREE.SphereGeometry(r, 12, 9), leafMat, count),
-    );
-    foliageIMs.forEach((im) => { im.castShadow = true; });
-
-    trees.forEach((tree, i) => {
-      const { x, y, z } = tree.position;
-      const seed = Math.abs(x * 7 + z * 13) % 1;
-      const s = 0.85 + seed * 0.45;
-      const rotY = seed * Math.PI * 2;
-
-      // Trunk: positioned at half-height above tree base
-      dummy.position.set(x, y + 1.1 * s, z);
-      dummy.rotation.set(0, rotY, 0);
-      dummy.scale.setScalar(s);
-      dummy.updateMatrix();
-      trunkIM.setMatrixAt(i, dummy.matrix);
-
-      // Foliage layers (lx/lz offsets ignored for rotation simplicity — < 0.3 units)
-      foliageConfigs.forEach(([lx, ly, lz, , sy], j) => {
-        dummy.position.set(x + lx * s, y + ly * s, z + lz * s);
-        dummy.rotation.set(0, 0, 0);
-        dummy.scale.set(s, s * sy, s);
-        dummy.updateMatrix();
-        foliageIMs[j].setMatrixAt(i, dummy.matrix);
-      });
-
-      // Phantom Group for objects map (supports pick/highlight even without real mesh)
-      const phantom = new THREE.Group();
-      phantom.position.set(x, y, z);
-      applyUserData(phantom, tree.objectId, tree.interactable);
-      this.objects.set(tree.objectId, phantom);
-      this.objectMeta.set(tree.objectId, tree);
-    });
-
-    trunkIM.instanceMatrix.needsUpdate = true;
-    foliageIMs.forEach((im) => { im.instanceMatrix.needsUpdate = true; });
-
-    this.scene.add(trunkIM, ...foliageIMs);
-    this.treeInstances = [trunkIM, ...foliageIMs];
   }
 
   executeCode(code: string): void {
@@ -1867,10 +565,22 @@ export class SceneRenderer {
       },
     });
 
+    const stdlib = createStdlib(
+      this.scene,
+      this.camera,
+      this.renderer,
+      (cb: (delta: number) => void) => { this.registerSystem(SystemOrder.Render, cb); },
+      (n?: number) => { this.invalidate(n); },
+      (v: boolean) => {
+        if (this.worldGroundMesh) this.worldGroundMesh.visible = v;
+        for (const r of this.worldRidgeMeshes) r.visible = v;
+      },
+    );
+
     try {
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const fn = new Function(
-        "THREE", "tsl", "scene", "camera", "renderer", "controls", "animate", "WaterMesh",
+        "THREE", "tsl", "scene", "camera", "renderer", "controls", "animate", "WaterMesh", "stdlib",
         code,
       );
       fn(
@@ -1882,9 +592,38 @@ export class SceneRenderer {
         this.controls,
         (cb: (delta: number) => void) => { this.registerSystem(SystemOrder.Render, cb); },
         WaterMesh,
+        stdlib,
       );
     } catch (err) {
       console.error("[SceneRenderer] sceneCode execution error:", err);
+    }
+
+    // Force-disable shadow casting on every light placed by sceneCode.
+    // DirectionalLight and SpotLight shadow maps produce perspective-aliasing stripe
+    // banding on near-horizontal floors (courts, arenas) and frustum-boundary
+    // clipping that appears as irregular geometry slices when the camera rotates.
+    // PointLight cubemap shadows are also expensive and not needed — HDRI environment
+    // provides ambient occlusion. This override applies regardless of what sceneCode
+    // sets, ensuring old and new scenes are both artifact-free.
+    this.codeGroup.traverse((child) => {
+      const light = child as THREE.Light;
+      if (light.isLight && light.castShadow) {
+        light.castShadow = false;
+      }
+    });
+
+    // Tighter bloom for indoor scenes. stdlib.setupLighting({ isIndoor: true })
+    // writes scene.userData["isIndoor"]; if not set, fall back to detecting PointLights
+    // in codeGroup (a reliable indoor indicator since outdoor stdlib uses DirectionalLight only).
+    const isIndoor = !!this.scene.userData["isIndoor"] || (() => {
+      let hasPoint = false;
+      this.codeGroup.traverse((c) => { if ((c as THREE.PointLight).isPointLight) hasPoint = true; });
+      return hasPoint;
+    })();
+    if (isIndoor) {
+      this.bloomNode.strength.value  = 0.12;
+      this.bloomNode.radius.value    = 0.05;
+      this.bloomNode.threshold.value = 1.3;
     }
   }
 
@@ -1942,6 +681,15 @@ export class SceneRenderer {
     this.framesDue = Math.max(this.framesDue, frames);
   }
 
+  /** Enter first-person walk mode (PointerLock). Browser requires a user gesture. */
+  enterPointerLock(): void {
+    if (!this.pointerLock.isLocked) this.pointerLock.lock();
+  }
+
+  get isPointerLocked(): boolean {
+    return this.fpActive;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -1951,6 +699,8 @@ export class SceneRenderer {
     window.removeEventListener("keyup",   this.onKeyUp);
     this.keysDown.clear();
     this.controls.dispose();
+    if (this.pointerLock.isLocked) this.pointerLock.unlock();
+    this.pointerLock.dispose();
     try { this.renderer.dispose(); } catch (_) { /* backend may be uninitialized */ }
   }
 
@@ -2005,6 +755,7 @@ export class SceneRenderer {
     ground.position.y = -0.02;
     ground.receiveShadow = true;
     this.scene.add(ground);
+    this.worldGroundMesh = ground;
     applyTerrainPbr(mat, "aerial_grass_rock", 50, () => this.invalidate(2), 0.06);
   }
 
@@ -2033,6 +784,7 @@ export class SceneRenderer {
       mesh.position.set(rx, -rh * 0.05, rz);
       mesh.receiveShadow = true;
       this.scene.add(mesh);
+      this.worldRidgeMeshes.push(mesh);
       applyTerrainPbrNode(mat, "aerial_grass_rock", 4, 0x3d6630, 0x5a4830, 0.3, 0.7, () => this.invalidate(2));
     }
   }
@@ -2054,88 +806,6 @@ export class SceneRenderer {
    * Skips indoor scenes (detected by presence of a wall terrain object).
    * Uses a seeded RNG so placement is deterministic per-scene.
    */
-  private scatterAmbientProps(objects: SceneObject[]): void {
-    this.clearScatter();
-
-    const isIndoor = objects.some(
-      (o) => o.type === "terrain" && (o.metadata.shape as string) === "wall",
-    );
-    if (isIndoor) return;
-
-    // Collect floor footprints — avoid placing rocks on top of them
-    const floors = objects.filter(
-      (o) => o.type === "terrain" && (o.metadata.shape as string) === "floor",
-    );
-    const onFloor = (px: number, pz: number): boolean =>
-      floors.some((f) => {
-        const hw = ((f.metadata.width as number) ?? 20) / 2 + 2;
-        const hd = ((f.metadata.depth as number) ?? 20) / 2 + 2;
-        return Math.abs(px - f.position.x) < hw && Math.abs(pz - f.position.z) < hd;
-      });
-
-    // Deterministic pseudo-random from scene hash
-    const hash = objects.reduce((a, o) => a + o.objectId.charCodeAt(0), 0);
-    const rng  = (n: number): number =>
-      Math.abs(Math.sin(n * 9301 + hash * 49297 + 233280) % 1);
-
-    // ── Rocks ──────────────────────────────────────────────────────────────
-    const ROCK_N = 35;
-    const rockGeo = new THREE.IcosahedronGeometry(1, 1);
-    const rockMat = makeTerrainSlopeMat(0x7a7868, 0x5a5248, 0.5, 0.82, 0.95);
-    applyTerrainPbrNode(rockMat, "aerial_grass_rock", 2, 0x7a7868, 0x5a5248, 0.5, 0.82, () => this.invalidate(2));
-    const rockIM = new THREE.InstancedMesh(rockGeo, rockMat, ROCK_N);
-    rockIM.receiveShadow = true;
-
-    const dummy = new THREE.Object3D();
-    let placed = 0;
-    for (let i = 0; placed < ROCK_N && i < ROCK_N * 6; i++) {
-      const angle  = rng(i * 2) * Math.PI * 2;
-      const radius = 18 + rng(i * 3) * 32;
-      const px = Math.cos(angle) * radius;
-      const pz = Math.sin(angle) * radius;
-      if (onFloor(px, pz)) continue;
-
-      const s = 0.15 + rng(i * 5) * 0.55;
-      dummy.position.set(px, s * 0.15, pz);
-      dummy.rotation.set(rng(i) * 4, rng(i * 7) * 6, rng(i * 11) * 3);
-      dummy.scale.set(s, s * 0.6, s * 1.1);
-      dummy.updateMatrix();
-      rockIM.setMatrixAt(placed, dummy.matrix);
-      placed++;
-    }
-    rockIM.count = placed;
-    rockIM.instanceMatrix.needsUpdate = true;
-    this.scatterGroup.add(rockIM);
-
-    // ── Low shrubs ──────────────────────────────────────────────────────────
-    const SHRUB_N = 20;
-    const shrubGeo = new THREE.SphereGeometry(1, 6, 5);
-    const shrubMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.95 });
-    const shrubIM  = new THREE.InstancedMesh(shrubGeo, shrubMat, SHRUB_N);
-    shrubIM.receiveShadow = true;
-    shrubIM.castShadow = true;
-
-    placed = 0;
-    for (let i = 0; placed < SHRUB_N && i < SHRUB_N * 6; i++) {
-      const angle  = rng(i * 13) * Math.PI * 2;
-      const radius = 20 + rng(i * 17) * 28;
-      const px = Math.cos(angle) * radius;
-      const pz = Math.sin(angle) * radius;
-      if (onFloor(px, pz)) continue;
-
-      const s = 0.3 + rng(i * 19) * 0.5;
-      dummy.position.set(px, s * 0.55, pz);
-      dummy.rotation.set(0, rng(i * 23) * Math.PI * 2, 0);
-      dummy.scale.set(s * 1.2, s, s);
-      dummy.updateMatrix();
-      shrubIM.setMatrixAt(placed, dummy.matrix);
-      placed++;
-    }
-    shrubIM.count = placed;
-    shrubIM.instanceMatrix.needsUpdate = true;
-    this.scatterGroup.add(shrubIM);
-  }
-
   private setupResizeObserver(canvas: HTMLCanvasElement): void {
     const observer = new ResizeObserver(() => {
       const w = canvas.clientWidth;
@@ -2165,27 +835,46 @@ export class SceneRenderer {
           activeEl instanceof HTMLInputElement ||
           activeEl instanceof HTMLTextAreaElement;
         if (!inputActive) {
-          this.camera.getWorldDirection(this.wasdFwd);
-          this.wasdFwd.y = 0;
-          if (this.wasdFwd.lengthSq() > 0.0001) this.wasdFwd.normalize();
-          this.wasdRight.crossVectors(this.wasdFwd, this.wasdUp_).normalize();
-
           const sprint = this.keysDown.has("shift") ? 3 : 1;
           const spd = sprint * this.wasdSpeed * Math.min(delta, 0.1);
-          this.wasdMove.set(0, 0, 0);
-          if (this.keysDown.has("w") || this.keysDown.has("arrowup"))    this.wasdMove.addScaledVector(this.wasdFwd,  spd);
-          if (this.keysDown.has("s") || this.keysDown.has("arrowdown"))  this.wasdMove.addScaledVector(this.wasdFwd, -spd);
-          if (this.keysDown.has("a") || this.keysDown.has("arrowleft"))  this.wasdMove.addScaledVector(this.wasdRight, -spd);
-          if (this.keysDown.has("d") || this.keysDown.has("arrowright")) this.wasdMove.addScaledVector(this.wasdRight,  spd);
 
-          if (this.wasdMove.lengthSq() > 0) {
-            this.camera.position.add(this.wasdMove);
-            this.controls.target.add(this.wasdMove);
-            this.controlsNeedsUpdate = true;
+          if (this.fpActive) {
+            // FP mode: PointerLockControls handles mouse look; WASD moves in camera direction
+            const fwd = this.keysDown.has("w") || this.keysDown.has("arrowup");
+            const bck = this.keysDown.has("s") || this.keysDown.has("arrowdown");
+            const lft = this.keysDown.has("a") || this.keysDown.has("arrowleft");
+            const rgt = this.keysDown.has("d") || this.keysDown.has("arrowright");
+            if (fwd) this.pointerLock.moveForward(spd);
+            if (bck) this.pointerLock.moveForward(-spd);
+            if (lft) this.pointerLock.moveRight(-spd);
+            if (rgt) this.pointerLock.moveRight(spd);
+            // Keep camera at eye level (prevent vertical drift from FP movement)
+            if (fwd || bck || lft || rgt) this.camera.position.y = Math.max(0.5, this.camera.position.y);
             this.invalidate(1);
+          } else {
+            this.camera.getWorldDirection(this.wasdFwd);
+            this.wasdFwd.y = 0;
+            if (this.wasdFwd.lengthSq() > 0.0001) this.wasdFwd.normalize();
+            this.wasdRight.crossVectors(this.wasdFwd, this.wasdUp_).normalize();
+
+            this.wasdMove.set(0, 0, 0);
+            if (this.keysDown.has("w") || this.keysDown.has("arrowup"))    this.wasdMove.addScaledVector(this.wasdFwd,  spd);
+            if (this.keysDown.has("s") || this.keysDown.has("arrowdown"))  this.wasdMove.addScaledVector(this.wasdFwd, -spd);
+            if (this.keysDown.has("a") || this.keysDown.has("arrowleft"))  this.wasdMove.addScaledVector(this.wasdRight, -spd);
+            if (this.keysDown.has("d") || this.keysDown.has("arrowright")) this.wasdMove.addScaledVector(this.wasdRight,  spd);
+
+            if (this.wasdMove.lengthSq() > 0) {
+              this.camera.position.add(this.wasdMove);
+              this.controls.target.add(this.wasdMove);
+              this.controlsNeedsUpdate = true;
+              this.invalidate(1);
+            }
           }
         }
       }
+
+      // In FP mode, always render so mouse-look feels responsive
+      if (this.fpActive) this.invalidate(1);
 
       // Smooth camera transition. Camera position is lerped directly, then
       // controls.update() syncs OrbitControls' internal spherical state.
@@ -2206,7 +895,7 @@ export class SceneRenderer {
           this.controls.update();
         }
         this.invalidate(1);
-      } else if (this.controlsNeedsUpdate) {
+      } else if (!this.fpActive && this.controlsNeedsUpdate) {
         // Apply damping after user input until OrbitControls fully settles.
         // update() returns false once the camera stops moving — clear the flag then.
         const moved = this.controls.update();

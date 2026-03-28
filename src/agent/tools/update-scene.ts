@@ -5,6 +5,7 @@ import type { GenerationQueue } from "../../generation/generation-queue.js";
 import { DEFAULT_TIMEOUT_MS } from "../../generation/generation-queue.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import { SceneDataSchema } from "../../scene/schema.js";
+import { formatViolations, validateSceneCode } from "../scene-validator.js";
 
 const parameters = Type.Object({
 	sceneId: Type.String({ description: "ID of the scene to update" }),
@@ -13,7 +14,7 @@ const parameters = Type.Object({
 	sceneCode: Type.Optional(
 		Type.String({
 			description:
-				"Optional self-contained Three.js JS code to render the scene. When provided, this overrides or supplements sceneData rendering.",
+				"Required JavaScript code executed in the Three.js sandbox to render the scene. Must call stdlib.setupLighting() first, then build all visuals using stdlib helpers or raw THREE. sceneData.objects is only for interaction metadata (NPC dialogue, interactable flags) — not for rendering.",
 		}),
 	),
 });
@@ -28,7 +29,8 @@ export function updateSceneTool(
 		name: "update_scene",
 		label: "Update 3D scene",
 		description:
-			"Modify an existing scene based on a natural language instruction. Use this when the user wants to add, remove, or change something in a scene.",
+			"Modify an existing scene based on a natural language instruction. Always supply sceneCode — it is the sole rendering mechanism. " +
+			"Use this when the user wants to add, remove, or change something in a scene.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			console.log(`[update_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);
@@ -42,6 +44,7 @@ export function updateSceneTool(
 			// Skill path (sceneData supplied directly) — always synchronous
 			if (mergedSceneData) {
 				const scene = await sceneManager.updateScene(params.sceneId, params.instruction, mergedSceneData);
+				const validationMsg = params.sceneCode ? formatViolations(validateSceneCode(params.sceneCode)) : "";
 				return {
 					content: [
 						{
@@ -53,6 +56,7 @@ export function updateSceneTool(
 								status: "ready",
 								viewUrl: viewerUrl(scene.sceneId),
 								objects: scene.sceneData.objects.map((o) => ({ id: o.objectId, name: o.name, type: o.type })),
+								...(validationMsg ? { violations: validationMsg } : {}),
 							}),
 						},
 					],
