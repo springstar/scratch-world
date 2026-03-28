@@ -280,33 +280,43 @@ export function createStdlib(
 
   const inv = () => invalidateFn(2);
 
-  // ── LOD hysteresis state (shared across all buildings in this code execution) ──
+  // ── LOD hysteresis state — lazily registered when first building is added ──
   const lodObjects: Array<{ lod: THREE.LOD; level: number }> = [];
-  animateFn(() => {
-    for (const entry of lodObjects) {
-      const dist = camera.position.distanceTo(entry.lod.position);
-      const levels = entry.lod.levels;
-      let ideal = levels.length - 1;
-      for (let i = 0; i < levels.length; i++) {
-        if (dist < levels[i].distance + (levels[i + 1]?.distance ?? Infinity)) {
-          ideal = i;
-          break;
+  let lodSystemRegistered = false;
+  function ensureLodSystem() {
+    if (lodSystemRegistered) return;
+    lodSystemRegistered = true;
+    animateFn(() => {
+      for (const entry of lodObjects) {
+        const dist = camera.position.distanceTo(entry.lod.position);
+        const levels = entry.lod.levels;
+        let ideal = levels.length - 1;
+        for (let i = 0; i < levels.length; i++) {
+          if (dist < levels[i].distance + (levels[i + 1]?.distance ?? Infinity)) {
+            ideal = i;
+            break;
+          }
+        }
+        if (ideal !== entry.level) {
+          entry.level = ideal;
+          entry.lod.levels.forEach((l, i) => { l.object.visible = i === ideal; });
+          invalidateFn(1);
         }
       }
-      if (ideal !== entry.level) {
-        entry.level = ideal;
-        entry.lod.levels.forEach((l, i) => { l.object.visible = i === ideal; });
-        invalidateFn(1);
-      }
-    }
-  });
+    });
+  }
 
-  // ── NPC tick system ──────────────────────────────────────────────────────────
+  // ── NPC tick system — lazily registered when first NPC is added ──────────
   const npcStates: NpcState[] = [];
-  animateFn((delta) => {
-    for (const npc of npcStates) tickNpc(npc, delta);
-    if (npcStates.length > 0) invalidateFn(1);
-  });
+  let npcSystemRegistered = false;
+  function ensureNpcSystem() {
+    if (npcSystemRegistered) return;
+    npcSystemRegistered = true;
+    animateFn((delta) => {
+      for (const npc of npcStates) tickNpc(npc, delta);
+      if (npcStates.length > 0) invalidateFn(1);
+    });
+  }
 
   return {
     // ── Lighting ────────────────────────────────────────────────────────────────
@@ -471,10 +481,11 @@ export function createStdlib(
             }
 
             scene.add(group);
+            ensureNpcSystem();
             npcStates.push({
-              root: group, baseY: position.y, phase: Math.random() * Math.PI * 2,
+              root: group, baseY: position.y, phase: 0,
               mode: moveMode, speed, origin: new THREE.Vector3(position.x, position.y, position.z),
-              maxRadius, waypoints: waypoints.map(w => new THREE.Vector3(w.x, position.y, w.z)),
+              maxRadius, waypoints: waypoints.map((w) => new THREE.Vector3(w.x, position.y, w.z)),
               wpIdx: 0, walkState: "pausing", pauseTimer: 0, target: null, elapsed: 0,
               mixer, walkAction: null, idleAction,
             });
@@ -516,6 +527,7 @@ export function createStdlib(
       group.position.set(position.x, position.y, position.z);
       group.traverse((child) => { if ((child as THREE.Mesh).isMesh) child.castShadow = true; });
       scene.add(group);
+      ensureNpcSystem();
       npcStates.push({
         root: group, baseY: position.y, phase: Math.random() * Math.PI * 2,
         mode: moveMode, speed, origin: new THREE.Vector3(position.x, position.y, position.z),
@@ -724,6 +736,7 @@ export function createStdlib(
       lod.addLevel(low, 50);
       lod.rotation.y = rotationY;
       lod.position.set(pos.x, pos.y, pos.z);
+      ensureLodSystem();
       lodObjects.push({ lod, level: 0 });
       return lod;
     },

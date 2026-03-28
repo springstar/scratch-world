@@ -381,16 +381,14 @@ export class SceneRenderer {
     const sceneDepth  = scenePass.getTextureNode("depth");
 
     // GTAO — WebGPU-native Ground Truth Ambient Occlusion (TSL node graph).
-    // Replaces the WebGL SSAOPass dropped during the WebGPU migration (c6461d8).
-    // resolutionScale=0.5: render AO at half resolution — 4× fewer pixels, negligible
-    //   visual difference since SMAA downstream smooths the upscaled AO boundary.
-    // radius=0.25: tight contact shadows without haloing on open surfaces.
-    // samples=8: 16→8 halves per-pixel cost; AO is low-frequency so 8 is sufficient.
+    // resolutionScale=0.25: render AO at quarter resolution — 16x fewer pixels.
+    // AO is a low-frequency effect; quarter-res is invisible after SMAA blending.
+    // samples=6: minimal sample count sufficient for contact shadows.
     this.aoNode = ao(sceneDepth, sceneNormal, this.camera);
-    this.aoNode.resolutionScale       = 0.5;
+    this.aoNode.resolutionScale       = 0.25;
     this.aoNode.radius.value          = 0.25;
     this.aoNode.distanceExponent.value = 1.0;
-    this.aoNode.samples.value         = 8;
+    this.aoNode.samples.value         = 6;
     // getTextureNode("ao") returns a single-channel float where 1.0 = fully lit, 0.0 = occluded
     const aoTexture = this.aoNode.getTextureNode("ao");
     // Multiply scene color by AO to darken crevices/contact zones.
