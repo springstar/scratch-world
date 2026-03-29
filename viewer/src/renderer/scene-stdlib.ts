@@ -548,17 +548,63 @@ export function createStdlib(
 
       if (shape === "floor") {
         const texId = opts.texture ?? "aerial_grass_rock";
-        const floorMat = new THREE.MeshStandardMaterial({ color: col ?? 0xc8b89a, roughness: 1, metalness: 0 });
-        const segsW = Math.min(Math.ceil(width / 2), 32);
-        const segsD = Math.min(Math.ceil(depth / 2), 32);
-        const geo = new THREE.PlaneGeometry(width, depth, segsW, segsD);
+
+        // Use a denser grid so edge displacement looks smooth.
+        // Inner area: requested size.  Outer fringe: +fringeW on all sides.
+        // The fringe verts are displaced downward (–y in plane-local space) using
+        // a smooth quadratic ramp so the ground "slopes away" at the horizon instead
+        // of ending abruptly.  Vertex colours darken the fringe toward a warm-earth
+        // tone so the colour transition matches a typical outdoor HDRI ground.
+        const fringeW = Math.min(Math.max(width, depth) * 0.18, 30); // 18% fringe, cap 30 m
+        const totalW  = width  + fringeW * 2;
+        const totalD  = depth  + fringeW * 2;
+        const segsW   = Math.min(Math.ceil(totalW / 3), 64);
+        const segsD   = Math.min(Math.ceil(totalD / 3), 64);
+
+        const geo = new THREE.PlaneGeometry(totalW, totalD, segsW, segsD);
         setupUv2(geo);
+
+        // After PlaneGeometry creation the plane lies in the XY plane (Z = 0 = unrotated).
+        // We will rotate it -PI/2 on X later, so local Y → world −Z, local Z → world +Y.
+        // To sink the fringe downward in world space we SET local Z (positive = up after rotation).
+        const pos3  = geo.attributes.position as THREE.BufferAttribute;
+        const col3  = new Float32Array(pos3.count * 3);
+        // Fringe colour  (warm dark earth — matches most HDRI ground tones)
+        const darkR = 0.22, darkG = 0.18, darkB = 0.14;
+
+        for (let i = 0; i < pos3.count; i++) {
+          const lx = pos3.getX(i); // local X ← world X
+          const ly = pos3.getY(i); // local Y ← world –Z  (after –PI/2 X rotation)
+
+          // Normalised distance from the main-area boundary (0 = inside, 1 = outer edge)
+          const edgeX = Math.max(0, (Math.abs(lx) - width  * 0.5) / fringeW);
+          const edgeY = Math.max(0, (Math.abs(ly) - depth  * 0.5) / fringeW);
+          const t = Math.min(Math.max(edgeX, edgeY), 1.0); // 0 = flat inner area, 1 = far edge
+
+          // Quadratic drop: at t=1, sinks dropDepth metres (in plane-local Z → world Y)
+          const dropDepth = Math.min(fringeW * 0.8, 12); // cap at 12 m drop
+          pos3.setZ(i, t * t * dropDepth); // positive local Z = up after –PI/2 rotation = sinks DOWN
+
+          // Vertex colour: white inside, dark earth at the fringe
+          const brightness = 1.0 - t * 0.75; // 1.0 → 0.25 across the fringe
+          col3[i * 3    ] = brightness + t * darkR * (1 - brightness);
+          col3[i * 3 + 1] = brightness + t * darkG * (1 - brightness);
+          col3[i * 3 + 2] = brightness + t * darkB * (1 - brightness);
+        }
+        pos3.needsUpdate = true;
+        geo.setAttribute("color", new THREE.BufferAttribute(col3, 3));
+        geo.computeVertexNormals();
+
+        const floorMat = new THREE.MeshStandardMaterial({
+          color: col ?? 0xc8b89a, roughness: 1, metalness: 0,
+          vertexColors: true,
+        });
         const mesh = new THREE.Mesh(geo, floorMat);
         mesh.rotation.x = -Math.PI / 2;
         mesh.position.set(x, y + 0.002, z);
         mesh.receiveShadow = true;
-        const repeat = Math.round(Math.max(width, depth) / 2);
-        applyTerrainPbr(floorMat, texId, repeat, inv, 0.07);
+        const repeat = Math.round(Math.max(width, depth) / 3);
+        applyTerrainPbr(floorMat, texId, repeat, inv, 0);
         return mesh;
       }
 

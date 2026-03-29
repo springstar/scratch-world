@@ -509,24 +509,31 @@ YOU write sceneCode that:
 ```javascript
 // 1. Atmosphere (driven by prompt — do NOT default to clear_day noon for every scene)
 stdlib.setupLighting({ skybox: "sunset", hdri: true });
-scene.fog = new THREE.FogExp2(0xc8b09a, 0.018); // quiet village: soft warm haze
 
-// 2. Ground (use layout.ground dimensions, centred on layout.bounds.cx / cz)
+// ALWAYS add fog for outdoor settlements — it hides the ground-plane boundary and
+// softens the cut between terrain and HDRI background.  Density varies by mood:
+//   quiet/misty  → 0.018–0.022   busy/day → 0.008–0.012   night → 0.025–0.035
+scene.fog = new THREE.FogExp2(0xc8a87a, 0.014); // tune colour to match sky
+
+// 2. Ground — stdlib.makeTerrain("floor") now auto-adds a sloped fringe around the
+//    perimeter so the hard plane edge dissolves into the environment.
+//    Use the raw city bounds (no extra +40 padding — fringe handles the blending).
 stdlib.makeTerrain("floor", {
-  width: layout.ground.width + 40, depth: layout.ground.depth + 40,
+  width: layout.ground.width, depth: layout.ground.depth,
   position: { x: layout.bounds.cx, y: 0, z: layout.bounds.cz }
 });
 
-// 3. Perimeter trees (outside bounds + padding)
-const pad = 8;
+// 3. Perimeter trees — place INSIDE the fringe (just outside city bounds) so they
+//    sit on flat ground and act as a visual barrier before the slope begins.
+const pad = 6;
 const angles = [0, 0.63, 1.26, 1.88, 2.51, Math.PI, 3.77, 4.40, 5.03, 5.65];
 const rx = (layout.bounds.maxX - layout.bounds.minX) / 2 + pad;
 const rz = (layout.bounds.maxZ - layout.bounds.minZ) / 2 + pad;
 angles.forEach((a, i) => {
   stdlib.makeTree({ position: {
-    x: layout.bounds.cx + Math.cos(a) * rx * (1 + (i % 3) * 0.12),
+    x: layout.bounds.cx + Math.cos(a) * rx * (1 + (i % 3) * 0.10),
     y: 0,
-    z: layout.bounds.cz + Math.sin(a) * rz * (1 + (i % 3) * 0.12)
+    z: layout.bounds.cz + Math.sin(a) * rz * (1 + (i % 3) * 0.10)
   }});
 });
 
