@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-29
+**Last Updated:** 2026-03-29 (settlement generation, texture budget, terrain blending, walk mode)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -60,12 +60,39 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat | Hono app |
 | **Chat Route** | `src/viewer-api/routes/chat.ts` | POST /chat endpoint for web UI | `chatRoute()` |
 | **Scene Renderer** | `viewer/src/renderer/scene-renderer.ts` | Three.js WebGPU scene construction from SceneData; executes sceneCode sandbox; post-processing pipeline (bloom → SMAA → film grain → vignette) | `SceneRenderer` |
-| **Scene Stdlib** | `viewer/src/renderer/scene-stdlib.ts` | Standard library injected into sceneCode sandbox as `stdlib`; lighting, terrain, buildings, NPCs, trees, layout | `createStdlib()`, `StdlibApi` |
+| **Scene Stdlib** | `viewer/src/renderer/scene-stdlib.ts` | Standard library injected into sceneCode sandbox as `stdlib`; lighting, terrain, buildings, NPCs, trees, layout; 2000m horizon fill plane + shadow frustum ±80m | `createStdlib()`, `StdlibApi` |
 | **Layout Solver** | `viewer/src/renderer/layout-solver.ts` | Semantic layout engine — AI declares scene type, solver computes all x/y/z positions for structural elements | `createLayout()`, `SceneLayout` |
 | **Splat Viewer** | `viewer/src/components/SplatViewer.tsx` | Gaussian splat viewer using @sparkjsdev/spark | `SplatViewer` |
-| **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer | UI component |
+| **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer; pointer lock tracking; walk mode button + crosshair overlay | UI component |
 | **Chat Drawer** | `viewer/src/components/ChatDrawer.tsx` | Bottom sheet chat UI (peek/open states, streaming) | `ChatDrawer` |
 | **Star Field** | `viewer/src/components/StarField.tsx` | Canvas 2D star particle background for empty state | `StarField` |
+
+## Settlement Generation (Two-Stage Architecture)
+
+Requests for a city, town, or village follow a two-step pattern that separates procedural layout from AI-authored atmosphere:
+
+1. **`create_city` tool** (`src/agent/tools/create-city.ts`)
+   - Runs `CityGenerator` with size-mapped config (village / town / city)
+   - Returns compact layout data: building positions (`type`, `x`, `z`, `w`, `d`, `rotY`), bounding box, road segment counts, and prebuilt `sceneData` (interaction metadata)
+   - Does **not** create the scene — it delegates that responsibility to the agent
+
+2. **Agent writes atmosphere-aware `sceneCode`**
+   - Agent reads the layout AND re-reads the user's original prompt
+   - Writes `sceneCode` that reflects the prompt's atmosphere (fog density, time of day, NPC count, building style)
+   - Calls `create_scene` with the verbatim `sceneData` + the authored `sceneCode`
+   - Guidance in `SKILL.md § "Settlement Rendering"`: prompt-to-atmosphere mapping, fog/lighting tables, full rendering pattern
+
+```
+User: "quiet foggy village at dusk"
+  → create_city(size="village") → layout + sceneData (buildings, roads, bounds)
+  → agent writes sceneCode: thick fog, orange sunset, 2-3 NPCs, makeBuilding per layout entry
+  → create_scene(sceneData=<verbatim>, sceneCode=<authored>)
+  → SceneManager stores & broadcasts scene_created
+```
+
+**Why two stages?** A single-stage template ignores prompt semantics. The separation lets the AI tailor every visual parameter (fog color, ambient light intensity, NPC density, building height modifiers) to the specific atmosphere described.
+
+---
 
 ## Data Flow
 
@@ -180,7 +207,49 @@ Without one of the above, returns `403 Forbidden`.
 
 
 
-**File**: `/Users/wuchunxin/agents/scratch-world/viewer/src/renderer/scene-renderer.ts`
+### Terrain Rendering and Horizon Blending
+
+`stdlib.makeTerrain("floor", opts)` builds the ground plane with seamless horizon blending:
+
+- **Flat geometry** — no Z-displacement; vertex normals stay uniform (avoids shadow stripe artifacts at low sun angle)
+- **Vertex color darkening** — smoothstep fade from white (inner) to warm dark brown at edges; creates natural soil/ground appearance without seams
+- **Horizon fill plane** — 2000×2000m `MeshBasicMaterial` plane at `y=-0.08`, added unconditionally in `setupLighting()` for outdoor scenes; masks the HDRI photographic backdrop so no hard edge is visible where the generated ground ends
+- **Shadow frustum** — directional light covers ±80m (160m diameter) to fit village / town / city footprints; `normalBias=0.015`, `bias=-0.0005` for clean contact shadows
+
+#### WebGPU Texture Budget
+
+WebGPU per-stage sampled texture limit is **16 slots**. The renderer's fixed allocation:
+
+| Slot group | Count | Source |
+|---|---|---|
+| PMREM environment map | 1 | `scene.environment` |
+| BRDF LUT | 1 | Three.js IBL |
+| Shadow map | 1 | Directional light |
+| MRT output / normal / depth | 3 | WebGPURenderer MRT |
+| GTAO AO | 1 | Post-processing |
+| SMAA area / search / edges / blend | 4 | Post-processing |
+| Film grain noise | 1 | Post-processing |
+| **Subtotal (global)** | **12** | |
+| Diffuse + normal + roughness | 3 | Per-material PBR |
+| **Total** | **15** | ≤16 ✓ |
+
+**`aoMap` is intentionally excluded** from all `applyTerrainPbr` and `applyTerrainPbrNode` calls — GTAO post-processing provides scene-level AO that supersedes per-material aoMap. Including aoMap would push the count to 16-17 and trigger `exceeded maximum per-stage limit` pipeline errors (242 per frame).
+
+---
+
+### Walk Mode (Pointer Lock)
+
+`ViewerCanvas.tsx` exposes a first-person walk mode:
+
+- **Walk button** — bottom-right corner, only visible when pointer is not locked; calls `renderer.enterPointerLock()`
+- **Crosshair** — white `+` at viewport center while pointer is locked
+- **ESC hint** — bottom-center overlay: "WASD to move · Mouse to look · Shift to sprint · ESC to exit"
+- **Raycasting guard** — `handleMouseMove` and `handleClick` return early when `fpLocked=true` (no hover/click events during walk mode)
+- `fpLocked` state is driven by the browser's `pointerlockchange` event, not renderer callbacks
+
+---
+
+
 
 ### Core Functions
 
