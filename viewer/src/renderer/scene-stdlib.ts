@@ -13,6 +13,15 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { loadEnvMap, loadSkyBackground } from "./hdri-cache.js";
 import { applyTerrainPbr, applyTerrainPbrNode, setupUv2 } from "./texture-cache.js";
 import { createLayout, type SceneLayout, type LayoutOpts } from "./layout-solver.js";
+import {
+  createNaturalStdlib,
+  type NaturalStdlibFns,
+  type MakeRiverOpts,
+  type MakeKarstPeakOpts,
+  type MakeTerracedSlopeOpts,
+} from "./scene-stdlib-natural.js";
+
+export type { MakeRiverOpts, MakeKarstPeakOpts, MakeTerracedSlopeOpts };
 
 // ── Type palette ──────────────────────────────────────────────────────────────
 const TYPE_COLORS: Record<string, number> = {
@@ -259,6 +268,11 @@ export interface StdlibApi {
 
   // Semantic layout solver
   useLayout(type: string, opts?: LayoutOpts): SceneLayout;
+
+  // Natural environment primitives (see scene-stdlib-natural.ts)
+  makeRiver(opts?: MakeRiverOpts): THREE.Group;
+  makeKarstPeak(opts?: MakeKarstPeakOpts): THREE.Group;
+  makeTerracedSlope(opts?: MakeTerracedSlopeOpts): THREE.Group;
 
   // Utilities
   colorFor(type: string): number;
@@ -907,5 +921,7 @@ export function createStdlib(
 
       return ctx;
     },
+
+    ...createNaturalStdlib(scene, animateFn, invalidateFn),
   };
 }

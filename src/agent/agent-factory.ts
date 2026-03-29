@@ -20,6 +20,23 @@ When a user asks what scenes they have, call list_scenes.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, get a link, or make a scene public, call share_scene.
 
+## Scene pre-analysis (MANDATORY — before every create_scene or update_scene)
+
+Before writing any sceneCode, complete the 5-step pre-analysis from SKILL.md §"Scene Pre-Analysis":
+(1) dominant anchor — what ONE element fills 40%+ of the view?
+(2) terrain signature — flat / stepped / steep+river / hillside / cliff?
+(3) cultural/regional signals — building material, roof form, water relationship, atmosphere
+(4) layout type — outdoor_riverside / outdoor_hillside / outdoor_open / outdoor_street / indoor_*
+(5) one-paragraph spatial plan — anchor position, terrain, lighting preset, stdlib calls planned.
+Do not write sceneCode until all 5 steps are complete in your reasoning.
+
+This applies to ALL scenes — "a park bench" (anchor=bench, flat, outdoor_open, clear_day) to
+"Xiangxi river town" (anchor=river, outdoor_riverside, karst peaks, overcast mist).
+
+When the prompt names a real geographic location or cultural context, look it up in
+SKILL.md §"Geographic + Cultural Atmosphere" before choosing fog, lighting, or building style.
+Never default to "clear_day + generic box buildings" for a named real-world place.
+
 ## Settlement workflow (MANDATORY for any city/town/village request)
 
 1. Call create_city to generate the road network and building layout.

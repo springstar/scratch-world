@@ -14,6 +14,73 @@ Every `create_scene` or `update_scene` call **must** provide `sceneCode`. The re
 
 ---
 
+## Scene Pre-Analysis (MANDATORY — run before every create_scene or update_scene)
+
+Before writing a single line of sceneCode, complete this 5-step analysis in your internal reasoning. The analysis is for you — do not recite it to the user, but do not skip it.
+
+### Step 1 — Identify the dominant anchor
+
+Ask: **"What ONE element fills 40%+ of the visual field from the default camera?"**
+
+This becomes Layer 6 (Focal Object) and every other layer serves it.
+
+Examples:
+- "湘西古镇" → dominant anchor: the tuo river winding between stilted houses
+- "Las Vegas strip at night" → dominant anchor: the lit casino corridor
+- "bamboo forest" → dominant anchor: the dense vertical bamboo wall
+- "a park bench on a sunny day" → dominant anchor: the bench itself (simple scene = small anchor is fine)
+
+**If you cannot name the dominant anchor in one sentence, stop and think harder before writing code.**
+
+### Step 2 — Identify the terrain signature
+
+Ask: **"What does the ground do in this scene?"** Flat is the exception for natural environments.
+
+| Signature | Examples |
+|---|---|
+| **flat** | desert, sports courts, plazas, indoor rooms, rice plains |
+| **stepped/terraced** | terraced farmland, amphitheater, vineyard hillside |
+| **undulating** | rolling meadows, English countryside, golf course |
+| **steep + river** | river gorge, mountain valley — river runs at the base |
+| **cliff + drop** | coastal cliff, mesa, karst peaks rising from flat valley floor |
+| **elevated + view** | hilltop lookout, rooftop, mountain pass |
+
+### Step 3 — Extract cultural/regional signals
+
+If the prompt names a location or culture, identify before coding:
+- **Building material + style**: timber frame / stone / concrete / mud-brick / bamboo...
+- **Roof form**: pitched+tile / flat / thatched / curved eave (Chinese) / pagoda / straw...
+- **Water relationship**: over water (stilted) / beside water / terraced toward water / none
+- **Atmospheric condition**: perpetual mist / clear high-altitude / humid haze / dry desert air
+
+Look up the location in **§ Geographic + Cultural Atmosphere** below.
+
+### Step 4 — Pick layout type
+
+Map Steps 1–3 to one of the available layout types:
+
+| Terrain + Anchor | Layout type |
+|---|---|
+| River-valley, stilted buildings, water as central axis | `"outdoor_riverside"` |
+| Hillside, terraced agriculture, buildings at elevation | `"outdoor_hillside"` |
+| Flat open landscape, park, field, plaza | `"outdoor_open"` |
+| Dense urban street corridor | `"outdoor_street"` |
+| Sports court with bleachers | `"outdoor_soccer"` / `"outdoor_basketball"` |
+| Indoor enclosed space | `"indoor_room"` / `"indoor_arena"` |
+| None of the above | raw coordinates per §Advanced: custom layout |
+
+### Step 5 — Write a one-paragraph spatial plan
+
+Before writing sceneCode, write (internally) a plan that names:
+- The dominant anchor and where it sits (which half of the scene, which y-level)
+- The terrain type and the stdlib primitive(s) that build it
+- The lighting preset and fog density/color
+- Which layout type or raw-coordinate approach you will use
+
+**Only after completing Steps 1–5 do you write sceneCode.**
+
+---
+
 ## Scene Architecture (READ BEFORE WRITING ANY CODE)
 
 Visual coherence comes from following the same spatial logic that exists in the real world. Every scene must satisfy all three requirements below before adding any props or characters.
@@ -89,6 +156,20 @@ Layer 6 — FOCAL OBJECT     → The hero object or NPC the user looks at first.
 ```
 
 Code structure should match this order: first `setupLighting`, then ground, then walls/boundary, then structures, then props, then NPCs/focal.
+
+---
+
+### Requirement 4 — Dominant anchor fills 40% of the viewport
+
+Every scene must have one element that occupies at least 40% of the viewport from the default camera. Supporting elements fill the rest and reinforce the anchor.
+
+**Test**: if you can mentally cover the dominant anchor with your thumb and the scene still "reads the same", the anchor is not dominant enough. Make it bigger, bring the camera closer, or reframe to face it directly.
+
+Dominant anchor types by scene:
+- A large water body (river, lake, sea) — fills the bottom 40%+ of the frame
+- A dramatic cliff or karst peak — fills the background 40%+
+- A dense forest or bamboo wall — fills 60%+ before the clearing
+- A monument or focal structure — centered and at least 30% of frame height
 
 ---
 
@@ -504,6 +585,45 @@ YOU write sceneCode that:
 | abandoned / ruined | overcast | heavy `FogExp2(0x9a9a8a, 0.03)` | 0 | desaturated, grey |
 | modern | clear_day no HDRI | none | 3–5 | concrete/glass colors |
 
+---
+
+## Geographic + Cultural Atmosphere
+
+When the prompt names a real location, region, or culture, use this table to select terrain, lighting, fog, and palette. **Never default to `clear_day + generic box buildings` for a named real-world place.**
+
+| Context signals | Terrain signature | Lighting preset | Fog | Dominant palette |
+|---|---|---|---|---|
+| 湘西 / Xiangxi / 凤凰 / Fenghuang | steep+river valley, karst peaks | `overcast` or `dusk`, `hdri:true` | `FogExp2(0x9ab0aa, 0.022)` | grey-green peaks `0x6a7a6a`, warm brown wood `0x3e1e0a`, dark teal river `0x2d5a6e` |
+| 江南 / Yangtze delta / 水乡 | flat + canal grid, arched bridges | `dawn` or `overcast` | `FogExp2(0xc8cfc8, 0.012)` | white plaster `0xf0ece0`, grey tile `0x8a8880`, dark canal water `0x3a4840` |
+| 黄土高原 / Loess plateau / Shanxi | loess cliffs, cave dwellings carved into bluff | `noon` / `clear_day` | none | ochre `0xc87840`, deep terracotta `0xa04c20`, sky blue `0x4a7ac0` |
+| 西藏 / Tibet / 高原 | high flat plateau, distant snow peaks | `noon` / `clear_day`, high UV | none (thin air) | cobalt sky `0x3a5ab0`, white monastery `0xf5f2ea`, prayer-flag colors |
+| Japanese 里山 / satoyama | undulating hills, terraced rice, cedar forest | `dusk`, `hdri:true` | `FogExp2(0xb0b8a8, 0.010)` | cedar brown `0x4a3020`, pale gold rice `0xd4b860`, misty grey-green `0x8a9880` |
+| Southeast Asia / 东南亚 / Thailand | tropical flat, dense canopy, river | `noon` / `overcast` | `FogExp2(0x8a9a80, 0.010)` | deep canopy green `0x2a4820`, saffron temple `0xd4840a`, brown river `0x5a4020` |
+| Mediterranean coast | rocky cliff descending to cove | `noon` / `clear_day` | none | bone white `0xf2ede0`, terracotta `0xc05030`, Aegean blue `0x2a5a9a` |
+| Nordic forest / 北欧 | dense conifer, snow-covered flat | `dusk` or `dawn` | `FogExp2(0xa8b8c0, 0.015)` | dark conifer green `0x1a3020`, birch grey `0xa0a898`, snow white `0xf8f8fa` |
+| Saharan desert / 撒哈拉 | flat + dunes, no vegetation | `noon` / `clear_day` | `FogExp2(0xd4b870, 0.006)` | ochre sand `0xd4a040`, shadow blue-grey `0x706040`, bleached white `0xf8f0d8` |
+| Andes / 安第斯 mountain village | high terraces, Incan stone walls | `noon` / `clear_day` | none | rust adobe `0xb04030`, grey stone `0x706860`, cobalt sky `0x3a5ab0` |
+
+---
+
+## Reference Image Analysis Protocol
+
+When the user provides reference photos, extract the following before generating. Each line maps directly to an stdlib call or atmosphere parameter.
+
+```
+1. Dominant element    → what occupies 40%+ of the frame? → becomes the anchor in Step 1
+2. Terrain topology    → flat / slope / terraced / valley / cliff? → Step 2 terrain signature
+3. Water presence      → none / stream / river (is it the center axis?) / coast?
+4. Architecture        → material, roof form, building density, height profile
+5. Atmosphere          → fog density (thick/thin/none), light direction, time of day, moisture
+6. Color palette       → identify 4–5 dominant hex values by sampling the image mentally
+7. Camera height       → eye-level / elevated / aerial?
+
+Map: terrain → layout type | palette → fog + lighting hex | architecture → stdlib primitives
+```
+
+---
+
 ### Rendering pattern
 
 ```javascript
@@ -717,7 +837,116 @@ stdlib.makeTree(opts?: {
 
 Creates animated WaterMesh surface with normal-map waves. Lower-level than `makeTerrain("water")`.
 
-### `stdlib.makeMat(color, roughness?, metalness?)` → `THREE.MeshStandardMaterial`
+---
+
+### `stdlib.makeRiver(opts?)` → `THREE.Group`  ⭐ USE FOR RIVERS, STREAMS, CANALS
+
+Creates a river channel with animated water surface and muddy banks. The dominant anchor for any riverside scene.
+
+```typescript
+stdlib.makeRiver(opts?: {
+  width?:      number;  // channel width in metres (default 18)
+  length?:     number;  // length along Z axis (default 80)
+  meander?:    number;  // 0=straight, 1=strong curve (default 0.3)
+  waterY?:     number;  // y-level of water surface (default 0)
+  bedDepth?:   number;  // riverbed depth below waterY (default 1.2)
+  waterColor?: number;  // hex (default 0x2d5a6e — dark teal for 湘西/karst)
+  position?:   Vec3;
+})
+```
+
+```javascript
+// Wide river as central axis — Fenghuang / riverside town
+stdlib.makeRiver({ width: 22, length: 90, waterColor: 0x2d5a6e,
+  position: { x: 0, y: 0, z: 0 } });
+```
+
+---
+
+### `stdlib.makeKarstPeak(opts?)` → `THREE.Group`  ⭐ USE FOR SOUTH CHINA / VIETNAM / KARST LANDSCAPES
+
+Creates a near-vertical limestone spire (NOT a sphere or cone — karst peaks have concave-convex
+vertical sides). Optional animated mist planes clinging to mid-peak.
+
+```typescript
+stdlib.makeKarstPeak(opts?: {
+  height?:  number;  // total height in metres (default 60)
+  radius?:  number;  // base radius in metres (default 12)
+  color?:   number;  // rock color (default 0x6a7060 grey-green limestone)
+  mist?:    boolean; // animated wisps at 30/50/65% height (default true)
+  position?: Vec3;
+})
+```
+
+```javascript
+// Pair of karst peaks — place in the far background
+stdlib.makeKarstPeak({ height: 55, radius: 14, mist: true, position: { x: -28, y: 0, z: -55 } });
+stdlib.makeKarstPeak({ height: 70, radius: 18, mist: true, position: { x:  32, y: 0, z: -62 } });
+```
+
+---
+
+### `stdlib.makeTerracedSlope(opts?)` → `THREE.Group`  ⭐ USE FOR TERRACED FARMLAND, HILLSIDE VILLAGES
+
+Creates stepped agricultural terraces with optional flooded paddy water layer.
+
+```typescript
+stdlib.makeTerracedSlope(opts?: {
+  steps?:         number;  // terrace steps (default 5)
+  totalHeight?:   number;  // total elevation rise in metres (default 16)
+  width?:         number;  // slope face width in metres (default 40)
+  terracesDepth?: number;  // horizontal depth per tread (default 6)
+  floodedStep?:   number;  // which step (0-based) to flood with water (-1=none, default -1)
+  topColor?:      number;  // tread surface color (default 0x4a6a30 wet paddy green)
+  riserColor?:    number;  // vertical face color (default 0x7a5a30 earth brown)
+  position?:      Vec3;
+  rotationY?:     number;
+})
+```
+
+```javascript
+// 4-step terraced hillside, step 1 flooded (rice paddy reflection)
+stdlib.makeTerracedSlope({ steps: 4, totalHeight: 12, width: 30,
+  floodedStep: 1, position: { x: -22, y: 0, z: -20 } });
+```
+
+---
+
+### Worked Example: 湘西古镇 (Xiangxi riverside village)
+
+```javascript
+// Pre-analysis:
+//   1. Dominant anchor: river (fills center + bottom 40% of frame)
+//   2. Terrain: steep+river valley
+//   3. Cultural: 湘西 — warm brown timber, grey-green limestone, dark teal water, heavy mist
+//   4. Layout: outdoor_riverside
+//   5. Plan: river centered at origin, stilted houses on left bank,
+//            karst peaks in background, terraced slope on hillside above left bank,
+//            camera on right bank looking across to stilt houses through mist
+
+stdlib.setupLighting({ skybox: "overcast", hdri: true });
+scene.fog = new THREE.FogExp2(0x9ab0aa, 0.022); // grey-green mountain mist
+
+const L = stdlib.useLayout("outdoor_riverside", { width: 60, depth: 80 });
+L.buildBase(); // flat ground + river (18m wide) + lateral cliff walls
+
+// Karst peaks — far background
+stdlib.makeKarstPeak({ height: 55, radius: 14, mist: true,
+  position: L.place("peak_left").position });
+stdlib.makeKarstPeak({ height: 70, radius: 18, mist: true,
+  position: L.place("peak_right").position });
+
+// Terraced rice paddies on the hillside above left bank
+stdlib.makeTerracedSlope({
+  steps: 4, totalHeight: 12, width: 30, floodedStep: 1,
+  position: { x: -24, y: 0, z: -18 },
+});
+
+// Camera — right bank, eye-level, looking across river to stilt houses
+const vp = L.viewpoint("default");
+camera.position.set(vp.position.x, vp.position.y, vp.position.z);
+controls.target.set(vp.lookAt.x, vp.lookAt.y, vp.lookAt.z);
+```
 
 ```javascript
 const mat = stdlib.makeMat(0x8b6040, 0.8, 0.0);

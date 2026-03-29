@@ -62,7 +62,9 @@ type SceneType =
 	| "outdoor_soccer"
 	| "outdoor_basketball"
 	| "outdoor_open"
-	| "outdoor_street";
+	| "outdoor_street"
+	| "outdoor_riverside"
+	| "outdoor_hillside";
 
 interface RoleResult {
 	position: Vec3;
@@ -274,6 +276,105 @@ const SCENE_TYPES: Record<SceneType, SceneTypeDef> = {
 			overview:(d) => ({ position: v(d.width * 2, d.width * 2, d.depth * 0.4), lookAt: v(0, 1, 0) }),
 		},
 	},
+
+	// ── Outdoor riverside settlement (river as central axis) ─────────────────────
+	// Use for: river valleys, stilted waterfront towns, Fenghuang-style settlements
+	outdoor_riverside: {
+		baseDims: (opts) => {
+			const w = opts.width  ?? 60;  // valley width (bank to bank + hillside)
+			const d = opts.depth  ?? 80;  // valley length (scene depth)
+			return { width: w, depth: d, height: 0,
+				structureMinZ: -d / 2, structureMaxZ: d / 2,
+				structureMinX: -w / 2, structureMaxX: w / 2 };
+		},
+		roles: {
+			// River runs along Z-axis, centered on X=0
+			river:             (_d) => ({ position: v(0, 0, 0) }),
+			// Stilted houses — left bank, hanging over water edge
+			stilt_house_left:  (d) => ({ position: v(-d.width * 0.20, 0, 0),            rotationY: Math.PI / 2 }),
+			stilt_house_left2: (d) => ({ position: v(-d.width * 0.22, 0, -d.depth * 0.18) }),
+			stilt_house_left3: (d) => ({ position: v(-d.width * 0.18, 0,  d.depth * 0.18) }),
+			// Right-bank houses — set back from water
+			house_right_near:  (d) => ({ position: v(d.width * 0.32, 0, -d.depth * 0.15) }),
+			house_right_far:   (d) => ({ position: v(d.width * 0.36, 0,  d.depth * 0.15) }),
+			house_right_mid:   (d) => ({ position: v(d.width * 0.38, 0,  0) }),
+			// Dock / landing — extends from right bank into river
+			dock:              (d) => ({ position: v(d.width * 0.10, 0, 0) }),
+			// Karst peaks — distant background on both sides of the valley
+			peak_left:         (d) => ({ position: v(-d.width * 0.55, 0, -d.depth * 0.35) }),
+			peak_right:        (d) => ({ position: v( d.width * 0.60, 0, -d.depth * 0.40) }),
+			peak_far:          (d) => ({ position: v( d.width * 0.05, 0, -d.depth * 0.55) }),
+			// Boat on river
+			boat:              (d) => ({ position: v(d.width * 0.05, 0, d.depth * 0.10) }),
+			// Bridge crossing point
+			bridge:            (d) => ({ position: v(0, 0, -d.depth * 0.20) }),
+		},
+		viewpoints: {
+			// Standing on right bank, looking across river to stilt houses
+			default:  (d) => ({
+				position: v(d.width * 0.35, 1.7,  d.depth * 0.30),
+				lookAt:   v(-d.width * 0.10, 1.2, 0),
+			}),
+			// Aerial — river visible as central feature
+			overview: (d) => ({
+				position: v(0, d.width * 0.50, d.depth * 0.45),
+				lookAt:   v(0, 0, 0),
+			}),
+			// From boat — low on water, looking upriver toward misty peaks
+			boat_pov: (d) => ({
+				position: v(d.width * 0.05, 1.2,  d.depth * 0.28),
+				lookAt:   v(0, 3, -d.depth * 0.20),
+			}),
+		},
+	},
+
+	// ── Outdoor hillside (terraced mountainside settlement) ─────────────────────
+	// Use for: rice terraces, vineyard slopes, hill villages, Andes/Yunnan scenes
+	outdoor_hillside: {
+		baseDims: (opts) => {
+			const w = opts.width  ?? 60;  // slope width
+			const d = opts.depth  ?? 50;  // slope depth (front=viewer, back=uphill)
+			const h = opts.height ?? 20;  // total elevation rise front → back
+			return { width: w, depth: d, height: h,
+				structureMinZ: -d, structureMaxZ: 5,
+				structureMinX: -w / 2, structureMaxX: w / 2 };
+		},
+		roles: {
+			// Terraced field — center-back, dominant anchor
+			terrace_field:  (d) => ({ position: v(0, d.height * 0.30, -d.depth * 0.40) }),
+			// Village cluster at mid-slope
+			village_center: (d) => ({ position: v(0, d.height * 0.40, -d.depth * 0.50) }),
+			// Individual houses at staggered elevations
+			house_low:      (d) => ({ position: v(-d.width * 0.20, d.height * 0.15, -d.depth * 0.25) }),
+			house_mid:      (d) => ({ position: v( d.width * 0.15, d.height * 0.40, -d.depth * 0.50) }),
+			house_high:     (d) => ({ position: v(-d.width * 0.10, d.height * 0.65, -d.depth * 0.65) }),
+			// Path winding up slope
+			path_start: (d) => ({ position: v(d.width * 0.05, 0,                     0) }),
+			path_mid:   (d) => ({ position: v(0,               d.height * 0.35, -d.depth * 0.45) }),
+			path_top:   (d) => ({ position: v(-d.width * 0.05, d.height * 0.70, -d.depth * 0.70) }),
+			// NPC on the path
+			npc_path:   (d) => ({ position: v(d.width * 0.03, d.height * 0.15, -d.depth * 0.20) }),
+			// Distant peak behind the top of the slope
+			peak_bg:    (d) => ({ position: v(d.width * 0.20, d.height * 1.20, -d.depth * 1.10) }),
+		},
+		viewpoints: {
+			// From front, looking up slope — terraces fill lower frame
+			default: (d) => ({
+				position: v(d.width * 0.30, 1.7, d.depth * 0.15),
+				lookAt:   v(0, d.height * 0.40, -d.depth * 0.40),
+			}),
+			// From mid-slope looking down and across
+			mid_slope: (d) => ({
+				position: v(-d.width * 0.15, d.height * 0.45, -d.depth * 0.45),
+				lookAt:   v( d.width * 0.10, 0, d.depth * 0.10),
+			}),
+			// Aerial — shows full slope + peak
+			overview: (d) => ({
+				position: v(d.width * 0.50, d.height * 1.50, d.depth * 0.30),
+				lookAt:   v(0, d.height * 0.30, -d.depth * 0.30),
+			}),
+		},
+	},
 };
 
 // ── SceneLayout ────────────────────────────────────────────────────────────────
@@ -314,6 +415,14 @@ export class SceneLayout {
 			this.buildCeiling();
 		} else {
 			this.buildGround();
+			// Riverside: add river channel as part of the base structure
+			if (this.type === "outdoor_riverside") {
+				this.helpers.stdlib.makeRiver({
+					width: this.dims.width * 0.30,
+					length: this.dims.depth + 20,
+					position: { x: 0, y: 0, z: 0 },
+				});
+			}
 			this.buildBoundary();
 			this.buildBackground();
 		}
@@ -324,6 +433,44 @@ export class SceneLayout {
 		const { stdlib } = this.helpers;
 		const { dims, type } = this;
 		const isIndoor = type === "indoor_room" || type === "indoor_arena";
+
+		// Riverside: flat valley floor + river channel built into ground
+		if (type === "outdoor_riverside") {
+			const ground = stdlib.makeTerrain("floor", {
+				width: dims.width + 80, depth: dims.depth + 80,
+				texture: "aerial_grass_rock",
+				position: { x: 0, y: 0, z: 0 },
+			});
+			this.helpers.scene.add(ground);
+			// River is placed by buildBase(); return ground only here
+			return ground;
+		}
+
+		// Hillside: sloped ground rising from front to back
+		if (type === "outdoor_hillside") {
+			const { THREE: THREELib } = this.helpers as unknown as { THREE: typeof import("three/webgpu") };
+			// Fall back to flat terrain if THREE not available in helpers (TS safety)
+			if (!THREELib) {
+				const ground = stdlib.makeTerrain("floor", {
+					width: dims.width + 60, depth: dims.depth + 60,
+					texture: "aerial_grass_rock",
+					position: { x: 0, y: dims.height / 2, z: -dims.depth / 2 },
+				});
+				this.helpers.scene.add(ground);
+				return ground;
+			}
+			const slopeAngle = Math.atan2(dims.height, dims.depth);
+			const slopeLen   = Math.sqrt(dims.depth * dims.depth + dims.height * dims.height);
+			const ground = stdlib.makeTerrain("floor", {
+				width: dims.width + 40, depth: slopeLen + 40,
+				texture: "aerial_grass_rock",
+				position: { x: 0, y: dims.height / 2, z: -dims.depth / 2 },
+			});
+			// Tilt the ground plane to form a slope
+			(ground as THREE.Object3D).rotation.x = slopeAngle;
+			this.helpers.scene.add(ground);
+			return ground;
+		}
 
 		if (type === "outdoor_soccer" || type === "outdoor_basketball") {
 			// Grass beyond field, then court/field surface on top
@@ -435,6 +582,32 @@ export class SceneLayout {
 		const { stdlib, scene } = this.helpers;
 		const { dims, type } = this;
 		const group = new Group();
+
+		if (type === "outdoor_riverside") {
+			// Riverside: cliff walls on both lateral sides of the valley
+			for (const sx of [-1, 1]) {
+				const cliff = stdlib.makeTerrain("cliff", {
+					height: 20, width: dims.depth + 20,
+					position: { x: sx * (dims.width / 2 + 2), y: 0, z: 0 },
+				});
+				(cliff as THREE.Object3D).rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2;
+				scene.add(cliff);
+				group.add(cliff);
+			}
+			return group;
+		}
+
+		if (type === "outdoor_hillside") {
+			// Hillside: tree line along the lower front edge
+			const frontCount = Math.ceil(dims.width / 8);
+			for (let i = 0; i < frontCount; i++) {
+				const x = (i / (frontCount - 1) - 0.5) * dims.width;
+				const tree = stdlib.makeTree({ position: { x, y: 0, z: dims.depth * 0.12 }, scale: 1.1 });
+				scene.add(tree);
+				group.add(tree);
+			}
+			return group;
+		}
 
 		if (type === "outdoor_street") {
 			// Building rows — both sides of road
