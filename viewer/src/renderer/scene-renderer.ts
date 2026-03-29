@@ -260,7 +260,7 @@ export class SceneRenderer {
   //  LOW    (0): no GTAO/SMAA,  bloom only,               DPR ×0.5
   //
   // Asymmetric cooldowns prevent thrashing: fast downgrade, slow upgrade.
-  private qualityTier = 2;
+  private qualityTier = 1; // start at MEDIUM; adaptive upgrade to HIGH if GPU is fast enough
   private readonly frameSamples: number[] = [];  // rolling GPU frame-time window
   private readonly frameSampleMax = 10;
   private lastTierChange = 0;
@@ -805,7 +805,7 @@ export class SceneRenderer {
 
     if (p75 > 33 && this.qualityTier > 0 && now - this.lastTierChange > this.tierDownCooldown) {
       this.setQualityTier(this.qualityTier - 1);
-    } else if (p75 < 20 && this.qualityTier < 2 && now - this.lastTierChange > this.tierUpCooldown) {
+    } else if (p75 < 20 && this.qualityTier < 1 && now - this.lastTierChange > this.tierUpCooldown) {
       this.setQualityTier(this.qualityTier + 1);
     }
   }

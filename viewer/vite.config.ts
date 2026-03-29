@@ -10,6 +10,7 @@ export default defineConfig({
       "/scenes": "http://localhost:3001",
       "/interact": "http://localhost:3001",
       "/chat": "http://localhost:3001",
+      "/screenshots": "http://localhost:3001",
       "/uploads": "http://localhost:3001",
       "/splat": "http://localhost:3001",
       // Proxy WebSocket connections for the realtime bus

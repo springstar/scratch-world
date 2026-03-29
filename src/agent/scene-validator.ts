@@ -102,9 +102,12 @@ function checkShadowLights(code: string): SceneViolation[] {
 function checkDirectAssignment(code: string): SceneViolation[] {
 	const violations: SceneViolation[] = [];
 
-	// Detect: Object.assign(mesh, { position: ... }) or Object.assign(mesh, opts)
-	// where opts likely contains position/rotation/scale
-	if (/Object\.assign\s*\([^,]+,\s*\{[^}]*(position|rotation|scale)/g.test(code)) {
+	// Detect: Object.assign(mesh, { position: ... }) or Object.assign(new THREE.*, ...)
+	// Note: [^,]+ misses nested commas, so also check for Object.assign(new THREE.* directly.
+	if (
+		/Object\.assign\s*\([^,]+,\s*\{[^}]*(position|rotation|scale)/g.test(code) ||
+		/Object\.assign\s*\(\s*new\s+THREE\./g.test(code)
+	) {
 		violations.push({
 			rule: "no-object-assign-transform",
 			severity: "error",
