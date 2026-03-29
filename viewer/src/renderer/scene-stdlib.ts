@@ -339,14 +339,13 @@ export function createStdlib(
       sun.castShadow = !isIndoor;
       if (!isIndoor) {
         sun.shadow.mapSize.set(4096, 4096);
-        const shadowHalf = 40;
+        const shadowHalf = 80; // covers ±80 m — enough for village/town/city scenes
         sun.shadow.camera.left = -shadowHalf; sun.shadow.camera.right = shadowHalf;
         sun.shadow.camera.top  =  shadowHalf; sun.shadow.camera.bottom = -shadowHalf;
-        sun.shadow.camera.near =   1; sun.shadow.camera.far = 200;
-        sun.shadow.normalBias = 0.02;
-        sun.shadow.bias = 0;
+        sun.shadow.camera.near =   1; sun.shadow.camera.far = 300;
+        sun.shadow.normalBias = 0.015;
+        sun.shadow.bias = -0.0005;
         // Mark as the trusted stdlib sun so the renderer's force-disable traverse skips it.
-        // This allows outdoor shadows to render correctly from the skybox-matched sun direction.
         sun.userData["isSun"] = true;
       }
       scene.add(sun);
@@ -369,6 +368,19 @@ export function createStdlib(
       } else {
         // Flat background colour (overridden by HDRI or sky panorama below)
         scene.background = new THREE.Color(preset.skyColor);
+
+        // Horizon fill — a large flat plane that prevents the HDRI photographic
+        // ground from showing through at the edges of AI-generated scenes.
+        // Sits slightly below y=0 so it never z-fights with scene geometry.
+        // No textures, no shadows — just a neutral earth-tone canvas that fades
+        // into the scene's fog before the camera can reach its edge.
+        const fillGeo = new THREE.PlaneGeometry(2000, 2000, 1, 1);
+        const fillMat = new THREE.MeshBasicMaterial({ color: 0x857060 });
+        const fillMesh = new THREE.Mesh(fillGeo, fillMat);
+        fillMesh.rotation.x = -Math.PI / 2;
+        fillMesh.position.y = -0.08;
+        fillMesh.renderOrder = -1;
+        scene.add(fillMesh);
       }
 
       // Async HDRI env map for physically correct IBL (outdoor only)
