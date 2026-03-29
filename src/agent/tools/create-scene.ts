@@ -31,8 +31,7 @@ export function createSceneTool(
 		label: "Create 3D scene",
 		description:
 			"Generate a new 3D scene from a text prompt. Always supply sceneCode — it is the sole rendering mechanism. " +
-			"Use for any environment that is NOT a settlement — nature landscapes, indoor rooms, dungeons, halls, gardens, sports fields, abstract environments. " +
-			"Do NOT use for cities, towns, or villages — use create_city for those.",
+			"Use for all scenes including settlements rendered from create_city layout data.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			console.log(`[create_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);

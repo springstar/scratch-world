@@ -384,7 +384,10 @@ export function cityDataToSceneData(cityData: CityData, theme: Theme = "medieval
 	];
 
 	const sceneCode = cityDataToSceneCode(cityData, theme, groundW, groundD, cx, cz, minX, maxX, minZ, maxZ);
-	return { objects, environment, viewpoints, sceneCode };
+	// sceneCode is retained as a reference / fallback.
+	// In the normal agent workflow the AI writes its own sceneCode from layout data.
+	void sceneCode;
+	return { objects, environment, viewpoints };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

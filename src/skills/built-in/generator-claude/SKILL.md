@@ -473,6 +473,88 @@ stdlib    — Scene Standard Library (see below)
 
 ---
 
+## Settlement Rendering
+
+When `create_city` returns layout data, you MUST call `create_scene` immediately and write the sceneCode yourself.
+The layout gives you exact building positions; the user's **original prompt** drives every atmospheric choice.
+
+### Two-stage contract
+
+```
+create_city  →  layout (building positions, bounds, theme, roads)
+                sceneData (interaction objects — pass verbatim to create_scene)
+     ↓
+YOU write sceneCode that:
+  1. Calls stdlib.setupLighting() with atmosphere-appropriate params
+  2. Lays down ground + perimeter trees/hills (see bounds)
+  3. Renders every building from layout.buildings[]
+  4. Adds roads if desired (use layout.roads counts as a guide)
+  5. Adds NPCs — count and mood MUST match the prompt
+  6. Sets camera at street level inside the settlement
+```
+
+### Prompt → atmosphere mapping
+
+| Prompt signals | Lighting | Fog | NPCs | Style hints |
+|---|---|---|---|---|
+| quiet / serene / peaceful | dusk or dawn HDRI | light `scene.fog = new THREE.FogExp2(0xc8b09a, 0.018)` | 1–2, idle | muted warm tones |
+| busy / bustling / lively | noon clear_day | none | 4–6, randomwalk | bright saturated colors |
+| mysterious / haunted / dark | sunset or night | heavy `FogExp2(0x1a1a2e, 0.04)` | 0–1 | desaturated, point lights |
+| fantasy / magical | sunset HDRI | light purple fog | 3–4 | colored point lights, glow |
+| abandoned / ruined | overcast | heavy `FogExp2(0x9a9a8a, 0.03)` | 0 | desaturated, grey |
+| modern | clear_day no HDRI | none | 3–5 | concrete/glass colors |
+
+### Rendering pattern
+
+```javascript
+// 1. Atmosphere (driven by prompt — do NOT default to clear_day noon for every scene)
+stdlib.setupLighting({ skybox: "sunset", hdri: true });
+scene.fog = new THREE.FogExp2(0xc8b09a, 0.018); // quiet village: soft warm haze
+
+// 2. Ground (use layout.ground dimensions, centred on layout.bounds.cx / cz)
+stdlib.makeTerrain("floor", {
+  width: layout.ground.width + 40, depth: layout.ground.depth + 40,
+  position: { x: layout.bounds.cx, y: 0, z: layout.bounds.cz }
+});
+
+// 3. Perimeter trees (outside bounds + padding)
+const pad = 8;
+const angles = [0, 0.63, 1.26, 1.88, 2.51, Math.PI, 3.77, 4.40, 5.03, 5.65];
+const rx = (layout.bounds.maxX - layout.bounds.minX) / 2 + pad;
+const rz = (layout.bounds.maxZ - layout.bounds.minZ) / 2 + pad;
+angles.forEach((a, i) => {
+  stdlib.makeTree({ position: {
+    x: layout.bounds.cx + Math.cos(a) * rx * (1 + (i % 3) * 0.12),
+    y: 0,
+    z: layout.bounds.cz + Math.sin(a) * rz * (1 + (i % 3) * 0.12)
+  }});
+});
+
+// 4. Buildings — iterate layout.buildings[]
+// type → color mapping (adjust tones to match prompt atmosphere)
+const COLORS = { tower: 0x888888, shop: 0xc8a87e, house: 0xd4bfa0, cottage: 0xa08060 };
+for (const b of layout.buildings) {
+  stdlib.makeBuilding({
+    width: b.w, depth: b.d,
+    height: b.type === "tower" ? 10 : b.type === "shop" ? 4 : b.type === "house" ? 5 : 3,
+    style: b.type,
+    color: COLORS[b.type] ?? 0x8b7355,
+    position: { x: b.x, y: 0, z: b.z },
+    rotationY: b.rotY,
+  });
+}
+
+// 5. NPCs — count from prompt atmosphere
+// quiet village: 1–2 idle NPCs near center; busy market: 4–6 walking NPCs
+stdlib.makeNpc({ position: { x: layout.bounds.cx + 2, y: 0, z: layout.bounds.cz }, moveMode: "idle" });
+
+// 6. Camera — street level, behind the settlement, looking in
+camera.position.set(layout.bounds.cx, 1.7, layout.bounds.maxZ + 12);
+controls.target.set(layout.bounds.cx, 1, layout.bounds.cz);
+```
+
+---
+
 ## stdlib API Reference
 
 ### `stdlib.setupLighting(opts?)`
