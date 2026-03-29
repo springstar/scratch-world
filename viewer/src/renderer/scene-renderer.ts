@@ -199,6 +199,8 @@ export class SceneRenderer {
   private bloomNode!: any; // BloomNode — access .strength.value / .radius.value / .threshold.value
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private aoNode!: any;    // GTAONode — access .radius.value / .distanceExponent.value
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private scenePass: any = null; // PassNode — created once with MRT, reused across tier changes
   private sunDir = new THREE.Vector3(0, 1, 0); // updated per scene
   private sky: SkyMesh;
   // Persistent world ground plane and background ridges — hidden for indoor scenes,
@@ -379,62 +381,57 @@ export class SceneRenderer {
   }
 
   private buildPostProcessing(tier: number): void {
-    // Dispose the old pipeline before rebuilding (avoids GPU resource leaks).
-    try { (this.postProcessing as unknown as { dispose?: () => void }).dispose?.(); } catch (_) { /* ignore */ }
+    // Create the scene pass exactly once with MRT (2 color targets: output + normalView).
+    // MRT must NEVER change after first render — WebGPU compiles material render pipelines
+    // with the attachment state baked in. Recreating the pass with different MRT
+    // causes attachment-state mismatch errors (pipeline has 2 targets, pass expects 1).
+    // Lower tiers simply ignore the normal output; they don't remove it.
+    if (!this.scenePass) {
+      this.scenePass = pass(this.scene, this.camera);
+      this.scenePass.setMRT(mrt({ output, normal: normalView }));
+    }
 
+    const sceneColor  = this.scenePass.getTextureNode("output");
+    const sceneNormal = this.scenePass.getTextureNode("normal");
+    const sceneDepth  = this.scenePass.getTextureNode("depth");
+
+    let baseColor;
     if (tier >= 2) {
-      // ── HIGH: MRT → GTAO → bloom → SMAA → grain → vignette ───────────────
-      const scenePass = pass(this.scene, this.camera);
-      scenePass.setMRT(mrt({ output, normal: normalView }));
-      const sceneColor  = scenePass.getTextureNode("output");
-      const sceneNormal = scenePass.getTextureNode("normal");
-      const sceneDepth  = scenePass.getTextureNode("depth");
-
-      // GTAO — quarter resolution (16× fewer pixels), 6 samples: sufficient for contact shadows
+      // ── HIGH: GTAO ambient occlusion multiplied on top of scene color ──────
       this.aoNode = ao(sceneDepth, sceneNormal, this.camera);
       this.aoNode.resolutionScale       = 0.25;
       this.aoNode.radius.value          = 0.25;
       this.aoNode.distanceExponent.value = 1.0;
       this.aoNode.samples.value         = 6;
-      const aoTexture = this.aoNode.getTextureNode("ao");
-      const withAO = sceneColor.mul(aoTexture);
-
-      this.bloomNode = bloom(withAO, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
-      const withBloom = withAO.add(this.bloomNode);
-      const smaaNode  = smaa(withBloom);
-      const withGrain = film(smaaNode, 0.04);
-      const dist      = uv().sub(0.5).length().mul(1.55);
-      const vignette  = dist.smoothstep(0.8, 0.15).mul(0.24).add(0.76);
-
-      const pp = new THREE.PostProcessing(this.renderer);
-      pp.outputNode = withGrain.mul(vignette);
-      this.postProcessing = pp;
-
-    } else if (tier === 1) {
-      // ── MEDIUM: no GTAO, bloom + SMAA ─────────────────────────────────────
-      const scenePass  = pass(this.scene, this.camera);
-      const sceneColor = scenePass.getTextureNode("output");
-
-      this.bloomNode = bloom(sceneColor, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
-      const withBloom = sceneColor.add(this.bloomNode);
-      const smaaNode  = smaa(withBloom);
-
-      const pp = new THREE.PostProcessing(this.renderer);
-      pp.outputNode = smaaNode;
-      this.postProcessing = pp;
-
+      baseColor = sceneColor.mul(this.aoNode.getTextureNode("ao"));
     } else {
-      // ── LOW: no GTAO/SMAA, bloom only ─────────────────────────────────────
-      const scenePass  = pass(this.scene, this.camera);
-      const sceneColor = scenePass.getTextureNode("output");
-
-      this.bloomNode = bloom(sceneColor, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
-      const withBloom = sceneColor.add(this.bloomNode);
-
-      const pp = new THREE.PostProcessing(this.renderer);
-      pp.outputNode = withBloom;
-      this.postProcessing = pp;
+      this.aoNode = null;
+      baseColor = sceneColor;
     }
+
+    this.bloomNode = bloom(baseColor, this.bloomParams.strength, this.bloomParams.radius, this.bloomParams.threshold);
+    const withBloom = baseColor.add(this.bloomNode);
+
+    let outputNode;
+    if (tier >= 2) {
+      // HIGH: SMAA + film grain + vignette
+      const withGrain = film(smaa(withBloom), 0.04);
+      const vignette  = uv().sub(0.5).length().mul(1.55).smoothstep(0.8, 0.15).mul(0.24).add(0.76);
+      outputNode = withGrain.mul(vignette);
+    } else if (tier === 1) {
+      // MEDIUM: SMAA only
+      outputNode = smaa(withBloom);
+    } else {
+      // LOW: bloom only
+      outputNode = withBloom;
+    }
+
+    // Reuse existing PostProcessing if available — avoids disposing compiled passes.
+    // Only create a new instance on first call (this.postProcessing is uninitialized).
+    if (!this.postProcessing) {
+      this.postProcessing = new THREE.PostProcessing(this.renderer);
+    }
+    this.postProcessing.outputNode = outputNode;
   }
 
   /** Register a per-frame system. Systems are kept sorted by priority (ascending). */
