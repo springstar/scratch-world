@@ -95,7 +95,116 @@ const CHATTER: Record<Theme, string[]> = {
 	],
 };
 
-// ── Main converter ────────────────────────────────────────────────────────────
+// ── sceneCode generator ───────────────────────────────────────────────────────
+
+const BUILDING_COLORS: Record<string, string> = {
+	tower: "0x888888",
+	shop: "0xc8a87e",
+	house: "0xd4bfa0",
+	cottage: "0xa08060",
+};
+
+function f(n: number): string {
+	return n.toFixed(2);
+}
+
+function cityDataToSceneCode(
+	cityData: CityData,
+	theme: Theme,
+	groundW: number,
+	groundD: number,
+	cx: number,
+	cz: number,
+	minX: number,
+	maxX: number,
+	minZ: number,
+	maxZ: number,
+): string {
+	const skybox = THEME_ENV[theme].skybox;
+	const hdri = theme !== "modern" ? ", hdri: true" : "";
+	const lines: string[] = [];
+
+	lines.push(`stdlib.setupLighting({ skybox: "${skybox}"${hdri} });`);
+	lines.push(`scene.fog = null;`); // city scenes look better without fog cutoff
+
+	// Ground
+	lines.push(
+		`stdlib.makeTerrain("floor", { width: ${f(groundW + 40)}, depth: ${f(groundD + 40)}, position: { x: ${f(cx)}, y: 0, z: ${f(cz)} } });`,
+	);
+
+	// Road material shared across all segments
+	lines.push(`const _hwMat = stdlib.makeMat(0x555555, 0.95, 0);`);
+	lines.push(`const _rdMat = stdlib.makeMat(0x7a6a50, 0.95, 0);`);
+
+	// Roads — each as a flat PlaneGeometry inside a Group for correct Y rotation
+	for (const seg of cityData.segments) {
+		const mx = (seg.start.x + seg.end.x) / 2;
+		const mz = (seg.start.y + seg.end.y) / 2;
+		const dx = seg.end.x - seg.start.x;
+		const dz = seg.end.y - seg.start.y;
+		const len = Math.sqrt(dx * dx + dz * dz);
+		if (len < 0.5) continue;
+		const rotY = Math.atan2(dz, dx);
+		const w = seg.highway ? 3.5 : 2.0;
+		const mat = seg.highway ? "_hwMat" : "_rdMat";
+		lines.push(
+			`{ const _g=new THREE.Group(); const _m=new THREE.Mesh(new THREE.PlaneGeometry(${f(w)},${f(len)}),${mat}); _m.rotation.x=-Math.PI/2; _g.add(_m); _g.position.set(${f(mx)},0.01,${f(mz)}); _g.rotation.y=${f(rotY)}; _g.receiveShadow=true; scene.add(_g); }`,
+		);
+	}
+
+	// Buildings
+	for (const building of cityData.buildings) {
+		const bcx = building.bounds.x + building.bounds.width / 2;
+		const bcz = building.bounds.y + building.bounds.height / 2;
+		const typeId = building.type.id;
+		const bMeta = buildingMeta(typeId);
+		const rotY = (building.rotation * Math.PI) / 180;
+		const col = BUILDING_COLORS[typeId] ?? "0x8b7355";
+		lines.push(
+			`stdlib.makeBuilding({ width: ${f(building.bounds.width)}, depth: ${f(building.bounds.height)}, height: ${bMeta.buildingHeight}, style: "${bMeta.buildingStyle}", color: ${col}, position: { x: ${f(bcx)}, y: 0, z: ${f(bcz)} }, rotationY: ${f(rotY)} });`,
+		);
+	}
+
+	// Trees
+	const treePositions = perimeter10(minX, maxX, minZ, maxZ);
+	for (const [tx, tz] of treePositions) {
+		lines.push(`stdlib.makeTree({ position: { x: ${f(tx)}, y: 0, z: ${f(tz)} } });`);
+	}
+
+	// NPCs (fire-and-forget Promises; scene updates when models load)
+	const shopBuildings = cityData.buildings.filter((b) => b.type.id === "shop");
+	const npcChatter = CHATTER[theme].slice(0, 4);
+	const npcNames =
+		theme === "medieval"
+			? ["Village Guard", "Wandering Merchant", "Town Crier", "Curious Traveller"]
+			: theme === "fantasy"
+				? ["Elven Wanderer", "Mage Apprentice", "Spirit Guide", "Market Vendor"]
+				: ["Pedestrian", "Street Vendor", "Courier", "Local Resident"];
+	const chatterJSON = JSON.stringify(npcChatter);
+
+	for (let i = 0; i < Math.min(4, npcNames.length); i++) {
+		const shop = shopBuildings[i % Math.max(shopBuildings.length, 1)];
+		let nx: number, nz: number;
+		if (shop) {
+			nx = shop.bounds.x + shop.bounds.width / 2 + (i % 2 === 0 ? 2 : -2);
+			nz = shop.bounds.y + shop.bounds.height / 2 + 1.5;
+		} else {
+			const angle = (i / 4) * Math.PI * 2;
+			nx = cx + Math.cos(angle) * 8;
+			nz = cz + Math.sin(angle) * 8;
+		}
+		lines.push(
+			`stdlib.makeNpc({ position: { x: ${f(nx)}, y: 0, z: ${f(nz)} }, moveMode: "randomwalk", speed: 0.8, maxRadius: 4, chatter: ${chatterJSON} });`,
+		);
+	}
+
+	// Camera at street level looking into town
+	const camZ = maxZ + 12;
+	lines.push(`camera.position.set(${f(cx)}, 1.7, ${f(camZ)});`);
+	lines.push(`controls.target.set(${f(cx)}, 1, ${f(cz)});`);
+
+	return lines.join("\n");
+}
 
 export function cityDataToSceneData(cityData: CityData, theme: Theme = "medieval", _prompt: string = ""): SceneData {
 	// Reset name counters so each call is independent
@@ -274,7 +383,8 @@ export function cityDataToSceneData(cityData: CityData, theme: Theme = "medieval
 		},
 	];
 
-	return { objects, environment, viewpoints };
+	const sceneCode = cityDataToSceneCode(cityData, theme, groundW, groundD, cx, cz, minX, maxX, minZ, maxZ);
+	return { objects, environment, viewpoints, sceneCode };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
