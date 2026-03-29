@@ -7,8 +7,13 @@
  *   diff    — diffuse / albedo color map
  *   nor_gl  — OpenGL normal map
  *   rough   — roughness map
- *   ao      — ambient occlusion (requires UV2 on geometry — call setupUv2() first)
  *   disp    — displacement / height map (requires subdivided geometry)
+ *
+ * Note: AO maps are intentionally excluded. The renderer's GTAO post-processing
+ * provides scene-level ambient occlusion that is higher quality than per-material
+ * aoMap textures. Including aoMap would push the per-stage sampled texture count
+ * over WebGPU's hardware limit of 16 when combined with GTAO, SMAA, bloom, and
+ * the IBL/shadow textures that Three.js binds globally.
  *
  * Polyhaven CDN: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/{id}/{id}_{map}_2k.jpg
  */
@@ -128,17 +133,8 @@ export function applyTerrainPbr(
     })
     .catch(() => {});
 
-  // Ambient occlusion — adds contact shadows in crevices
-  // Requires geometry to have uv1/uv2 attribute (call setupUv2 beforehand)
-  loadTex(textureId, "ao")
-    .then((ao) => {
-      ao.repeat.set(repeat, repeat);
-      mat.aoMap = ao;
-      mat.aoMapIntensity = 1.2;
-      mat.needsUpdate = true;
-      onUpdate();
-    })
-    .catch(() => {});
+  // NOTE: aoMap intentionally omitted — GTAO post-processing handles AO scene-wide.
+  // Adding aoMap pushes the per-stage sampled texture count past the WebGPU limit of 16.
 
   // Displacement map — real geometric surface detail
   // Only meaningful with subdivided geometry; scale=0 skips it
@@ -163,10 +159,11 @@ export function applyTerrainPbr(
  * Because the material uses a custom colorNode, the legacy mat.map property is
  * ignored by the WebGPU renderer. This function wires each map in as a proper
  * TSL node so all channels take effect:
- *   colorNode  — diffuse albedo tinted by slope blend (top vs side colour)
- *   normalNode — Polyhaven normal map
+ *   colorNode     — diffuse albedo tinted by slope blend (top vs side colour)
+ *   normalNode    — Polyhaven normal map
  *   roughnessNode — roughness channel (red channel of roughness map)
- *   aoNode     — ambient occlusion channel (red channel of AO map)
+ *
+ * Note: aoNode intentionally omitted — same texture budget reason as applyTerrainPbr.
  *
  * @param mat        MeshStandardNodeMaterial to upgrade
  * @param textureId  Polyhaven asset ID (e.g. "aerial_grass_rock")
@@ -221,13 +218,5 @@ export function applyTerrainPbrNode(
     })
     .catch(() => {});
 
-  // Ambient occlusion — sample red channel
-  loadTex(textureId, "ao")
-    .then((ao) => {
-      ao.repeat.set(repeat, repeat);
-      mat.aoNode      = texture(ao).r;
-      mat.needsUpdate = true;
-      onUpdate();
-    })
-    .catch(() => {});
+  // NOTE: aoNode intentionally omitted — GTAO post-processing handles AO scene-wide.
 }
