@@ -1,6 +1,6 @@
 {
-  "generator": null,
-  "renderer": "renderer-threejs",
+  "generator": "generator-claude",
+  "renderer": null,
   "threejs_disabled": [
     "threejs-animation",
     "threejs-fundamentals",
@@ -9,6 +9,8 @@
     "threejs-lighting",
     "threejs-materials",
     "threejs-shaders",
-    "threejs-textures"
+    "threejs-textures",
+    "threejs-postprocessing",
+    "threejs-loaders"
   ]
 }

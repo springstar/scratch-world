@@ -14,6 +14,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
   const [hovered, setHovered] = useState<string | null>(null);
   const [fading, setFading] = useState(false);
   const [gpuSupported] = useState(() => !!navigator.gpu);
+  const [fpLocked, setFpLocked] = useState(false);
   // Drag detection: skip click if mouse moved more than threshold pixels
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
   const DRAG_THRESHOLD = 5;
@@ -30,6 +31,15 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
       rendererRef.current = null;
     };
   }, [gpuSupported]);
+
+  // Track pointer lock state via browser event
+  useEffect(() => {
+    const onLockChange = () => {
+      setFpLocked(!!document.pointerLockElement);
+    };
+    document.addEventListener("pointerlockchange", onLockChange);
+    return () => document.removeEventListener("pointerlockchange", onLockChange);
+  }, []);
 
   // Reload scene when data changes — fade out → load → fade in
   useEffect(() => {
@@ -64,6 +74,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (fpLocked) return; // pointer locked — no raycasting
       const r = rendererRef.current;
       if (!r) return;
       const { x, y } = toNdc(e);
@@ -74,11 +85,12 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
         r.highlightObject(id);
       }
     },
-    [hovered, toNdc],
+    [hovered, toNdc, fpLocked],
   );
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (fpLocked) return; // clicks swallowed by browser in pointer lock, but guard anyway
       // Skip clicks that resulted from a drag (OrbitControls rotation)
       const down = mouseDownPos.current;
       if (down) {
@@ -93,13 +105,14 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
       const hit = r.pick(x, y);
       if (hit) {
         onObjectClick(hit.objectId, hit.name, hit.interactable);
-        if (hit.interactable) {
-          r.triggerNpcChatter(hit.objectId);
-        }
       }
     },
-    [onObjectClick, toNdc],
+    [onObjectClick, toNdc, fpLocked],
   );
+
+  const handleEnterWalkMode = useCallback(() => {
+    rendererRef.current?.enterPointerLock();
+  }, []);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -115,12 +128,76 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
       ) : (
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: "100%", display: "block", cursor: hovered ? "pointer" : "default" }}
+          style={{ width: "100%", height: "100%", display: "block", cursor: fpLocked ? "none" : hovered ? "pointer" : "default" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onClick={handleClick}
         />
       )}
+
+      {/* Walk mode button — bottom-right corner */}
+      {gpuSupported && !fpLocked && (
+        <button
+          onClick={handleEnterWalkMode}
+          title="Enter walk mode (WASD + mouse look)"
+          style={{
+            position: "absolute",
+            bottom: 12,
+            right: 12,
+            background: "rgba(0,0,0,0.55)",
+            color: "#fff",
+            border: "1px solid rgba(255,255,255,0.18)",
+            borderRadius: 8,
+            padding: "6px 12px",
+            fontSize: 13,
+            cursor: "pointer",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            letterSpacing: 0.3,
+          }}
+        >
+          <span style={{ fontSize: 16 }}>&#x1F9CD;</span> Walk
+        </button>
+      )}
+
+      {/* Crosshair + ESC hint while pointer is locked */}
+      {fpLocked && (
+        <>
+          {/* Crosshair */}
+          <div style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            pointerEvents: "none",
+            width: 20,
+            height: 20,
+          }}>
+            <div style={{ position: "absolute", top: 9, left: 0, width: 20, height: 2, background: "rgba(255,255,255,0.8)" }} />
+            <div style={{ position: "absolute", top: 0, left: 9, width: 2, height: 20, background: "rgba(255,255,255,0.8)" }} />
+          </div>
+          {/* ESC hint */}
+          <div style={{
+            position: "absolute",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(0,0,0,0.45)",
+            color: "rgba(255,255,255,0.7)",
+            fontSize: 12,
+            padding: "4px 12px",
+            borderRadius: 6,
+            pointerEvents: "none",
+            backdropFilter: "blur(4px)",
+            letterSpacing: 0.3,
+          }}>
+            WASD to move &middot; Mouse to look &middot; Shift to sprint &middot; ESC to exit
+          </div>
+        </>
+      )}
+
       {/* Scene transition overlay — fades in when a new scene loads, then fades out */}
       <div
         style={{

@@ -127,6 +127,8 @@ interface Scene {
   sceneData: SceneData;         // provider-agnostic representation
   providerRef: ProviderRef;     // opaque handle back to the 3D provider
   version: number;              // incremented on every update
+  status?: "generating" | "ready" | "failed"; // async generation lifecycle
+  operationId?: string;         // provider operationId while status === "generating"
   createdAt: number;
   updatedAt: number;
 }
@@ -247,8 +249,8 @@ Versioning: every mutation increments `scene.version` and stores a snapshot, ena
 ### 7. 3D Provider Interface
 
 ```typescript
-interface ThreeDProvider {
-  name: string;
+interface SceneRenderProvider {
+  readonly name: string;
 
   // Generate a new scene from a text prompt
   generate(prompt: string, options?: GenerateOptions): Promise<ProviderResult>;
@@ -256,8 +258,12 @@ interface ThreeDProvider {
   // Incrementally edit an existing scene
   edit(ref: ProviderRef, instruction: string, options?: EditOptions): Promise<ProviderResult>;
 
-  // Retrieve current state (for sync after external edits)
+  // Retrieve current scene state
   describe(ref: ProviderRef): Promise<ProviderDescription>;
+
+  // Optional async generation methods
+  startGeneration?(prompt: string, options?: GenerateOptions): Promise<{ operationId: string }>;
+  checkGeneration?(operationId: string): Promise<ProviderResult | null>;
 }
 
 interface ProviderResult {
@@ -265,11 +271,26 @@ interface ProviderResult {
   viewUrl: string;        // shareable link the bot sends back to the user
   thumbnailUrl?: string;
   sceneData: SceneData;   // parsed, provider-agnostic scene graph
+  splatUrlTemplate?: string; // template for splat URL (e.g., /splat/{sceneId})
 }
 ```
 
-`MarbleProvider` implements this against the WorldLabs Marble API.
-`StubProvider` returns static fixtures for local development without API keys.
+**Implementations:**
+- `MarbleProvider` — implements async interface with `startGeneration()` and `checkGeneration()`
+- `LLMProvider` — implements async interface via Claude
+- `StubProvider` — synchronous, returns static fixtures for local development without API keys
+
+### Generation Queue
+
+When a provider implements `startGeneration()`, the tool delegates to `GenerationQueue`:
+
+1. Call `provider.startGeneration(prompt)` → returns `operationId`
+2. Create `Scene` with `status="generating"`, `operationId` field set
+3. Return immediately to agent with scene details
+4. `GenerationQueue` polls `provider.checkGeneration(operationId)` every 3 seconds
+5. When result arrives (or timeout/error), call `SceneManager.completeScene()` or `failScene()`
+6. Broadcast `scene_created` or `scene_updated` event via WebSocket with final `status="ready"`
+7. Transient errors (network blips) retry up to 5 consecutive times before permanent failure
 
 ---
 
@@ -300,7 +321,7 @@ The Viewer API reuses `SceneManager` and `SessionManager` directly — no duplic
 
 A single-page web application, platform-agnostic. Opened by the channel adapter after a scene is created or updated.
 
-**Stack (MVP):** Vite + React + Three.js (or Babylon.js)
+**Stack (MVP):** Vite + React + Three.js or Gaussian Splat viewer (@sparkjsdev/spark)
 
 **Responsibilities:**
 - Load `SceneData` from Viewer API on mount

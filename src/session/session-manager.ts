@@ -322,15 +322,20 @@ export class SessionManager {
 			.split("\n\n## Three.js Reference")[0]
 			.split("\n\nIMPORTANT: The active 3D world provider")[0];
 
-		const provider = this.sceneManager.getActiveProvider();
-		if (provider.startGeneration) {
-			prompt +=
-				"\n\nIMPORTANT: The active 3D world provider generates the scene automatically from the prompt. " +
-				"When calling create_scene or update_scene, provide ONLY `prompt` (and optional `title`). " +
-				"Do NOT provide `sceneData` or `sceneCode` — the provider ignores them and will overwrite with its own output.";
-		}
-
 		const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
+
+		// Only inject the provider-auto-generate notice when no generator skill is active.
+		// When generator-claude (or any generator skill) is active, the agent writes sceneCode
+		// directly in the tool call — the provider's startGeneration path is bypassed.
+		if (!generatorMd) {
+			const provider = this.sceneManager.getActiveProvider();
+			if (provider.startGeneration) {
+				prompt +=
+					"\n\nIMPORTANT: The active 3D world provider generates the scene automatically from the prompt. " +
+					"When calling create_scene or update_scene, provide ONLY `prompt` (and optional `title`). " +
+					"Do NOT provide `sceneData` or `sceneCode` — the provider ignores them and will overwrite with its own output.";
+			}
+		}
 		if (generatorMd) {
 			prompt += `\n\n## Scene Generation\n\n${generatorMd}`;
 		}
