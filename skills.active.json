@@ -11,6 +11,7 @@
     "threejs-shaders",
     "threejs-textures",
     "threejs-postprocessing",
-    "threejs-loaders"
+    "threejs-loaders",
+    "webgpu-threejs-tsl"
   ]
 }

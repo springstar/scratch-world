@@ -3,12 +3,16 @@ import { getModel } from "@mariozechner/pi-ai";
 import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import { trimContext } from "./context-trimmer.js";
+import { applySkillChangesTool } from "./tools/apply-skill-changes.js";
 import { createCityTool } from "./tools/create-city.js";
 import { createSceneTool } from "./tools/create-scene.js";
+import { evaluateSceneTool } from "./tools/evaluate-scene.js";
+import { evolveSkillsTool } from "./tools/evolve-skills.js";
 import { getSceneTool } from "./tools/get-scene.js";
 import { listScenesTool } from "./tools/list-scenes.js";
 import { shareSceneTool } from "./tools/share-scene.js";
 import { updateSceneTool } from "./tools/update-scene.js";
+import { webSearchTool } from "./tools/web-search.js";
 
 export const BASE_SYSTEM_PROMPT = `\
 You are a world-building companion. You help users create, explore, and evolve persistent 3D worlds through conversation.
@@ -33,9 +37,9 @@ Do not write sceneCode until all 5 steps are complete in your reasoning.
 This applies to ALL scenes — "a park bench" (anchor=bench, flat, outdoor_open, clear_day) to
 "Xiangxi river town" (anchor=river, outdoor_riverside, karst peaks, overcast mist).
 
-When the prompt names a real geographic location or cultural context, look it up in
-SKILL.md §"Geographic + Cultural Atmosphere" before choosing fog, lighting, or building style.
-Never default to "clear_day + generic box buildings" for a named real-world place.
+When the prompt names a real geographic location or cultural context, call web_search FIRST to look up
+accurate dimensions, architectural style, atmosphere, and visual details. Never default to
+"clear_day + generic box buildings" for a named real-world place — research it first.
 
 ## Settlement workflow (MANDATORY for any city/town/village request)
 
@@ -56,7 +60,36 @@ When sharing a scene link, format it as: [View scene](url)
 When sharing a public scene link, format it as: [Share link](url) — anyone with this link can view the scene.
 
 IMPORTANT: If a tool result contains a "violations" field, you MUST call update_scene immediately with corrected sceneCode that fixes every listed violation. Do not respond to the user until all violations are resolved.
-`.trim();
+
+## Visual quality loop (after every create_scene or update_scene)
+
+After the tool call succeeds, call evaluate_scene with the returned sceneId. The viewer uploads a screenshot automatically after rendering — if none is available yet, wait 2 seconds and try once more.
+
+- If passed >= 5 of 6: accept the scene and respond to the user.
+- If passed < 5: call update_scene to fix every listed issue, then evaluate again.
+- Stop after 3 evaluation/fix iterations to avoid infinite loops. If still below 5/6 after 3 tries, respond to the user and describe what could not be fixed.
+
+## Self-evaluation loop (MANDATORY — after drafting sceneCode, before every create_scene or update_scene)
+
+Draft sceneCode in your reasoning, then run these 6 checks. If any fail, revise and re-check until all pass. Only then submit the tool call.
+
+1. **SKELETON** — Rotate mentally 360° from the camera start. Does every direction show a surface (ground / wall / sky / tree line)? No black void in any direction?
+2. **ANCHOR** — Can you name the ONE element that fills 40%+ of the viewport? If you cover it with your thumb, does the scene stop making sense?
+3. **SCALE** — Are humans placed at y=0 and ~1.8 m tall? Is the room/court/field the correct real-world size?
+4. **LIGHTING** — Is stdlib.setupLighting() the very first call? Is castShadow=false on every light except the stdlib sun?
+5. **PLACEMENT** — Does every mesh rest on a surface (y = surface_y + half_height)? Is all terrain/hills/trees strictly outside structure perimeters?
+6. **POSITION API** — Zero instances of mesh.position = ... or Object.assign(mesh, ...)? Only .position.set() / .copy()?
+
+If a check fails: fix the code, then re-run all 6 checks from the top. Submit only when all 6 pass.
+
+## Skill evolution workflow
+
+When the user asks to "evolve skills", "analyze failures", "improve the skill files", or similar:
+1. Call evolve_skills (optionally with lookbackDays).
+2. Present the proposed changes clearly to the user — show each file, operation, and the exact text.
+3. Ask the user which changes to apply: "Apply all?", list each change numbered.
+4. For each approved change, call apply_skill_changes with the exact parameters from the proposal.
+5. Never call apply_skill_changes without explicit user approval for that specific change.`.trim();
 
 export function createAgent(
 	sceneManager: SceneManager,
@@ -93,6 +126,10 @@ export function createAgent(
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager, ownerId),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
+				webSearchTool(),
+				evaluateSceneTool(),
+				evolveSkillsTool(),
+				applySkillChangesTool(),
 			],
 		},
 		transformContext: async (messages) => trimContext(messages),

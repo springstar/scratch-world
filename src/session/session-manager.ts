@@ -2,6 +2,7 @@ import type { Agent } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createAgent } from "../agent/agent-factory.js";
 import { trimContext } from "../agent/context-trimmer.js";
+import { isRejectionSignal, logFeedback } from "../agent/feedback-logger.js";
 import type { ChannelGateway } from "../channels/gateway.js";
 import type { ChatMessage } from "../channels/types.js";
 import type { GenerationQueue } from "../generation/generation-queue.js";
@@ -189,6 +190,16 @@ export class SessionManager {
 				data: img.base64,
 				mimeType: img.mimeType,
 			}));
+			// Log rejection signals for skill evolution before the agent processes them
+			if (text && isRejectionSignal(text)) {
+				logFeedback({
+					ts: Date.now(),
+					source: "user_rejection",
+					sceneId: existing?.activeSceneId ?? null,
+					sessionId,
+					data: { text },
+				});
+			}
 			// Prepend player position as spatial context so the agent can use it for object placement
 			const promptText = playerPosition
 				? `[玩家当前位置: x=${playerPosition.x.toFixed(1)}, y=${playerPosition.y.toFixed(1)}, z=${playerPosition.z.toFixed(1)}]\n${text}`

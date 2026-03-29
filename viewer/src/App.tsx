@@ -3,6 +3,7 @@ import { ViewerCanvas } from "./components/ViewerCanvas.js";
 import { MarbleViewer } from "./components/MarbleViewer.js";
 import { SplatViewer } from "./components/SplatViewer.js";
 import { NarrativeOverlay } from "./components/NarrativeOverlay.js";
+import { uploadScreenshot } from "./api.js";
 import { ViewpointBar } from "./components/ViewpointBar.js";
 import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
@@ -242,7 +243,13 @@ export function App() {
           ) : scene.providerRef.provider === "marble" && scene.providerRef.viewUrl ? (
             <MarbleViewer marbleUrl={scene.providerRef.viewUrl} sceneData={scene.sceneData} />
           ) : (
-            <ViewerCanvas sceneData={scene.sceneData} onObjectClick={handleObjectClick} activeViewpoint={activeViewpoint} />
+            <ViewerCanvas
+                sceneData={scene.sceneData}
+                onObjectClick={handleObjectClick}
+                activeViewpoint={activeViewpoint}
+                sceneId={scene.sceneId}
+                onScreenshot={uploadScreenshot}
+              />
           )
         ) : (
           <div style={{ position: "relative", width: "100%", height: "100%" }}>

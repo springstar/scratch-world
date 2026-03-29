@@ -13,6 +13,7 @@ import { chatRoute } from "./routes/chat.js";
 import { generatorsRoute } from "./routes/generators.js";
 import { interactRoute } from "./routes/interact.js";
 import { scenesRoute } from "./routes/scenes.js";
+import { screenshotsRoute } from "./routes/screenshots.js";
 import { splatProxyRoute } from "./routes/splat-proxy.js";
 
 export interface ViewerApiOptions {
@@ -62,6 +63,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.use("/uploads/*", serveStatic({ root: projectRoot }));
 
 	app.route("/scenes", scenesRoute(sceneManager, projectRoot));
+	app.route("/screenshots", screenshotsRoute);
 	app.route("/interact", interactRoute(sessionManager, bus));
 	app.route("/chat", chatRoute(sessionManager, bus));
 	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));

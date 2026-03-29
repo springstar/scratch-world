@@ -19,9 +19,10 @@ import {
   type MakeRiverOpts,
   type MakeKarstPeakOpts,
   type MakeTerracedSlopeOpts,
+  type MakeGatewayOpts,
 } from "./scene-stdlib-natural.js";
 
-export type { MakeRiverOpts, MakeKarstPeakOpts, MakeTerracedSlopeOpts };
+export type { MakeRiverOpts, MakeKarstPeakOpts, MakeTerracedSlopeOpts, MakeGatewayOpts };
 
 // ── Type palette ──────────────────────────────────────────────────────────────
 const TYPE_COLORS: Record<string, number> = {
@@ -273,6 +274,7 @@ export interface StdlibApi {
   makeRiver(opts?: MakeRiverOpts): THREE.Group;
   makeKarstPeak(opts?: MakeKarstPeakOpts): THREE.Group;
   makeTerracedSlope(opts?: MakeTerracedSlopeOpts): THREE.Group;
+  makeGateway(opts?: MakeGatewayOpts): THREE.Group;
 
   // Utilities
   colorFor(type: string): number;

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import type { SkillManifest } from "./types.js";
@@ -110,9 +110,7 @@ export class SkillLoader {
 	getActivePromptMarkdown(category: "generator" | "renderer"): string | null {
 		const skill = this.getActiveSkill(category);
 		if (!skill) return null;
-		const mdPath = join(BUILT_IN_DIR, skill.name, "SKILL.md");
-		if (!existsSync(mdPath)) return null;
-		return readFileSync(mdPath, "utf-8");
+		return this.readSkillDir(join(BUILT_IN_DIR, skill.name));
 	}
 
 	/** Pass name="none" to deactivate the skill for this category (use provider path). */
@@ -133,13 +131,23 @@ export class SkillLoader {
 		const disabled: string[] = Array.isArray(active.threejs_disabled) ? (active.threejs_disabled as string[]) : [];
 		const skills = BUILT_IN_SKILLS.filter((s) => s.category === "threejs" && !disabled.includes(s.name));
 		if (skills.length === 0) return null;
-		const parts = skills
-			.map((s) => {
-				const mdPath = join(BUILT_IN_DIR, s.name, "SKILL.md");
-				if (!existsSync(mdPath)) return null;
-				return readFileSync(mdPath, "utf-8");
-			})
-			.filter(Boolean);
+		const parts = skills.map((s) => this.readSkillDir(join(BUILT_IN_DIR, s.name))).filter(Boolean);
+		return parts.length > 0 ? parts.join("\n\n---\n\n") : null;
+	}
+
+	/** Read all .md files in a skill directory, sorted alphabetically, and concatenate. */
+	private readSkillDir(skillDir: string): string | null {
+		if (!existsSync(skillDir)) return null;
+		let files: string[];
+		try {
+			files = readdirSync(skillDir)
+				.filter((f) => f.endsWith(".md"))
+				.sort();
+		} catch {
+			return null;
+		}
+		if (files.length === 0) return null;
+		const parts = files.map((f) => readFileSync(join(skillDir, f), "utf-8")).filter(Boolean);
 		return parts.length > 0 ? parts.join("\n\n---\n\n") : null;
 	}
 

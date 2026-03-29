@@ -1,5 +1,11 @@
 # renderer-threejs
 
+> **DEPRECATED — do not activate alongside `generator-claude`.**
+> This skill describes the sceneData JSON object approach (type/shape/metadata arrays).
+> `generator-claude` uses the incompatible `sceneCode` path exclusively.
+> Activating both simultaneously gives the model two mutually exclusive generation strategies.
+> Keep `renderer: null` in skills.active.json when generator-claude is active.
+
 Three.js rendering capabilities reference for scratch-world. Use this to understand what the viewer
 can render when generating sceneData — the richer the sceneData, the better the visual output.
 

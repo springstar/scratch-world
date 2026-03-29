@@ -39,7 +39,7 @@ export interface MakeRiverOpts {
 export interface MakeKarstPeakOpts {
   /** Total height in metres (default 60) */
   height?: number;
-  /** Base radius in metres (default 12) */
+  /** Base radius in metres (default 20) */
   radius?: number;
   /** Rock colour hex (default 0x6a7060 — grey-green limestone) */
   color?: number;
@@ -69,12 +69,32 @@ export interface MakeTerracedSlopeOpts {
   rotationY?: number;
 }
 
+// ── makeGateway ──────────────────────────────────────────────────────────────
+
+export interface MakeGatewayOpts {
+  /** Total height in metres (default 10) */
+  height?: number;
+  /** Total width in metres (default 14) */
+  width?: number;
+  /** Depth / thickness along Z axis (default 3) */
+  depth?: number;
+  /** Arch crown height above ground — must be < height (default 6) */
+  archHeight?: number;
+  /** Arch opening width — must be < width (default 6) */
+  archWidth?: number;
+  /** Base colour — default 0xd4c8a0 (limestone cream) */
+  color?: number;
+  position?: Vec3;
+  rotationY?: number;
+}
+
 // ── Factory ──────────────────────────────────────────────────────────────────
 
 export interface NaturalStdlibFns {
   makeRiver(opts?: MakeRiverOpts): THREE.Group;
   makeKarstPeak(opts?: MakeKarstPeakOpts): THREE.Group;
   makeTerracedSlope(opts?: MakeTerracedSlopeOpts): THREE.Group;
+  makeGateway(opts?: MakeGatewayOpts): THREE.Group;
 }
 
 export function createNaturalStdlib(
@@ -119,8 +139,10 @@ export function createNaturalStdlib(
       waterMat,
     );
     water.rotation.x = -Math.PI / 2;
-    water.position.set(0, waterY, 0);
-    water.receiveShadow = true;
+    // Offset 2 cm above ground plane to prevent z-fighting with the floor mesh
+    water.position.set(0, waterY + 0.02, 0);
+    // No shadow reception — prevents scan-line acne at oblique viewing angles
+    water.receiveShadow = false;
     g.add(water);
 
     // Banks — thin muddy platforms either side of the channel
@@ -152,22 +174,25 @@ export function createNaturalStdlib(
   // ── makeKarstPeak ──────────────────────────────────────────────────────────
   function makeKarstPeak(opts: MakeKarstPeakOpts = {}): THREE.Group {
     const height  = opts.height ?? 60;
-    const radius  = opts.radius ?? 12;
+    const radius  = opts.radius ?? 20;
     const color   = opts.color  ?? 0x6a7060;
     const mist    = opts.mist   ?? true;
     const pos     = opts.position ?? { x: 0, y: 0, z: 0 };
 
     const g = new THREE.Group();
 
-    // Karst silhouette profile: near-vertical sides + bulge near top + concave waist
-    // These [x, y] points are normalized [0..1] and scaled by radius/height
+    // Karst silhouette profile — wider base gives mountain proportions, not a spire.
+    // X values are normalized [0..1] relative to `radius`; Y values relative to `height`.
+    // The profile flares from a narrow rounded tip to a broad base (aspect ~2:1).
     const profilePts: [number, number][] = [
-      [0,    1.00], // peak tip
-      [0.08, 0.82], // slight bulge near top
-      [0.25, 0.60], // concave waist
-      [0.35, 0.75], // secondary bulge
-      [0.45, 0.55], // lower concave
-      [0.50, 0.00], // base
+      [0.00, 1.00], // peak tip
+      [0.10, 0.88], // slight shoulder near apex
+      [0.28, 0.70], // concave waist
+      [0.42, 0.80], // bulge below waist
+      [0.55, 0.55], // lower concave
+      [0.72, 0.25], // broad lower flare
+      [0.85, 0.08], // near-base spread
+      [1.00, 0.00], // base edge
     ];
     const points = profilePts.map(([r, y]) => new THREE.Vector2(r * radius, y * height));
 
@@ -177,10 +202,12 @@ export function createNaturalStdlib(
       metalness: 0.0,
     });
     applyTerrainPbr(spineMat, "rock_face", 3, inv);
-    const spineGeo = new THREE.LatheGeometry(points, 10);
+    // 24 lathe segments for a smooth silhouette (10 segments looks faceted/architectural)
+    const spineGeo = new THREE.LatheGeometry(points, 24);
     const spine = new THREE.Mesh(spineGeo, spineMat);
     spine.castShadow = true;
-    spine.receiveShadow = true;
+    // Disable self-shadowing — the concave profile produces harsh dark bands otherwise
+    spine.receiveShadow = false;
     g.add(spine);
 
     // Mist planes — semi-transparent quads at 30 / 50 / 65% of peak height
@@ -275,5 +302,62 @@ export function createNaturalStdlib(
     return g;
   }
 
-  return { makeRiver, makeKarstPeak, makeTerracedSlope };
+  // ── makeGateway ────────────────────────────────────────────────────────────
+  function makeGateway(opts: MakeGatewayOpts = {}): THREE.Group {
+    const height     = opts.height     ?? 10;
+    const width      = opts.width      ?? 14;
+    const depth      = opts.depth      ?? 3;
+    const archHeight = opts.archHeight ?? 6;
+    const archWidth  = opts.archWidth  ?? 6;
+    const color      = opts.color      ?? 0xd4c8a0;
+    const pos        = opts.position   ?? { x: 0, y: 0, z: 0 };
+    const rotY       = opts.rotationY  ?? 0;
+
+    const g = new THREE.Group();
+
+    const halfW   = width / 2;
+    const halfAW  = archWidth / 2;
+    // Height at which the semicircular crown begins (rectangular section below this)
+    const springH = Math.max(0, archHeight - halfAW);
+
+    // Outer silhouette — full rectangle
+    const shape = new THREE.Shape();
+    shape.moveTo(-halfW, 0);
+    shape.lineTo( halfW, 0);
+    shape.lineTo( halfW, height);
+    shape.lineTo(-halfW, height);
+    shape.lineTo(-halfW, 0);
+
+    // Arch opening: rectangular base + semicircular crown
+    if (halfAW > 0 && halfAW < halfW && archHeight > 0 && archHeight < height) {
+      const hole = new THREE.Path();
+      hole.moveTo(-halfAW, 0);
+      hole.lineTo(-halfAW, springH);
+      // Semicircular arch crown — from left spring (Math.PI) to right spring (0), going upward (CCW)
+      hole.absarc(0, springH, halfAW, Math.PI, 0, false);
+      // Now at (halfAW, springH)
+      hole.lineTo(halfAW, 0);
+      hole.lineTo(-halfAW, 0);
+      shape.holes.push(hole);
+    }
+
+    const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+    // Center on Z so the arch faces equally from both sides
+    geo.translate(0, 0, -depth / 2);
+
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.86, metalness: 0.0 });
+    applyTerrainPbr(mat, "rock_face", 5, inv);
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow    = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+
+    g.position.set(pos.x, pos.y, pos.z);
+    g.rotation.y = rotY;
+    scene.add(g);
+    return g;
+  }
+
+  return { makeRiver, makeKarstPeak, makeTerracedSlope, makeGateway };
 }

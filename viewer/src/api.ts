@@ -50,6 +50,18 @@ export async function postChat(payload: {
   }
 }
 
+export async function uploadScreenshot(sceneId: string, dataUrl: string): Promise<void> {
+  const res = await fetch(`${BASE}/screenshots/${sceneId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataUrl }),
+  });
+  if (!res.ok) {
+    // Non-fatal — evaluation will fall back to "no screenshot available"
+    console.warn(`Screenshot upload failed for ${sceneId}: HTTP ${res.status}`);
+  }
+}
+
 export function connectRealtime(
   sessionId: string,
   onEvent: (event: RealtimeEvent) => void,

@@ -6,9 +6,11 @@ interface Props {
   sceneData: SceneData;
   onObjectClick: (objectId: string, name: string, interactable: boolean) => void;
   activeViewpoint?: Viewpoint | null;
+  sceneId?: string;
+  onScreenshot?: (sceneId: string, dataUrl: string) => void;
 }
 
-export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Props) {
+export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint, sceneId, onScreenshot }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<SceneRenderer | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -46,14 +48,29 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint }: Prop
     const r = rendererRef.current;
     if (!r) return;
     setFading(true);
-    // Small delay so the fade-in frame renders before the scene swap
     const t = setTimeout(() => {
       r.loadScene(sceneData)
+        .then(() => {
+          // Push screenshot 1.5s after load to allow async GLTF models to appear
+          if (sceneId && onScreenshot) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+              setTimeout(() => {
+                try {
+                  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+                  onScreenshot(sceneId, dataUrl);
+                } catch {
+                  // Cross-origin or WebGPU canvas restrictions — skip silently
+                }
+              }, 1500);
+            }
+          }
+        })
         .catch(console.error)
         .finally(() => setFading(false));
     }, 80);
     return () => clearTimeout(t);
-  }, [sceneData]);
+  }, [sceneData, sceneId, onScreenshot]);
 
   // Navigate to viewpoint when it changes
   useEffect(() => {
