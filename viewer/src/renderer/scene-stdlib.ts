@@ -345,6 +345,9 @@ export function createStdlib(
         sun.shadow.camera.near =   1; sun.shadow.camera.far = 200;
         sun.shadow.normalBias = 0.02;
         sun.shadow.bias = 0;
+        // Mark as the trusted stdlib sun so the renderer's force-disable traverse skips it.
+        // This allows outdoor shadows to render correctly from the skybox-matched sun direction.
+        sun.userData["isSun"] = true;
       }
       scene.add(sun);
 

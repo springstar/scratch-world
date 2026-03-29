@@ -574,9 +574,10 @@ export class SceneRenderer {
 
     // All scenes use sceneCode. stdlib.setupLighting() takes full control of
     // scene illumination — mute renderer's built-in lights so they don't conflict.
-    // Also disable castShadow so the renderer's sun does not consume a shadow map
-    // texture slot — Apple Silicon WebGPU limits fragment shaders to 16 textures,
-    // and each shadow-casting light uses 2 slots (depth texture + comparison sampler).
+    // Disable this.sun.castShadow: stdlib's outdoor sun (tagged userData.isSun=true)
+    // is the authoritative shadow caster for sceneCode scenes — it uses the skybox-
+    // matched sun direction and a validated 4k shadow map. Having two DirectionalLights
+    // both casting shadows would double the shadow cost and produce conflicting directions.
     // Hide the SkyMesh — sceneCode uses stdlib.setupLighting() for sky which sets
     // scene.background directly (flat color → HDRI JPEG). SkyMesh visible on top
     // of scene.background would obscure the Polyhaven sky texture.
@@ -646,16 +647,15 @@ export class SceneRenderer {
       console.error("[SceneRenderer] sceneCode execution error:", err);
     }
 
-    // Force-disable shadow casting on every light placed by sceneCode.
-    // DirectionalLight and SpotLight shadow maps produce perspective-aliasing stripe
-    // banding on near-horizontal floors (courts, arenas) and frustum-boundary
-    // clipping that appears as irregular geometry slices when the camera rotates.
-    // PointLight cubemap shadows are also expensive and not needed — HDRI environment
-    // provides ambient occlusion. This override applies regardless of what sceneCode
-    // sets, ensuring old and new scenes are both artifact-free.
+    // Force-disable shadow casting on every light placed by sceneCode EXCEPT the stdlib sun.
+    // SpotLight / PointLight shadows cause shadow-map flickering artifacts when the camera
+    // moves and consume WebGPU texture slots. AI-generated DirectionalLights may have
+    // bad frustum settings. Only stdlib.setupLighting()'s outdoor sun (tagged with
+    // userData.isSun = true) is trusted and allowed to cast shadows — it has a validated
+    // 4 k shadow map, correct ±40 frustum, and the right position for the active skybox.
     this.codeGroup.traverse((child) => {
       const light = child as THREE.Light;
-      if (light.isLight && light.castShadow) {
+      if (light.isLight && light.castShadow && !light.userData["isSun"]) {
         light.castShadow = false;
       }
     });
