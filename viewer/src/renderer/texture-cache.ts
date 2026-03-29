@@ -1,7 +1,7 @@
 /**
  * texture-cache.ts
  *
- * Lazy, per-session cache for Polyhaven PBR textures (1k JPG, CC0).
+ * Lazy, per-session cache for Polyhaven PBR textures (2k JPG, CC0).
  *
  * Maps loaded per material (each independently — one failure doesn't block others):
  *   diff    — diffuse / albedo color map
@@ -10,13 +10,13 @@
  *   ao      — ambient occlusion (requires UV2 on geometry — call setupUv2() first)
  *   disp    — displacement / height map (requires subdivided geometry)
  *
- * Polyhaven CDN: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/{id}/{id}_{map}_1k.jpg
+ * Polyhaven CDN: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/{id}/{id}_{map}_2k.jpg
  */
 
 import * as THREE from "three/webgpu";
 import { texture, color, mix, normalMap, normalLocal, vec2 } from "three/tsl";
 
-const CDN = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k";
+const CDN = "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k";
 
 /**
  * Normalize legacy / shorthand texture IDs to the actual Polyhaven asset ID.
@@ -36,7 +36,7 @@ function resolveId(id: string): string {
 }
 
 function texUrl(id: string, map: string): string {
-  return `${CDN}/${id}/${id}_${map}_1k.jpg`;
+  return `${CDN}/${id}/${id}_${map}_2k.jpg`;
 }
 
 const texCache  = new Map<string, THREE.Texture>();
