@@ -351,6 +351,35 @@ dracoLoader.preload();
 const gltfLoader = new GLTFLoader();
 gltfLoader.setDRACOLoader(dracoLoader);
 
+// ---------------------------------------------------------------------------
+// Leaf alpha texture — generated once, shared across all trees.
+// Canvas-drawn ellipse: no external asset, no extra texture slot per material.
+// WebGPU constraint: 16 sampler slots/stage; this costs 1 slot per leaf material.
+// ---------------------------------------------------------------------------
+let _leafAlphaTex: THREE.CanvasTexture | null = null;
+function getLeafAlphaTex(): THREE.CanvasTexture {
+  if (_leafAlphaTex) return _leafAlphaTex;
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  // Draw a soft ellipse — white inside fading to transparent at edges
+  const cx = size / 2;
+  const cy = size / 2;
+  const grad = ctx.createRadialGradient(cx, cy * 0.7, 1, cx, cy, cx * 0.9);
+  grad.addColorStop(0,   "rgba(255,255,255,1.0)");
+  grad.addColorStop(0.7, "rgba(255,255,255,0.9)");
+  grad.addColorStop(1.0, "rgba(255,255,255,0.0)");
+  ctx.scale(1, 1.4);   // stretch to leaf-shaped ellipse
+  ctx.beginPath();
+  ctx.ellipse(cx, cy * 0.75, cx * 0.85, cy * 0.7, 0, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  _leafAlphaTex = new THREE.CanvasTexture(canvas);
+  return _leafAlphaTex;
+}
+
 export function createStdlib(
   scene: THREE.Scene,
   camera: THREE.Camera,
@@ -972,37 +1001,80 @@ export function createStdlib(
         group.add(branch);
       }
 
-      // ── Crown: 8–12 leaf spheres with natural spread ─────────────────────────
-      // Palette shifts green hue with seed (spring-fresh to autumn-muted)
-      const hue   = 0.28 + rng(6) * 0.08;        // 0.28–0.36 (green band)
-      const sat   = 0.45 + rng(7) * 0.25;
-      const lit   = 0.22 + rng(8) * 0.12;
-      const leafColor = new THREE.Color().setHSL(hue, sat, lit);
-      const leafDark  = new THREE.Color().setHSL(hue - 0.02, sat + 0.05, lit - 0.06);
+      // ── Crown: instanced leaf cards ──────────────────────────────────────────
+      // WebGPU-safe strategy:
+      //   • transparent: false  + alphaTest: 0.5  + depthWrite: true
+      //     → alpha discard (no blend sorting), depth buffer intact
+      //   • 1 sampler slot per material (alphaMap only) — well under 16-slot limit
+      //   • side: DoubleSide — leaves visible from both sides
+      //   • 3 color batches → 3 InstancedMesh per tree, ~130 leaves each ≈ 390 total
+      //   • ~780 triangles for the entire crown, negligible overdraw
 
-      const crownBase = trunkH + 0.3;
-      const crownSpan = 1.5 + seed * 1.0;         // horizontal spread
-      const crownH    = 1.8 + seed * 1.2;         // vertical height of crown
+      const hue   = 0.28 + rng(6) * 0.08;   // 0.28–0.36 (green band)
+      const sat   = 0.46 + rng(7) * 0.24;
+      const lit   = 0.21 + rng(8) * 0.12;
+      const leafColors = [
+        new THREE.Color().setHSL(hue,        sat,        lit),          // base
+        new THREE.Color().setHSL(hue + 0.02, sat - 0.06, lit + 0.06),  // highlight
+        new THREE.Color().setHSL(hue - 0.02, sat + 0.06, lit - 0.05),  // shadow
+      ];
 
-      const nClusters = 8 + Math.floor(rng(9) * 5);  // 8–12
-      for (let i = 0; i < nClusters; i++) {
-        const t = i / nClusters;
-        const layerFrac = rng(10 + i);             // position within crown height
-        const angle2    = t * Math.PI * 2 * 2.3999 + seed * 6.28; // golden-ish spiral
-        const rFrac     = 0.2 + rng(11 + i) * 0.8;
-        // Outer clusters sit lower (umbrella profile) or spread wide (round profile)
-        const isOuter = rFrac > 0.5;
-        const cx = Math.sin(angle2) * crownSpan * rFrac;
-        const cy = crownBase + crownH * (isOuter ? layerFrac * 0.5 : 0.35 + layerFrac * 0.65);
-        const cz = Math.cos(angle2) * crownSpan * rFrac;
-        const cr = 0.55 + rng(12 + i) * 0.7;      // 0.55–1.25 m radius
-        const clusterColor = i % 3 === 0 ? leafDark : leafColor;
-        const clMat = new THREE.MeshStandardMaterial({ color: clusterColor, roughness: 0.92 });
-        const cluster = new THREE.Mesh(new THREE.SphereGeometry(cr, 9, 7), clMat);
-        cluster.scale.set(1 + rng(13 + i) * 0.3, 0.70 + rng(14 + i) * 0.25, 1 + rng(15 + i) * 0.3);
-        cluster.position.set(cx, cy, cz);
-        cluster.castShadow = true;
-        group.add(cluster);
+      const crownBase = trunkH + 0.2;
+      const crownRx   = 1.4 + seed * 1.1;   // horizontal semi-axis
+      const crownRy   = 1.6 + seed * 1.2;   // vertical semi-axis
+      const leavesPerBatch = 120 + Math.floor(rng(9) * 60); // 120–180
+
+      const leafGeo = new THREE.PlaneGeometry(0.28, 0.36);  // ~30×36 cm card
+      const alphaTex = getLeafAlphaTex();
+
+      for (let b = 0; b < 3; b++) {
+        const leafMat = new THREE.MeshStandardMaterial({
+          color: leafColors[b],
+          alphaMap: alphaTex,
+          alphaTest: 0.38,       // discard below threshold — no blending, no sorting
+          transparent: false,    // keep depth writes active
+          depthWrite: true,
+          side: THREE.DoubleSide,
+          roughness: 0.88,
+        });
+
+        const im = new THREE.InstancedMesh(leafGeo, leafMat, leavesPerBatch);
+        im.castShadow = false;   // per-leaf shadow too expensive; trunk shadow suffices
+        im.receiveShadow = true;
+
+        const mat4  = new THREE.Matrix4();
+        const pos3  = new THREE.Vector3();
+        const quat  = new THREE.Quaternion();
+        const scl   = new THREE.Vector3();
+        const euler = new THREE.Euler();
+
+        for (let i = 0; i < leavesPerBatch; i++) {
+          const ri = b * leavesPerBatch + i;
+          // Uniform point in ellipsoid via cube-root radius sampling
+          const u    = rng(30 + ri) * 2 - 1;
+          const v    = rng(31 + ri) * 2 - 1;
+          const w    = rng(32 + ri) * 2 - 1;
+          const norm = Math.sqrt(u * u + v * v + w * w) || 1;
+          const r    = Math.cbrt(rng(33 + ri));  // cube-root for uniform volume fill
+          const lx   = (u / norm) * r * crownRx;
+          const ly   = crownBase + crownRy * 0.35 + (v / norm) * r * crownRy;
+          const lz   = (w / norm) * r * crownRx;
+
+          // Orientation: mostly face upward ±45°, random Y rotation
+          euler.set(
+            (rng(34 + ri) - 0.5) * Math.PI * 0.5,   // ±45° tilt
+            rng(35 + ri) * Math.PI * 2,               // full Y spin
+            (rng(36 + ri) - 0.5) * Math.PI * 0.25,   // ±22° roll
+          );
+          quat.setFromEuler(euler);
+          const ls = 0.7 + rng(37 + ri) * 0.7;   // 0.7–1.4× scale variation
+          pos3.set(lx, ly, lz);
+          scl.setScalar(ls);
+          mat4.compose(pos3, quat, scl);
+          im.setMatrixAt(i, mat4);
+        }
+        im.instanceMatrix.needsUpdate = true;
+        group.add(im);
       }
 
       const s = scale ?? (0.80 + rng(20) * 0.50);
