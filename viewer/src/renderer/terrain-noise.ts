@@ -119,6 +119,12 @@ export interface FractalOpts {
 	amplitude?: number;
 	/** Base sea-level offset in metres. Default: 0 */
 	seaLevel?: number;
+	/**
+	 * Domain warp strength — displaces sample point before fBm to break grid regularity.
+	 * Expressed as a fraction of (1/frequency). Default: 0.5.
+	 * Set to 0 to disable warping.
+	 */
+	warpStrength?: number;
 }
 
 const FRACTAL_DEFAULTS: Required<FractalOpts> = {
@@ -128,6 +134,7 @@ const FRACTAL_DEFAULTS: Required<FractalOpts> = {
 	persistence: 0.5,
 	amplitude: 40,
 	seaLevel: 0,
+	warpStrength: 0.5,
 };
 
 // ---------------------------------------------------------------------------
@@ -162,20 +169,35 @@ export function configureTerrain(seed: number, opts: FractalOpts = {}): void {
 export function fractalHeight(wx: number, wz: number, opts: FractalOpts = {}): number {
 	const o = opts && Object.keys(opts).length > 0 ? { ..._fractalOpts, ...opts } : _fractalOpts;
 
+	// Domain warp — offset sample point by low-freq noise before fBm.
+	// Mirrors the official Three.js TSL terrain example's warp step.
+	// Uses a fixed higher-frequency permutation offset (seed+1) so warp
+	// noise is decorrelated from the height noise.
+	let swx = wx;
+	let swz = wz;
+	if (o.warpStrength > 0) {
+		const warpFreq = o.frequency * 4;       // 4× base frequency
+		const warpScale = (1 / o.frequency) * o.warpStrength * 0.18;
+		swx += simplex2(_perm, wx * warpFreq + 3.7, wz * warpFreq + 1.3) * warpScale;
+		swz += simplex2(_perm, wx * warpFreq + 8.1, wz * warpFreq + 5.9) * warpScale;
+	}
+
 	let freq = o.frequency;
 	let amp = 1.0;
 	let max = 0.0;
 	let value = 0.0;
 
 	for (let i = 0; i < o.octaves; i++) {
-		value += simplex2(_perm, wx * freq, wz * freq) * amp;
+		value += simplex2(_perm, swx * freq, swz * freq) * amp;
 		max += amp;
 		freq *= o.lacunarity;
 		amp *= o.persistence;
 	}
 
-	// Normalise to [-1, 1] then scale
-	return (value / max) * o.amplitude + o.seaLevel;
+	// Sharpen ridges: official example uses abs(v).pow(2)*sign to exaggerate peaks
+	const norm = value / max;             // [-1, 1]
+	const shaped = Math.sign(norm) * (norm * norm); // sharpened peaks, softer valleys
+	return shaped * o.amplitude + o.seaLevel;
 }
 
 /**

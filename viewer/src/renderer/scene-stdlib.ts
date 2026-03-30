@@ -8,7 +8,7 @@
  */
 
 import * as THREE from "three/webgpu";
-import { color, normalLocal, positionLocal, mix } from "three/tsl";
+import { color, normalLocal, positionLocal, mix, dot, step, vec3, mx_noise_float } from "three/tsl";
 import { configureTerrain, sampleHeightGrid, getTerrainHeight, type FractalOpts } from "./terrain-noise.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
@@ -1167,40 +1167,62 @@ export function createStdlib(
       pos.needsUpdate = true;
       geo.computeVertexNormals();
 
-      // TSL biome material — positionLocal.y is now the real displaced height
-      // Altitude thresholds in metres (absolute world Y)
-      const C_DEEP    = color(0x1a3f5c);
-      const C_SHALLOW = color(0x2a6a8a);
-      const C_SAND    = color(0xd4b483);
-      const C_GRASS   = color(0x4a7a3a);
-      const C_ROCK    = color(0x7a7060);
-      const C_SNOW    = color(0xf0f0f8);
+      // TSL biome material — ported from Three.js official TSL terrain example
+      // positionLocal.y = real displaced height (CPU-set vertices)
+      // normalLocal = recomputed per-vertex normal after displacement
+      //
+      // Biome logic (matches official example):
+      //   Base: sand
+      //   y > seaLevel+0.5 → grass (height threshold)
+      //   dot(normal, up) < 0.55 AND y > seaLevel+0.5 → rock (SLOPE, not height)
+      //   y > snowThreshold (noisy) → snow (noisy boundary, not a flat line)
+      //
+      // mx_noise_float(pos.xz * freq, 1, 0): TSL MaterialX noise, same API as official example.
+      // Roughness: steep faces rougher (rock), flat faces softer (grass/snow).
 
-      const y = positionLocal.y;
+      const C_SAND  = color(0xd4b483);
+      const C_GRASS = color(0x4a7a3a);
+      const C_ROCK  = color(0x7a706a);
+      const C_SNOW  = color(0xf2f2f8);
+      const C_DEEP  = color(0x1a3f5c);
+      const C_SHORE = color(0x2a6a8a);
+
+      const y   = positionLocal.y;
+      const up  = vec3(0, 1, 0);
 
       // Water depth gradient (below seaLevel)
       const waterBlend = y.smoothstep(seaLevel - 8, seaLevel);
-      const waterCol   = mix(C_DEEP, C_SHALLOW, waterBlend);
+      const waterCol   = mix(C_DEEP, C_SHORE, waterBlend);
 
-      // Land biome stack
-      const sandBlend  = y.smoothstep(seaLevel,       seaLevel + 2);
-      const grassBlend = y.smoothstep(seaLevel + 1.5, seaLevel + 5);
-      const rockBlend  = y.smoothstep(amplitude * 0.45, amplitude * 0.65);
-      const snowBlend  = y.smoothstep(amplitude * 0.70, amplitude * 0.88);
+      // Start from sand, then layer grass/rock/snow above sea level
+      const landBase = C_SAND.toVar();
 
-      const landCol = mix(
-        mix(mix(C_SAND, C_GRASS, grassBlend), C_ROCK, rockBlend),
-        C_SNOW,
-        snowBlend,
+      // Grass: above seaLevel+0.5 (height threshold)
+      const grassMix = step(seaLevel + 0.5, y);
+      landBase.assign(mix(landBase, C_GRASS, grassMix));
+
+      // Rock: steep slope AND above sea level — dot(normal, up) < 0.55
+      // This is the key improvement from the official example: slope detection
+      const slopeness = dot(normalLocal, up);        // 1=flat, 0=vertical
+      const rockMix   = step(seaLevel + 0.5, y).mul( // only on land
+        step(slopeness, 0.55),                         // steep face
       );
+      landBase.assign(mix(landBase, C_ROCK, rockMix));
 
-      // Blend water → land based on seaLevel crossing
+      // Snow: noisy threshold — mx_noise_float breaks up the snow line naturally
+      // Scale xz by 0.04 (=8m wavelength) for visible variation at terrain scale
+      const snowNoise     = mx_noise_float(positionLocal.xz.mul(0.04), 1, 0);
+      const snowThreshold = snowNoise.mul(amplitude * 0.12).add(amplitude * 0.52 + seaLevel);
+      const snowMix       = step(snowThreshold, y);
+      landBase.assign(mix(landBase, C_SNOW, snowMix));
+
+      // Blend water → land at sea level crossing
       const aboveWater = y.smoothstep(seaLevel - 0.5, seaLevel + 0.5);
-      const finalColor = mix(waterCol, mix(C_SAND, landCol, sandBlend), aboveWater);
+      const finalColor = mix(waterCol, landBase, aboveWater);
 
-      // Slope-based roughness: steep = rocky (0.7), flat = soft (0.92)
-      const slopeRough = normalLocal.y.smoothstep(0.3, 0.85);
-      const finalRough = mix(0.7, 0.92, slopeRough);
+      // Roughness: flat grass/snow smoother, steep rock rougher
+      const slopeRough = slopeness.smoothstep(0.3, 0.85);
+      const finalRough = mix(0.72, 0.91, slopeRough);
 
       const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
       // @ts-expect-error TSL node assignment
