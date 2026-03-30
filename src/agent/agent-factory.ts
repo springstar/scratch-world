@@ -93,9 +93,19 @@ When the user asks to "evolve skills", "analyze failures", "improve the skill fi
 4. For each approved change, call apply_skill_changes with the exact parameters from the proposal.
 5. Never call apply_skill_changes without explicit user approval for that specific change.
 
+## Tree and material rules (MANDATORY — no exceptions)
+
+NEVER write custom tree functions (rainTree, makeForestTree, treeGen, etc.) that build crowns from SphereGeometry or trunks from CylinderGeometry. These produce sphere-lollipop trees regardless of how many spheres you use.
+
+ALWAYS use stdlib.makeTree() for every individual tree. It uses InstancedMesh leaf cards with bark PBR — it is strictly better than any hand-rolled sphere approach. For forests, use a loop:
+
+  stdlib.makeTree({ position: { x, y: stdlib.getTerrainHeight(x, z), z } })
+
+NEVER use MeshLambertMaterial. It ignores PBR. Every surface must use stdlib.makeMat() (MeshStandardMaterial) or stdlib.makePhysicalMat() as minimum. This applies to trunks, ground, buildings, water, everything.
+
 ## Asset-first scene generation
 
-Before generating sceneCode for trees, buildings, vehicles, rocks, props, or animals:
+Before generating sceneCode for buildings, vehicles, rocks, props, or animals:
 1. Check SKILL.md §"Asset Catalog" — if a matching id exists, use stdlib.placeAsset(id, { position: {...} }).
 2. If not in catalog, call find_gltf_assets with a descriptive query to discover a CDN-accessible GLB URL.
 3. Use stdlib.loadModel(url, { scale, position }) with the discovered URL.
