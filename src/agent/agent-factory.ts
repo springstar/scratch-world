@@ -3,11 +3,13 @@ import { getModel } from "@mariozechner/pi-ai";
 import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import { trimContext } from "./context-trimmer.js";
+import { addToCatalogTool } from "./tools/add-to-catalog.js";
 import { applySkillChangesTool } from "./tools/apply-skill-changes.js";
 import { createCityTool } from "./tools/create-city.js";
 import { createSceneTool } from "./tools/create-scene.js";
 import { evaluateSceneTool } from "./tools/evaluate-scene.js";
 import { evolveSkillsTool } from "./tools/evolve-skills.js";
+import { findGltfAssetsTool } from "./tools/find-gltf-assets.js";
 import { getSceneTool } from "./tools/get-scene.js";
 import { listScenesTool } from "./tools/list-scenes.js";
 import { shareSceneTool } from "./tools/share-scene.js";
@@ -89,7 +91,26 @@ When the user asks to "evolve skills", "analyze failures", "improve the skill fi
 2. Present the proposed changes clearly to the user — show each file, operation, and the exact text.
 3. Ask the user which changes to apply: "Apply all?", list each change numbered.
 4. For each approved change, call apply_skill_changes with the exact parameters from the proposal.
-5. Never call apply_skill_changes without explicit user approval for that specific change.`.trim();
+5. Never call apply_skill_changes without explicit user approval for that specific change.
+
+## Asset-first scene generation
+
+Before generating sceneCode for trees, buildings, vehicles, rocks, props, or animals:
+1. Check SKILL.md §"Asset Catalog" — if a matching id exists, use stdlib.placeAsset(id, { position: {...} }).
+2. If not in catalog, call find_gltf_assets with a descriptive query to discover a CDN-accessible GLB URL.
+3. Use stdlib.loadModel(url, { scale, position }) with the discovered URL.
+4. After confirming the asset renders correctly, call add_to_catalog to persist it for future scenes.
+
+Never use BoxGeometry or CylinderGeometry for objects that have a cataloged GLTF equivalent.
+stdlib.placeAsset() handles scale calibration automatically — do not multiply scale again.
+
+## Scene composition (MANDATORY)
+
+Every scene must have three depth layers: foreground (0–6 m), midground (6–25 m), background (25–200 m).
+Before writing sceneCode, answer in your reasoning: where is foreground? where is anchor? where is background?
+Camera must be off-center from the dominant anchor (rule of thirds — never dead-center framing).
+Set scene.fog for all outdoor scenes with depth > 30 m.
+See SKILL.md §"Scene Composition Rules" for full checklist.`.trim();
 
 export function createAgent(
 	sceneManager: SceneManager,
@@ -130,6 +151,8 @@ export function createAgent(
 				evaluateSceneTool(),
 				evolveSkillsTool(),
 				applySkillChangesTool(),
+				findGltfAssetsTool(),
+				addToCatalogTool(),
 			],
 		},
 		transformContext: async (messages) => trimContext(messages),

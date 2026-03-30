@@ -9,13 +9,16 @@
 
 import * as THREE from "three/webgpu";
 import { color, normalLocal, positionLocal, mix } from "three/tsl";
+import { configureTerrain, sampleHeightGrid, getTerrainHeight, type FractalOpts } from "./terrain-noise.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { SkyMesh } from "three/addons/objects/SkyMesh.js";
 import { loadEnvMap, loadSkyBackground } from "./hdri-cache.js";
 import { applyTerrainPbr, applyTerrainPbrNode, setupUv2 } from "./texture-cache.js";
 import { createLayout, type SceneLayout, type LayoutOpts } from "./layout-solver.js";
+import { getAsset } from "./asset-catalog.js";
 import {
   createNaturalStdlib,
-  type NaturalStdlibFns,
   type MakeRiverOpts,
   type MakeKarstPeakOpts,
   type MakeTerracedSlopeOpts,
@@ -180,10 +183,14 @@ function tickNpc(npc: NpcState, delta: number): void {
 // ── Stdlib factory ────────────────────────────────────────────────────────────
 
 export interface SetupLightingOpts {
-  skybox?: "clear_day" | "sunset" | "night" | "overcast" | string;
+  skybox?: "clear_day" | "sunset" | "night" | "overcast" | "dynamic_sky" | string;
   timeOfDay?: string;
   isIndoor?: boolean;
   hdri?: boolean;
+  /** Sun elevation in degrees above horizon (0–90). Only used with skybox:"dynamic_sky". Default 45. */
+  sunElevation?: number;
+  /** Sun azimuth in degrees (0=south, 90=west). Only used with skybox:"dynamic_sky". Default 180. */
+  sunAzimuth?: number;
 }
 
 export interface MakeNpcOpts {
@@ -205,6 +212,13 @@ export interface LoadModelOpts {
   rotation?: { x?: number; y?: number; z?: number };
   castShadow?: boolean;
   receiveShadow?: boolean;
+  /**
+   * Animation clip to auto-play after loading.
+   * "first" plays the first clip in the file.
+   * A string name matches by AnimationClip.name.
+   * The mixer is registered with animateFn so it ticks every frame.
+   */
+  animationClip?: "first" | string;
 }
 
 export interface MakeTerrainOpts {
@@ -214,6 +228,22 @@ export interface MakeTerrainOpts {
   texture?: string;
   color?: number;
   position?: { x: number; y: number; z: number };
+}
+
+export interface MakeWorldTerrainOpts {
+  /** Noise seed — controls which terrain is generated. Default: 42 */
+  seed?: number;
+  /** Total world-space size in metres on X and Z axes. Default: 1000 */
+  size?: number;
+  /** Resolution: number of height samples per side (mesh has segs = samples - 1). Default: 128 */
+  samples?: number;
+  /** Peak-to-trough amplitude in metres. Default: 40 */
+  amplitude?: number;
+  /** Sea level (water plane y). Default: -5 */
+  seaLevel?: number;
+  /** Centre of the terrain chunk in world space (default 0,0). */
+  originX?: number;
+  originZ?: number;
 }
 
 export interface MakeBuildingOpts {
@@ -258,10 +288,41 @@ export interface StdlibApi {
 
   // Asset loaders
   loadModel(url: string, opts?: LoadModelOpts): Promise<THREE.Group>;
+  /**
+   * Place a cataloged asset by semantic ID.
+   * Looks up the URL + calibrated scale from asset-catalog.ts, then calls loadModel().
+   * Use this instead of raw loadModel() whenever the asset is in the catalog.
+   * Catalog entries with animated:true auto-play their first animation clip.
+   * Pass animationClip: undefined in opts to suppress, or a clip name to override.
+   */
+  placeAsset(id: string, opts?: LoadModelOpts): Promise<THREE.Group>;
   makeNpc(opts: MakeNpcOpts): Promise<THREE.Group>;
 
   // Geometry builders
   makeTerrain(shape: "floor" | "hill" | "cliff" | "platform" | "water" | "wall" | "court", opts?: MakeTerrainOpts): THREE.Object3D;
+  /**
+   * Generate a large open-world terrain chunk with:
+   * - CPU-side Simplex fractal heightmap (deterministic world-space coordinates)
+   * - DataTexture displacement applied to a subdivided PlaneGeometry
+   * - TSL biome auto-transition material: water → sand → grass → rock → snow
+   * - Optional sea plane at seaLevel
+   *
+   * Subsequent calls with the same seed and originX/Z produce seamlessly
+   * tiling chunks (height function is globally deterministic).
+   *
+   * Call stdlib.configureTerrain(seed, opts) first if you want to change noise params.
+   */
+  makeWorldTerrain(opts?: MakeWorldTerrainOpts): THREE.Group;
+  /**
+   * Configure the global terrain noise parameters.
+   * Must be called BEFORE makeWorldTerrain() (or getTerrainHeight()) if non-default seed needed.
+   */
+  configureTerrain(seed: number, opts?: FractalOpts): void;
+  /**
+   * Query terrain height at any world-space position (same deterministic function
+   * used by makeWorldTerrain). Use this to place objects on the terrain surface.
+   */
+  getTerrainHeight(wx: number, wz: number): number;
   makeBuilding(opts?: MakeBuildingOpts): THREE.LOD;
   makeTree(opts?: { scale?: number; colorSeed?: number; position?: { x: number; y: number; z: number } }): THREE.Group;
   makeWater(width: number, depth: number, y?: number): THREE.Group;
@@ -283,7 +344,12 @@ export interface StdlibApi {
   addAmbientSound(url: string, volume?: number): AudioContext;
 }
 
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+dracoLoader.preload();
+
 const gltfLoader = new GLTFLoader();
+gltfLoader.setDRACOLoader(dracoLoader);
 
 export function createStdlib(
   scene: THREE.Scene,
@@ -292,6 +358,7 @@ export function createStdlib(
   animateFn: (cb: (delta: number) => void) => void,
   invalidateFn: (frames?: number) => void,
   setWorldGroundFn: (visible: boolean) => void = () => {},
+  skyMesh: SkyMesh | null = null,
 ): StdlibApi {
 
   const inv = () => invalidateFn(2);
@@ -337,8 +404,10 @@ export function createStdlib(
   return {
     // ── Lighting ────────────────────────────────────────────────────────────────
     setupLighting(opts: SetupLightingOpts = {}) {
-      const { skybox, timeOfDay, isIndoor = false, hdri = true } = opts;
-      const preset = resolveEnvPreset(skybox, timeOfDay);
+      const { skybox, timeOfDay, isIndoor = false, hdri = true,
+              sunElevation = 45, sunAzimuth = 180 } = opts;
+      const isDynamicSky = skybox === "dynamic_sky";
+      const preset = resolveEnvPreset(isDynamicSky ? "clear_day" : skybox, timeOfDay);
 
       // Hemisphere + directional
       const hemi = new THREE.HemisphereLight(preset.skyColor, preset.groundColor,
@@ -400,7 +469,7 @@ export function createStdlib(
       }
 
       // Async HDRI env map for physically correct IBL (outdoor only)
-      if (hdri && skybox && !isIndoor) {
+      if (hdri && skybox && !isIndoor && !isDynamicSky) {
         loadEnvMap(skybox, renderer)
           .then((envMap) => { scene.environment = envMap; inv(); })
           .catch(() => {});
@@ -409,6 +478,34 @@ export function createStdlib(
             .then((bgTex) => { scene.background = bgTex; inv(); })
             .catch(() => {});
         }
+      }
+
+      // Dynamic sky: Preetham/Hosek-Wilkie atmospheric model via SkyMesh
+      if (isDynamicSky && skyMesh) {
+        const elevRad = (sunElevation * Math.PI) / 180;
+        const aziRad  = (sunAzimuth  * Math.PI) / 180;
+        const sunDir = new THREE.Vector3(
+          Math.cos(elevRad) * Math.sin(aziRad),
+          Math.sin(elevRad),
+          Math.cos(elevRad) * Math.cos(aziRad),
+        ).normalize();
+
+        // SkyMesh uniforms
+        const sky = skyMesh as unknown as { material: { uniforms: Record<string, { value: unknown }> } };
+        sky.material.uniforms["sunPosition"].value = sunDir;
+        sky.material.uniforms["turbidity"].value   = 10;
+        sky.material.uniforms["rayleigh"].value     = 2;
+        sky.material.uniforms["mieCoefficient"].value    = 0.005;
+        sky.material.uniforms["mieDirectionalG"].value   = 0.8;
+        skyMesh.visible = true;
+        scene.background = null; // SkyMesh renders into scene directly
+
+        // Align the stdlib directional sun with SkyMesh sun direction
+        const sunLight = scene.children.find(
+          (c) => c instanceof THREE.DirectionalLight && (c as THREE.DirectionalLight).userData["isSun"]
+        ) as THREE.DirectionalLight | undefined;
+        if (sunLight) sunLight.position.copy(sunDir.clone().multiplyScalar(100));
+        inv();
       }
     },
 
@@ -481,11 +578,35 @@ export function createStdlib(
               child.receiveShadow = opts.receiveShadow ?? true;
             }
           });
+          if (opts.animationClip && gltf.animations.length > 0) {
+            const clip =
+              opts.animationClip === "first"
+                ? gltf.animations[0]
+                : (THREE.AnimationClip.findByName(gltf.animations, opts.animationClip) ?? gltf.animations[0]);
+            const mixer = new THREE.AnimationMixer(group);
+            mixer.clipAction(clip).play();
+            animateFn((delta) => mixer.update(delta));
+          }
           scene.add(group);
           inv();
           resolve(group);
         }, undefined, reject);
       });
+    },
+
+    placeAsset(id: string, opts: LoadModelOpts = {}): Promise<THREE.Group> {
+      const entry = getAsset(id);
+      if (!entry) return Promise.reject(new Error(`placeAsset: unknown asset id "${id}"`));
+      const merged: LoadModelOpts = {
+        // auto-play first animation for animated catalog entries unless caller opts out
+        animationClip: entry.animated ? "first" : undefined,
+        ...opts,
+        scale: (opts.scale ?? 1) * entry.scale,
+        position: opts.position
+          ? { x: opts.position.x, y: opts.position.y + entry.groundOffset, z: opts.position.z }
+          : { x: 0, y: entry.groundOffset, z: 0 },
+      };
+      return this.loadModel(entry.url, merged);
     },
 
     makeNpc(opts: MakeNpcOpts): Promise<THREE.Group> {
@@ -813,19 +934,80 @@ export function createStdlib(
     makeTree(opts = {}) {
       const { scale, colorSeed, position: pos = { x: 0, y: 0, z: 0 } } = opts;
       const { x, y, z } = pos;
+
+      // Stable per-tree random using position as seed
+      const rng = (a: number, b = 0) => Math.abs(Math.sin(x * 127.1 + z * 311.7 + a * 74.5 + b) * 43758.5453) % 1;
+      const seed = colorSeed ?? rng(0);
+
       const group = new THREE.Group();
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c3d1e, roughness: 0.9 });
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 12), trunkMat);
-      trunk.position.y = 1.1; trunk.castShadow = true; group.add(trunk);
+
+      // ── Trunk: tapered multi-section with bark PBR ──────────────────────────
+      const trunkH = 2.6 + seed * 1.4;          // 2.6–4.0 m
+      const trunkR0 = 0.22 + seed * 0.08;        // base radius
+      const trunkR1 = 0.10 + seed * 0.04;        // top radius
+      const trunkTilt = (rng(1) - 0.5) * 0.08;  // slight lean
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3018, roughness: 0.95 });
       applyTerrainPbr(trunkMat, "bark_brown_02", 2, inv);
-      const leafMat = new THREE.MeshStandardMaterial({ color: TYPE_COLORS.tree, roughness: 0.95 });
-      for (const [lx, ly, lz, lr] of [[0,2.8,0,1.4],[0.3,3.6,0.2,1.1],[-0.2,4.3,-0.1,0.85]] as [number,number,number,number][]) {
-        const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 12, 9), leafMat);
-        leaf.scale.y = 0.78; leaf.position.set(lx, ly, lz); leaf.castShadow = true; group.add(leaf);
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(trunkR1, trunkR0, trunkH, 10), trunkMat);
+      trunk.position.y = trunkH / 2;
+      trunk.rotation.z = trunkTilt;
+      trunk.castShadow = true;
+      group.add(trunk);
+
+      // ── Branches: 2–3 visible stubs radiating from upper trunk ──────────────
+      const nBranches = 2 + Math.floor(rng(2) * 2);
+      for (let i = 0; i < nBranches; i++) {
+        const angle = (i / nBranches) * Math.PI * 2 + seed * Math.PI;
+        const bH = 0.9 + rng(3 + i) * 0.6;
+        const branchMat = new THREE.MeshStandardMaterial({ color: 0x3e2810, roughness: 0.95 });
+        const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.08, bH, 6), branchMat);
+        branch.rotation.z = Math.PI / 2 - 0.4 - rng(4 + i) * 0.4;  // 40–65° from vertical
+        branch.rotation.y = angle;
+        branch.position.set(
+          Math.sin(angle) * trunkR1 * 2,
+          trunkH * (0.60 + rng(5 + i) * 0.25),
+          Math.cos(angle) * trunkR1 * 2,
+        );
+        branch.castShadow = true;
+        group.add(branch);
       }
-      const s = scale ?? (0.85 + (Math.abs(x * 7 + z * 13) % 1) * 0.45);
+
+      // ── Crown: 8–12 leaf spheres with natural spread ─────────────────────────
+      // Palette shifts green hue with seed (spring-fresh to autumn-muted)
+      const hue   = 0.28 + rng(6) * 0.08;        // 0.28–0.36 (green band)
+      const sat   = 0.45 + rng(7) * 0.25;
+      const lit   = 0.22 + rng(8) * 0.12;
+      const leafColor = new THREE.Color().setHSL(hue, sat, lit);
+      const leafDark  = new THREE.Color().setHSL(hue - 0.02, sat + 0.05, lit - 0.06);
+
+      const crownBase = trunkH + 0.3;
+      const crownSpan = 1.5 + seed * 1.0;         // horizontal spread
+      const crownH    = 1.8 + seed * 1.2;         // vertical height of crown
+
+      const nClusters = 8 + Math.floor(rng(9) * 5);  // 8–12
+      for (let i = 0; i < nClusters; i++) {
+        const t = i / nClusters;
+        const layerFrac = rng(10 + i);             // position within crown height
+        const angle2    = t * Math.PI * 2 * 2.3999 + seed * 6.28; // golden-ish spiral
+        const rFrac     = 0.2 + rng(11 + i) * 0.8;
+        // Outer clusters sit lower (umbrella profile) or spread wide (round profile)
+        const isOuter = rFrac > 0.5;
+        const cx = Math.sin(angle2) * crownSpan * rFrac;
+        const cy = crownBase + crownH * (isOuter ? layerFrac * 0.5 : 0.35 + layerFrac * 0.65);
+        const cz = Math.cos(angle2) * crownSpan * rFrac;
+        const cr = 0.55 + rng(12 + i) * 0.7;      // 0.55–1.25 m radius
+        const clusterColor = i % 3 === 0 ? leafDark : leafColor;
+        const clMat = new THREE.MeshStandardMaterial({ color: clusterColor, roughness: 0.92 });
+        const cluster = new THREE.Mesh(new THREE.SphereGeometry(cr, 9, 7), clMat);
+        cluster.scale.set(1 + rng(13 + i) * 0.3, 0.70 + rng(14 + i) * 0.25, 1 + rng(15 + i) * 0.3);
+        cluster.position.set(cx, cy, cz);
+        cluster.castShadow = true;
+        group.add(cluster);
+      }
+
+      const s = scale ?? (0.80 + rng(20) * 0.50);
       group.scale.setScalar(s);
-      group.rotation.y = colorSeed !== undefined ? colorSeed * Math.PI * 2 : (Math.abs(x * 7 + z * 13) % 1) * Math.PI * 2;
+      group.rotation.y = rng(21) * Math.PI * 2;
       group.position.set(x, y, z);
       return group;
     },
@@ -872,6 +1054,117 @@ export function createStdlib(
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(text, w / 2, h / 2);
       return new THREE.CanvasTexture(canvas);
+    },
+
+    // ── World terrain ─────────────────────────────────────────────────────────
+    makeWorldTerrain(opts: MakeWorldTerrainOpts = {}) {
+      const {
+        seed = 42,
+        size = 1000,
+        samples = 128,
+        amplitude = 40,
+        seaLevel = -5,
+        originX = 0,
+        originZ = 0,
+      } = opts;
+
+      // Configure global noise so getTerrainHeight() matches these vertices
+      configureTerrain(seed, { amplitude, seaLevel: 0 });
+
+      const group = new THREE.Group();
+      const segs = samples - 1;
+      const half = size / 2;
+
+      // Sample height grid: world coords (originX ± half, originZ ± half)
+      const heights = sampleHeightGrid(
+        originX - half, originZ - half,
+        size, size, samples, samples,
+      );
+
+      // Build PlaneGeometry (X-Y plane), then rotate to X-Z ground plane
+      const geo = new THREE.PlaneGeometry(size, size, segs, segs);
+      geo.rotateX(-Math.PI / 2);
+
+      // CPU-side displacement: overwrite vertex Y from heights[]
+      // After rotateX, vertex at flat index i has local pos (lx, 0, lz)
+      // heights[] is laid out in the same row-major order as PlaneGeometry vertices.
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        pos.setY(i, heights[i]);
+      }
+      pos.needsUpdate = true;
+      geo.computeVertexNormals();
+
+      // TSL biome material — positionLocal.y is now the real displaced height
+      // Altitude thresholds in metres (absolute world Y)
+      const C_DEEP    = color(0x1a3f5c);
+      const C_SHALLOW = color(0x2a6a8a);
+      const C_SAND    = color(0xd4b483);
+      const C_GRASS   = color(0x4a7a3a);
+      const C_ROCK    = color(0x7a7060);
+      const C_SNOW    = color(0xf0f0f8);
+
+      const y = positionLocal.y;
+
+      // Water depth gradient (below seaLevel)
+      const waterBlend = y.smoothstep(seaLevel - 8, seaLevel);
+      const waterCol   = mix(C_DEEP, C_SHALLOW, waterBlend);
+
+      // Land biome stack
+      const sandBlend  = y.smoothstep(seaLevel,       seaLevel + 2);
+      const grassBlend = y.smoothstep(seaLevel + 1.5, seaLevel + 5);
+      const rockBlend  = y.smoothstep(amplitude * 0.45, amplitude * 0.65);
+      const snowBlend  = y.smoothstep(amplitude * 0.70, amplitude * 0.88);
+
+      const landCol = mix(
+        mix(mix(C_SAND, C_GRASS, grassBlend), C_ROCK, rockBlend),
+        C_SNOW,
+        snowBlend,
+      );
+
+      // Blend water → land based on seaLevel crossing
+      const aboveWater = y.smoothstep(seaLevel - 0.5, seaLevel + 0.5);
+      const finalColor = mix(waterCol, mix(C_SAND, landCol, sandBlend), aboveWater);
+
+      // Slope-based roughness: steep = rocky (0.7), flat = soft (0.92)
+      const slopeRough = normalLocal.y.smoothstep(0.3, 0.85);
+      const finalRough = mix(0.7, 0.92, slopeRough);
+
+      const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
+      // @ts-expect-error TSL node assignment
+      mat.colorNode = finalColor;
+      // @ts-expect-error TSL node assignment
+      mat.roughnessNode = finalRough;
+
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.receiveShadow = true;
+      mesh.position.set(originX, 0, originZ);
+      group.add(mesh);
+
+      // Sea plane — flat quad at seaLevel, no UV-scroll (no map to scroll)
+      const seaMat = new THREE.MeshStandardMaterial({
+        color: 0x2a6a8a,
+        roughness: 0.05,
+        metalness: 0.2,
+        transparent: true,
+        opacity: 0.78,
+      });
+      const seaPlane = new THREE.Mesh(new THREE.PlaneGeometry(size, size), seaMat);
+      seaPlane.rotation.x = -Math.PI / 2;
+      seaPlane.position.set(originX, seaLevel, originZ);
+      seaPlane.receiveShadow = true;
+      group.add(seaPlane);
+
+      return group;
+    },
+
+    // ── Terrain noise configuration (pass-through to terrain-noise module) ────
+    configureTerrain(seed: number, noiseOpts: FractalOpts = {}) {
+      configureTerrain(seed, noiseOpts);
+    },
+
+    getTerrainHeight(wx: number, wz: number) {
+      return getTerrainHeight(wx, wz);
     },
 
     // ── Semantic layout solver ────────────────────────────────────────────────────

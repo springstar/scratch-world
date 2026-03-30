@@ -621,6 +621,7 @@ export class SceneRenderer {
         if (this.worldGroundMesh) this.worldGroundMesh.visible = v;
         for (const r of this.worldRidgeMeshes) r.visible = v;
       },
+      this.sky,
     );
 
     try {

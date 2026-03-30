@@ -6,17 +6,28 @@ Sets up scene lighting, fog, sky background, and optional Polyhaven HDRI env map
 
 ```typescript
 stdlib.setupLighting(opts?: {
-  skybox?:    "clear_day" | "sunset" | "night" | "overcast";
+  skybox?:    "clear_day" | "sunset" | "night" | "overcast" | "dynamic_sky";
   timeOfDay?: "dawn" | "noon" | "dusk" | "night";
   isIndoor?:  boolean;  // default false — pushes fog far away for enclosed spaces
   hdri?:      boolean;  // default true — async loads Polyhaven 1k HDRI for IBL
+  // dynamic_sky only:
+  sunElevation?: number;  // degrees above horizon (0–90, default 45)
+  sunAzimuth?:   number;  // degrees (0=south, 90=west, default 180)
 })
 ```
 
 **Always call this first.** It adds `HemisphereLight` + `DirectionalLight` (4096 shadow map) and sets fog.
 
+**`dynamic_sky`** uses the Preetham atmospheric scattering model (SkyMesh) — physically accurate sky colour from sun position. Use for scenes where the sky is visible and time-of-day atmosphere matters.
+
 ```javascript
 stdlib.setupLighting({ skybox: "clear_day", hdri: true });
+
+// Dynamic sky — sun at 30° elevation, coming from the south-west
+stdlib.setupLighting({ skybox: "dynamic_sky", sunElevation: 30, sunAzimuth: 220 });
+
+// Dawn light — very low sun
+stdlib.setupLighting({ skybox: "dynamic_sky", sunElevation: 8, sunAzimuth: 90 });
 ```
 
 ### `stdlib.loadModel(url, opts?)` → `Promise<THREE.Group>`
@@ -30,15 +41,37 @@ stdlib.loadModel(url: string, opts?: {
   rotation?: { x?: number; y?: number; z?: number };
   castShadow?:    boolean;  // default true
   receiveShadow?: boolean;  // default true
+  animationClip?: "first" | string;  // "first" plays the first clip; a string matches by name
 }): Promise<THREE.Group>
 ```
 
 ```javascript
-stdlib.loadModel("https://threejs.org/examples/models/gltf/Soldier.glb", {
+// Load animated soldier — play first clip automatically
+stdlib.loadModel("https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb", {
   position: { x: 0, y: 0, z: 0 },
   scale: 1,
+  animationClip: "first",
 });
 ```
+
+### `stdlib.placeAsset(id, opts?)` → `Promise<THREE.Group>`
+
+Places a cataloged asset by semantic ID. Looks up the CDN URL and calibrated scale from the asset catalog automatically. **Prefer this over `loadModel` for cataloged assets** — no need to look up scale.
+
+```typescript
+stdlib.placeAsset(id: string, opts?: {
+  position?: { x: number; y: number; z: number };
+  scale?:    number;   // multiplier on top of catalog calibration (1 = catalog default)
+  rotation?: { x?: number; y?: number; z?: number };
+}): Promise<THREE.Group>
+```
+
+```javascript
+stdlib.placeAsset("character_soldier", { position: { x: 2, y: 0, z: 0 } });
+stdlib.placeAsset("prop_lantern", { position: { x: 0, y: 2.5, z: -3 } });
+```
+
+See `07-asset-catalog.md` for the full catalog of available IDs.
 
 ### `stdlib.makeNpc(opts)` → `Promise<THREE.Group>`
 
@@ -396,6 +429,69 @@ stdlib.makeCanvasTexture(text: string, opts?: {
   w?:    number;  // canvas width, default 512
   h?:    number;  // canvas height, default 128
 }): THREE.CanvasTexture
+```
+
+### `stdlib.makeWorldTerrain(opts?)` → `THREE.Group`  ⭐ USE FOR OPEN-WORLD LANDSCAPES
+
+Generates a large terrain chunk with procedural heightmap + TSL biome auto-transition material.
+Altitude-driven colour: deep water → shallow → sand → grass → rock → snow.
+Includes a semi-transparent sea plane at `seaLevel`.
+
+The height function is **deterministic world-space**: same seed + coordinates always
+produce the same terrain. Multiple chunks tile seamlessly.
+
+```typescript
+stdlib.makeWorldTerrain(opts?: {
+  seed?:      number;  // noise seed — controls which terrain shape (default 42)
+  size?:      number;  // world-space extent in metres (default 1000)
+  samples?:   number;  // height grid resolution (default 128 — 127×127 mesh segs)
+  amplitude?: number;  // peak-to-trough height in metres (default 40)
+  seaLevel?:  number;  // water plane y position (default -5)
+  originX?:   number;  // world-space X centre of chunk (default 0)
+  originZ?:   number;  // world-space Z centre of chunk (default 0)
+}): THREE.Group
+```
+
+**IMPORTANT:** Call `stdlib.configureTerrain(seed, { amplitude })` with the same seed BEFORE
+placing any objects so that `stdlib.getTerrainHeight(x, z)` returns matching heights.
+
+```typescript
+// Open-world landscape setup
+stdlib.setupLighting({ hdri: true, skybox: "dynamic_sky", sunElevation: 35 });
+stdlib.configureTerrain(7, { amplitude: 50, seaLevel: 0 });
+const terrain = stdlib.makeWorldTerrain({ seed: 7, size: 800, amplitude: 50, seaLevel: -8 });
+scene.add(terrain);
+
+// Place a tree at correct terrain height
+const tx = 30, tz = -20;
+const ty = stdlib.getTerrainHeight(tx, tz);
+await stdlib.placeAsset("tree_pine_01", { position: { x: tx, y: ty, z: tz } });
+```
+
+### `stdlib.configureTerrain(seed, opts?)` → void
+
+Configure the global terrain noise. Call this ONCE before any `getTerrainHeight()` queries
+or `makeWorldTerrain()` calls — it sets the deterministic seed and parameters.
+
+```typescript
+stdlib.configureTerrain(seed: number, opts?: {
+  frequency?:    number;  // base frequency cycles/metre (default 1/200)
+  octaves?:      number;  // fractal layers (default 6)
+  lacunarity?:   number;  // frequency multiplier per octave (default 2.0)
+  persistence?:  number;  // amplitude multiplier per octave (default 0.5)
+  amplitude?:    number;  // peak-to-trough metres (default 40)
+  seaLevel?:     number;  // base height offset (default 0)
+})
+```
+
+### `stdlib.getTerrainHeight(wx, wz)` → `number`
+
+Returns terrain height (metres) at world position (wx, wz).
+Uses the global noise configured by `configureTerrain()`. Deterministic — safe to call per-frame.
+
+```typescript
+const groundY = stdlib.getTerrainHeight(x, z);
+mesh.position.set(x, groundY + halfHeight, z);
 ```
 
 ### `stdlib.colorFor(type)` → `number`
