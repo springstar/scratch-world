@@ -522,13 +522,13 @@ export function createStdlib(
           Math.cos(elevRad) * Math.cos(aziRad),
         ).normalize();
 
-        // SkyMesh uniforms
-        const sky = skyMesh as unknown as { material: { uniforms: Record<string, { value: unknown }> } };
-        sky.material.uniforms["sunPosition"].value = sunDir;
-        sky.material.uniforms["turbidity"].value   = 10;
-        sky.material.uniforms["rayleigh"].value     = 2;
-        sky.material.uniforms["mieCoefficient"].value    = 0.005;
-        sky.material.uniforms["mieDirectionalG"].value   = 0.8;
+        // SkyMesh (WebGPU) exposes uniforms as direct properties (TSL UniformNode),
+        // not via material.uniforms. Set them directly on the mesh object.
+        skyMesh.sunPosition.value = sunDir;
+        skyMesh.turbidity.value   = 10;
+        skyMesh.rayleigh.value    = 2;
+        skyMesh.mieCoefficient.value    = 0.005;
+        skyMesh.mieDirectionalG.value   = 0.8;
         skyMesh.visible = true;
         scene.background = null; // SkyMesh renders into scene directly
 
