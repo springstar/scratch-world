@@ -114,3 +114,32 @@ stdlib.loadModel(treeUrl, { scale: 1, position: { x: -5, y: 0, z: -8 } });
 - KhronosGroup Duck, Avocado: millimetre-scale → scale = 0.01 or 100
 - Quaternius / Kenney assets: typically metre-scale → scale = 1
 - When in doubt: test with scale=1, a standing human should be ~1.7 units tall at the camera
+
+---
+
+## Physics Property Reference (for `place_prop` in Marble/splat scenes)
+
+Use this table when calling `place_prop` to set `physicsShape`, `mass`, and `scale` for interactive objects. Values are real-world estimates — prefer the nearest category.
+
+| Category | Examples | physicsShape | mass (kg) | Notes |
+|---|---|---|---|---|
+| **Light prop** | water bottle, apple, book, coffee cup | `box` | 0.5–2 | Small tabletop items; easy to knock over |
+| **Medium prop** | wooden crate, barrel, briefcase, toolbox | `box` | 15–50 | Stack-able, player can push |
+| **Heavy prop** | steel drum, large crate, concrete block | `box` | 80–200 | Barely movable; player can lean on |
+| **Sphere prop** | ball, globe, cannonball, orange, melon | `sphere` | 0.5–10 | Rolls naturally with `sphere` collider |
+| **Furniture** | chair, stool, small table | `box` | 5–20 | Chairs tip easily — keep mass low |
+| **Vehicle (light)** | bicycle, cart, canoe | `convex` | 15–80 | Irregular shape needs `convex` |
+| **Vehicle (heavy)** | car, truck, boat | `convex` | 500–2000 | Static or barely movable |
+| **Weapon/tool** | sword, axe, shovel, spear | `box` | 1–5 | Thin — `box` close enough |
+| **Container (open)** | basket, bucket, bowl | `convex` | 1–5 | Rim profile → `convex` |
+| **Natural object** | rock, log, boulder | `convex` | 5–500 | Irregular → `convex`; use mass for size |
+| **Electronic** | TV, monitor, computer | `box` | 5–30 | Boxy — `box` works |
+| **NPC (static)** | mannequin, statue, effigy | `box` | 999 | High mass = player cannot move |
+
+### Quick rules
+
+- Default when unsure: `physicsShape: "box"`, `mass: 10`
+- `sphere` ONLY for objects that genuinely roll (balls, globes)
+- `convex` for organic/irregular shapes (rocks, logs, vehicles) — costs more GPU but fits better
+- `mass > 200` makes objects player-immovable (they act as scenery)
+- `scale` multiplies the catalog calibration — check the Asset Catalog scale column first
