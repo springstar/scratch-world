@@ -311,7 +311,12 @@ function checkAssetPrescan(code: string): SceneViolation[] {
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-export function validateSceneCode(code: string): ValidationResult {
+export interface ValidateOptions {
+	/** When true, skip the asset-prescan check (agent confirmed it ran find_gltf_assets). */
+	skipAssetPrescan?: boolean;
+}
+
+export function validateSceneCode(code: string, opts: ValidateOptions = {}): ValidationResult {
 	const violations: SceneViolation[] = [
 		...checkSetupLighting(code),
 		...checkShadowLights(code),
@@ -320,7 +325,7 @@ export function validateSceneCode(code: string): ValidationResult {
 		...checkIndoorFog(code),
 		...checkRandomInAnimate(code),
 		...checkMissingLayout(code),
-		...checkAssetPrescan(code),
+		...(opts.skipAssetPrescan ? [] : checkAssetPrescan(code)),
 	];
 
 	return {

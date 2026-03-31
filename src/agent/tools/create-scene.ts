@@ -17,6 +17,14 @@ const parameters = Type.Object({
 				"Required JavaScript code executed in the Three.js sandbox to render the scene. Must call stdlib.setupLighting() first, then build all visuals using stdlib helpers or raw THREE. sceneData.objects is only for interaction metadata (NPC dialogue, interactable flags) — not for rendering.",
 		}),
 	),
+	assetPrescanDone: Type.Optional(
+		Type.Boolean({
+			description:
+				"Set to true after completing the asset pre-scan (Step 6): you called find_gltf_assets for the top 3 object categories. " +
+				"Required when sceneCode builds objects from primitive geometry. " +
+				"If find_gltf_assets returned no results for a category, set this to true and use stdlib fallbacks (makeNpc, makeTree, makeBuilding).",
+		}),
+	),
 });
 
 export function createSceneTool(
@@ -48,9 +56,11 @@ export function createSceneTool(
 				console.log("[create_scene] taking skill path (sceneData or sceneCode provided)");
 
 				// Validate before saving — ERROR violations block scene creation entirely.
-				// This forces the agent to call find_gltf_assets and fix the code before proceeding.
+				// Exception: assetPrescanDone=true means agent confirmed it called find_gltf_assets
+				// and got no results — procedural fallback is then legitimate.
 				if (params.sceneCode) {
-					const preCheck = validateSceneCode(params.sceneCode);
+					const prescanBypassed = params.assetPrescanDone === true;
+					const preCheck = validateSceneCode(params.sceneCode, { skipAssetPrescan: prescanBypassed });
 					const errors = preCheck.violations.filter((v) => v.severity === "error");
 					if (errors.length > 0) {
 						const msg = formatViolations(preCheck);
@@ -70,7 +80,9 @@ export function createSceneTool(
 				}
 
 				const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, mergedSceneData);
-				const validationMsg = params.sceneCode ? formatViolations(validateSceneCode(params.sceneCode)) : "";
+				const validationMsg = params.sceneCode
+					? formatViolations(validateSceneCode(params.sceneCode, { skipAssetPrescan: true }))
+					: "";
 				return {
 					content: [
 						{
