@@ -430,7 +430,7 @@ export function createNaturalStdlib(
     geo.computeVertexNormals();
 
     const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 });
-    applyTerrainPbr(mat, "soil_dry", 8);
+    applyTerrainPbr(mat, "soil_dry", 8, () => invalidateFn(1));
 
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;

@@ -668,6 +668,37 @@ export class SceneRenderer {
       }
     });
 
+    // Strip forbidden texture maps from every material created by sceneCode.
+    // WebGPU Fragment stage limit: 16 sampled textures (hardware maximum on Apple Silicon
+    // and most WebGPU-capable devices). The renderer's global pipeline (IBL env map,
+    // BRDF LUT, shadow map, MRT buffers, GTAO, SMAA, film grain) already uses ~12 slots,
+    // leaving only 4 per-material slots. applyTerrainPbr adds 3 (diff, nor, rough).
+    // Any extra texture (aoMap, displacementMap on un-subdivided geo, emissiveMap set by AI)
+    // immediately pushes the count to 17–18 and triggers:
+    //   "The number of sampled textures (18) exceeds the maximum per-stage limit (16)"
+    // This traversal is a defensive measure — it fires regardless of what sceneCode writes.
+    this.codeGroup.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const std = m as THREE.MeshStandardMaterial;
+        if (!std.isMeshStandardMaterial) continue;
+        // aoMap: never valid — GTAO post-processing provides scene-wide AO at higher quality.
+        if (std.aoMap) { std.aoMap = null; std.needsUpdate = true; }
+        // displacementMap: only valid with geometry subdivisions ≥ 16×16. Un-subdivided
+        // geometry wastes a texture slot and produces no visible effect.
+        if (std.displacementMap) {
+          const geo = mesh.geometry as THREE.BufferGeometry;
+          const pos = geo.attributes.position;
+          if (pos && pos.count < 256) {   // < 16×16 subdivisions → not worth displacing
+            std.displacementMap = null;
+            std.needsUpdate = true;
+          }
+        }
+      }
+    });
+
     // Tighter bloom for indoor scenes. stdlib.setupLighting({ isIndoor: true })
     // writes scene.userData["isIndoor"]; if not set, fall back to detecting PointLights
     // in codeGroup (a reliable indoor indicator since outdoor stdlib uses DirectionalLight only).

@@ -192,6 +192,36 @@ scene.add(box);
 - **NEVER set `castShadow = true` on SpotLights, PointLights, or floodlights** — causes shadow-map flickering and black screen on Apple Silicon. The stdlib directional sun is the only light allowed to cast shadows.
 - **Hills, terrain, and trees are outside structures** — never place `makeTerrain("hill")` or tree inside a stadium perimeter, room, or any existing structure.
 
+### WebGPU Texture Slot Limit — CRITICAL
+
+The WebGPU Fragment stage allows at most **16 sampled textures per pipeline**. The renderer's IBL, shadow maps, GTAO, SMAA, and post-processing pipeline already consume ~12 of these slots. Only **3 per-material texture slots remain**:
+
+| Allowed | Map | Set by |
+|---|---|---|
+| ✅ | `map` (diffuse/albedo) | `applyTerrainPbr` or manual |
+| ✅ | `normalMap` | `applyTerrainPbr` or manual |
+| ✅ | `roughnessMap` | `applyTerrainPbr` or manual |
+
+| **FORBIDDEN** | Reason |
+|---|---|
+| ❌ `aoMap` | GTAO post-processing provides scene-wide AO; `aoMap` adds 1 slot and triggers the 18-texture error |
+| ❌ `displacementMap` | Only valid with geometry ≥ 16×16 subdivisions; the renderer strips it from un-subdivided meshes |
+| ❌ `emissiveMap` | Wastes a slot; use `emissive` color + `emissiveIntensity` instead |
+| ❌ `metalnessMap` | Set scalar `metalness` (0–1); a map wastes a slot for AI-generated scenes |
+| ❌ `lightMap` | Not used in this pipeline |
+
+**Error signature when exceeded:**
+```
+The number of sampled textures (18) in the Fragment stage exceeds the maximum per-stage limit (16)
+```
+
+**Never write:**
+```javascript
+mat.aoMap = someTexture;          // ← immediately causes 18-texture error
+mat.displacementMap = someTexture; // ← only works if geo has > 256 vertices
+mat.emissiveMap = someTexture;    // ← use mat.emissive + mat.emissiveIntensity instead
+```
+
 ---
 
 ## Text Rendering (CRITICAL)
@@ -235,6 +265,7 @@ Answer every question before finalizing `sceneCode`. If any answer is "no", fix 
 - [ ] For indoor: does it include `isIndoor: true`?
 - [ ] Are ALL extra lights (lamps, floodlights, spots, candles) set to `castShadow = false`?
 - [ ] Does any terrain/hill/tree end up inside a building or stadium perimeter?
+- [ ] Are `aoMap`, `displacementMap` (on <256-vertex geo), `emissiveMap`, and `metalnessMap` absent from all materials?
 
 **Layer completeness**
 - [ ] Layer 1 (sky/ceiling): present?
