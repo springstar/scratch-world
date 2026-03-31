@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-31 (SplatViewer physics walk mode, Marble coordinate invariant, bounding-box pitfall)
+**Last Updated:** 2026-03-31 (harness engineering: analytics, benchmark suite, regression detection, CI/CD)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -645,3 +645,75 @@ type RealtimeEvent =
 - **CLAUDE.md** — Project conventions for Claude Code
 - **src/skills/built-in/renderer-threejs/SKILL.md** — Three.js rendering capabilities reference
 - **src/skills/built-in/generator-claude/SKILL.md** — Scene generation guidelines for Claude
+
+## Harness Engineering
+
+Systematic quality measurement and regression detection infrastructure. All scripts run via `npx tsx scripts/<name>.ts` or as `npm run <alias>`.
+
+### Quality Data
+
+**`feedback.jsonl`** — append-only log of all quality events:
+- `source: "evaluate_scene"` — vision-model evaluation (10 binary checks, issue descriptions, pass count)
+- `source: "user_rejection"` — user negative signal (regeneration requests, explicit complaints)
+
+Written by:
+- `evaluate_scene` tool (`src/agent/tools/evaluate-scene.ts`) — auto-logs when `passed < 8`
+- `src/agent/feedback-logger.ts` — thin append wrapper
+
+### Scripts
+
+| Script | `npm run` alias | Purpose |
+|--------|-----------------|---------|
+| `scripts/harness-analytics.ts` | `analytics` | Reads `feedback.jsonl` + `dev.db` → check failure rates, score distribution, top problem scenes, rejection keywords |
+| `scripts/harness-bench.ts` | `bench` | Sends 25 benchmark prompts to live server, waits for `scene_created`, runs static validation, writes JSON report to `test/harness/results/` |
+| `scripts/harness-compare.ts` | `compare` | Diffs two bench reports by violation rate; exits non-zero if any rule regresses >15% |
+| `scripts/benchmark-prompts.json` | — | 25 fixed prompts covering urban, natural, cultural, indoor, and fantasy categories |
+
+### Analytics Output (`npm run analytics`)
+
+Reads `feedback.jsonl` (43 entries as of 2026-03-31): 20 `evaluate_scene` + 23 `user_rejection`.
+
+Top failing checks (as of baseline):
+
+| Check | Failure Rate |
+|-------|-------------|
+| characters | 100% — agents assemble humanoids/animals from BoxGeometry |
+| scatter | 90% — trees in regular grids instead of forestZone scatter |
+| placement | 65% — objects floating or misaligned |
+| depth | 50% — all elements at one distance from camera |
+
+No scene in the dataset ever scored ≥ 8/10. Average: 5.6/10.
+
+### Benchmark Runner (`npm run bench`)
+
+```
+SERVER_URL=http://localhost:3000 npm run bench
+npm run bench -- --ids park-bench,bamboo-forest --timeout 90
+```
+
+Requires the server to be running. Connects via:
+- `POST /api/chat` — sends prompt, fires generation
+- `WebSocket /realtime/:sessionId` — waits for `scene_created` event
+- `GET /api/scenes/:id` — fetches scene, extracts sceneCode for static validation
+
+Output: console summary + `test/harness/results/bench-<timestamp>.json`
+
+### Regression Detection (`npm run compare`)
+
+```
+npm run compare -- --baseline          # save latest bench run as baseline.json
+npm run compare                        # diff latest bench vs baseline.json
+npm run compare bench-A.json bench-B.json   # explicit files
+npm run compare -- --threshold 10      # stricter 10% gate
+```
+
+Exits 0 if no regression exceeds threshold; exits 1 if gate fails (for CI use).
+
+### CI/CD (`.github/workflows/ci.yml`)
+
+Three jobs:
+1. **check** — `tsc --noEmit && biome check src` on every push/PR
+2. **test** — `vitest --run` on every push/PR
+3. **bench-smoke** — PR-only; starts server, runs 5 prompts (90s timeout), compares to baseline, uploads artifacts
+
+The bench-smoke job uses `|| true` so regression failures are informative but not blocking until a stable baseline is established.

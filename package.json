@@ -10,7 +10,10 @@
 		"lint": "biome lint src",
 		"format": "biome format --write src",
 		"test": "vitest --run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"analytics": "tsx scripts/harness-analytics.ts",
+		"bench": "tsx scripts/harness-bench.ts",
+		"compare": "tsx scripts/harness-compare.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "^1.19.11",

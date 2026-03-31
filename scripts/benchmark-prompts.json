@@ -1,0 +1,152 @@
+[
+  {
+    "id": "champs-elysees",
+    "prompt": "巴黎香榭丽舍大道，傍晚时分，路灯亮起，树木茂密，咖啡馆人群",
+    "category": "urban",
+    "expect_checks": ["scatter", "depth", "atmosphere"]
+  },
+  {
+    "id": "beijing-zoo-panda",
+    "prompt": "北京动物园熊猫馆，白天，绿竹丛生，大熊猫在玩耍",
+    "category": "natural_animals",
+    "expect_checks": ["characters", "scatter", "anchor"]
+  },
+  {
+    "id": "amazon-rainforest",
+    "prompt": "亚马逊热带雨林，清晨薄雾，高大树木，河流",
+    "category": "natural",
+    "expect_checks": ["scatter", "atmosphere", "depth"]
+  },
+  {
+    "id": "camp-nou",
+    "prompt": "诺坎普球场 Camp Nou，比赛夜晚，球场灯光，草坪，观众席",
+    "category": "indoor_arena",
+    "expect_checks": ["anchor", "scale", "placement"]
+  },
+  {
+    "id": "forbidden-city",
+    "prompt": "北京故宫太和殿广场，晴天，宏大庭院，汉白玉栏杆",
+    "category": "cultural",
+    "expect_checks": ["anchor", "scale", "atmosphere"]
+  },
+  {
+    "id": "xiangxi-river-town",
+    "prompt": "湘西凤凰古城，沱江边，吊脚楼，夜晚，灯光倒影",
+    "category": "cultural_night",
+    "expect_checks": ["depth", "atmosphere", "anchor"]
+  },
+  {
+    "id": "sahara-desert",
+    "prompt": "撒哈拉沙漠，黄昏，金色沙丘，骆驼商队",
+    "category": "natural",
+    "expect_checks": ["scatter", "atmosphere", "scale"]
+  },
+  {
+    "id": "japanese-temple",
+    "prompt": "京都岚山竹林小径，秋天，红叶，石灯笼",
+    "category": "cultural",
+    "expect_checks": ["scatter", "depth", "atmosphere"]
+  },
+  {
+    "id": "new-york-street",
+    "prompt": "纽约曼哈顿时代广场，夜晚，霓虹灯广告牌，人流",
+    "category": "urban_night",
+    "expect_checks": ["atmosphere", "depth", "lighting"]
+  },
+  {
+    "id": "mountain-lake",
+    "prompt": "瑞士阿尔卑斯山，高山湖泊，倒影，雪山，松林",
+    "category": "natural",
+    "expect_checks": ["depth", "scatter", "atmosphere"]
+  },
+  {
+    "id": "medieval-market",
+    "prompt": "中世纪集市广场，晴天正午，摊位，商人，石板路，教堂钟楼",
+    "category": "settlement",
+    "expect_checks": ["anchor", "scatter", "depth"]
+  },
+  {
+    "id": "underwater-reef",
+    "prompt": "珊瑚礁海底，热带鱼群，阳光穿透水面，海葵",
+    "category": "natural",
+    "expect_checks": ["characters", "scatter", "atmosphere"]
+  },
+  {
+    "id": "space-station",
+    "prompt": "国际空间站内部走廊，失重设备，舷窗外星空与地球",
+    "category": "indoor_scifi",
+    "expect_checks": ["skeleton", "lighting", "atmosphere"]
+  },
+  {
+    "id": "village-dusk",
+    "prompt": "安静的中国江南小村庄，黄昏，炊烟，稻田，老房子",
+    "category": "settlement",
+    "expect_checks": ["atmosphere", "depth", "scatter"]
+  },
+  {
+    "id": "colosseum",
+    "prompt": "罗马斗兽场，白天，拱形廊道，角斗士训练",
+    "category": "cultural",
+    "expect_checks": ["anchor", "scale", "characters"]
+  },
+  {
+    "id": "park-bench",
+    "prompt": "城市公园，晴天午后，长椅，落叶，远处城市轮廓",
+    "category": "urban",
+    "expect_checks": ["anchor", "depth", "scatter"]
+  },
+  {
+    "id": "beach-sunset",
+    "prompt": "热带海滩，日落，棕榈树，海浪，沙滩椅",
+    "category": "natural",
+    "expect_checks": ["scatter", "atmosphere", "depth"]
+  },
+  {
+    "id": "chinese-restaurant",
+    "prompt": "中式餐厅内部，晚上，红灯笼，圆桌，顾客用餐",
+    "category": "indoor",
+    "expect_checks": ["characters", "lighting", "atmosphere"]
+  },
+  {
+    "id": "bamboo-forest",
+    "prompt": "竹林，清晨，光线穿透竹叶，小溪，石头",
+    "category": "natural",
+    "expect_checks": ["scatter", "atmosphere", "depth"]
+  },
+  {
+    "id": "train-station",
+    "prompt": "欧洲老式火车站，高拱顶，蒸汽机车，旅客，行李",
+    "category": "indoor",
+    "expect_checks": ["anchor", "scale", "lighting"]
+  },
+  {
+    "id": "mountain-village",
+    "prompt": "西藏山间村庄，高原，经幡，石砌房屋，雪山背景",
+    "category": "cultural",
+    "expect_checks": ["depth", "atmosphere", "scatter"]
+  },
+  {
+    "id": "fantasy-castle",
+    "prompt": "魔幻城堡，夜晚，漂浮的小岛，瀑布，发光的水晶",
+    "category": "fantasy",
+    "expect_checks": ["anchor", "depth", "atmosphere"]
+  },
+  {
+    "id": "savanna",
+    "prompt": "非洲稀树草原，黄昏，金合欢树，长颈鹿，远处火烧云",
+    "category": "natural_animals",
+    "expect_checks": ["characters", "scatter", "atmosphere"]
+  },
+  {
+    "id": "harbor-port",
+    "prompt": "渔港，清晨，渔船，码头，海鸟，远处灯塔",
+    "category": "urban",
+    "expect_checks": ["anchor", "depth", "scatter"]
+  },
+  {
+    "id": "cherry-blossom",
+    "prompt": "东京上野公园樱花季，粉色樱花盛开，人群赏花，摊位",
+    "category": "cultural",
+    "expect_checks": ["scatter", "atmosphere", "characters"]
+  }
+]
