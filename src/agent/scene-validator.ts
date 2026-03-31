@@ -264,6 +264,48 @@ function checkMissingLayout(code: string): SceneViolation[] {
 	];
 }
 
+/**
+ * RULE: Animals and characters must use loadModel, not primitive geometry.
+ * General constraint: assembling animals/humanoids from BoxGeometry/CylinderGeometry/
+ * SphereGeometry produces programmer-art figures that fail the "characters" quality check.
+ * When the scene prompt contains animals or characters, sceneCode must use loadModel()
+ * or placeAsset() — never hand-built geometry functions.
+ *
+ * Detection heuristic: function definitions whose names contain animal/character keywords
+ * AND whose bodies contain geometry primitives (Box/Cylinder/SphereGeometry).
+ */
+function checkPrimitiveAnimals(code: string): SceneViolation[] {
+	const ANIMAL_KEYWORDS =
+		/panda|bear|tiger|lion|elephant|horse|dog|cat|wolf|fox|deer|rabbit|bird|eagle|dragon|fish|monkey|gorilla|giraffe|zebra|rhino|hippo|crocodile|snake|turtle|熊猫|老虎|狮子|大象|狗|猫|鸟|鱼|猴|兔/i;
+	const PRIMITIVE_GEO = /new\s+THREE\.(BoxGeometry|CylinderGeometry|SphereGeometry|ConeGeometry)/;
+
+	// Match function declarations and arrow functions with animal-keyword names
+	const fnPattern =
+		/(?:function\s+([\w$]+)\s*\([^)]*\)\s*\{|const\s+([\w$]+)\s*=\s*(?:function\s*\([^)]*\)|[^=>{]+=>)\s*\{)([\s\S]{0,1200}?)\}/g;
+
+	let m = fnPattern.exec(code);
+	while (m !== null) {
+		const fnName = m[1] ?? m[2] ?? "";
+		const body = m[3] ?? "";
+		if (ANIMAL_KEYWORDS.test(fnName) && PRIMITIVE_GEO.test(body)) {
+			return [
+				{
+					rule: "no-primitive-animals",
+					severity: "error",
+					message:
+						`Function "${fnName}" builds an animal or character from primitive geometry (BoxGeometry / CylinderGeometry / SphereGeometry). ` +
+						"This is prohibited. You MUST use stdlib.loadModel(url, ...) with a URL from find_gltf_assets. " +
+						"Steps: (1) call find_gltf_assets({ query: '...', assetType: 'animal' }), " +
+						"(2) use the returned URL with stdlib.loadModel(url, { scale, position }). " +
+						"If find_gltf_assets returns no result, use stdlib.makeNpc() for humanoids — NOT custom geometry.",
+				},
+			];
+		}
+		m = fnPattern.exec(code);
+	}
+	return [];
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export function validateSceneCode(code: string): ValidationResult {
@@ -275,6 +317,7 @@ export function validateSceneCode(code: string): ValidationResult {
 		...checkIndoorFog(code),
 		...checkRandomInAnimate(code),
 		...checkMissingLayout(code),
+		...checkPrimitiveAnimals(code),
 	];
 
 	return {

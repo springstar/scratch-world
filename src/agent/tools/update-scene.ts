@@ -44,6 +44,27 @@ export function updateSceneTool(
 
 			// Skill path (sceneData supplied directly) — always synchronous
 			if (mergedSceneData) {
+				// Validate before saving — ERROR violations block the update entirely.
+				if (params.sceneCode) {
+					const preCheck = validateSceneCode(params.sceneCode);
+					const errors = preCheck.violations.filter((v) => v.severity === "error");
+					if (errors.length > 0) {
+						const msg = formatViolations(preCheck);
+						return {
+							content: [
+								{
+									type: "text",
+									text: JSON.stringify({
+										error: "Scene not updated — validation errors must be fixed first.",
+										violations: msg,
+									}),
+								},
+							],
+							details: { error: "validation_failed" },
+						};
+					}
+				}
+
 				const scene = await sceneManager.updateScene(params.sceneId, params.instruction, mergedSceneData);
 				const validationMsg = params.sceneCode ? formatViolations(validateSceneCode(params.sceneCode)) : "";
 				return {

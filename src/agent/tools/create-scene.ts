@@ -47,6 +47,28 @@ export function createSceneTool(
 			if (mergedSceneData) {
 				console.log("[create_scene] taking skill path (sceneData or sceneCode provided)");
 
+				// Validate before saving — ERROR violations block scene creation entirely.
+				// This forces the agent to call find_gltf_assets and fix the code before proceeding.
+				if (params.sceneCode) {
+					const preCheck = validateSceneCode(params.sceneCode);
+					const errors = preCheck.violations.filter((v) => v.severity === "error");
+					if (errors.length > 0) {
+						const msg = formatViolations(preCheck);
+						return {
+							content: [
+								{
+									type: "text",
+									text: JSON.stringify({
+										error: "Scene not created — validation errors must be fixed first.",
+										violations: msg,
+									}),
+								},
+							],
+							details: { error: "validation_failed" },
+						};
+					}
+				}
+
 				const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, mergedSceneData);
 				const validationMsg = params.sceneCode ? formatViolations(validateSceneCode(params.sceneCode)) : "";
 				return {
