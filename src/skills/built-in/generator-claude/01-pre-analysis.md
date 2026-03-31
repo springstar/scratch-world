@@ -98,5 +98,32 @@ Example for "湘西古镇黄昏":
 // depth_layers: { fg: 6, mg: 28, bg: 100 }
 ```
 
-**Only after writing SCENE_PARAMS do you continue with the scene code.**
+**Only after writing SCENE_PARAMS do you continue with the asset pre-scan below.**
+
+### Step 6 — Asset pre-scan (MANDATORY — before writing any sceneCode)
+
+List every distinct non-terrain object in the scene. For the **3 most prominent** ones, call
+`find_gltf_assets` now — one tool call per object. Do this BEFORE writing a single line of
+sceneCode.
+
+```
+Example for "北京动物园熊猫馆":
+  Object 1: "giant panda"      → call find_gltf_assets({ query: "giant panda glb CC0 low poly", assetType: "animal" })
+  Object 2: "bamboo pavilion"  → call find_gltf_assets({ query: "chinese bamboo pavilion glb CC0", assetType: "building" })
+  Object 3: "tour bus"         → call find_gltf_assets({ query: "tour bus glb CC0 low poly", assetType: "vehicle" })
+```
+
+After the 3 calls return, build a URL map:
+```javascript
+// ASSET_MAP
+// giant_panda:      <url from find_gltf_assets, or null>
+// bamboo_pavilion:  <url from find_gltf_assets, or null>
+// tour_bus:         <url from find_gltf_assets, or null>
+```
+
+Then write sceneCode using `stdlib.loadModel(url, ...)` for every non-null entry.
+Only use stdlib geometry (makeBuilding, makeNpc, makeTree) for entries where the result was null.
+
+**Skipping Step 6 and writing BoxGeometry for any object that find_gltf_assets could have
+resolved is PROHIBITED.**
 

@@ -115,6 +115,23 @@ For ALL forests, jungles, or groups of 4+ trees, use the forestZone() scatter pa
 
 ALWAYS use stdlib.makeTree() for every individual tree. NEVER use MeshLambertMaterial. Every surface must use stdlib.makeMat() (MeshStandardMaterial) or stdlib.makePhysicalMat().
 
+## Asset pre-scan (MANDATORY — after pre-analysis, before writing any sceneCode)
+
+After completing the 5-step pre-analysis, list every distinct non-terrain object category
+in the scene (animals, characters, vehicles, named buildings, props). For the 3 most
+prominent ones, call find_gltf_assets now — before writing a single line of sceneCode.
+
+  Step A: identify top 3 object categories (e.g. "giant panda", "bamboo pavilion", "tour bus")
+  Step B: call find_gltf_assets for each (3 sequential tool calls)
+  Step C: build a URL map from results
+  Step D: write sceneCode using stdlib.loadModel(url, ...) for every resolved asset
+           Only use stdlib geometry (makeBuilding, makeTree, makeNpc) for categories
+           where find_gltf_assets returned no result.
+
+Skipping Step B and writing BoxGeometry/CylinderGeometry for any object that
+find_gltf_assets could have resolved is PROHIBITED. The asset URL map drives sceneCode —
+sceneCode does not drive the asset search.
+
 ## Asset-first scene generation (MANDATORY — no exceptions for animals and characters)
 
 For ANY animal, human character, or vehicle in sceneCode, you MUST follow this order:
