@@ -676,28 +676,9 @@ export class SceneRenderer {
     // Any extra texture (aoMap, displacementMap on un-subdivided geo, emissiveMap set by AI)
     // immediately pushes the count to 17–18 and triggers:
     //   "The number of sampled textures (18) exceeds the maximum per-stage limit (16)"
-    // This traversal is a defensive measure — it fires regardless of what sceneCode writes.
-    this.codeGroup.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const m of mats) {
-        const std = m as THREE.MeshStandardMaterial;
-        if (!std.isMeshStandardMaterial) continue;
-        // aoMap: never valid — GTAO post-processing provides scene-wide AO at higher quality.
-        if (std.aoMap) { std.aoMap = null; std.needsUpdate = true; }
-        // displacementMap: only valid with geometry subdivisions ≥ 16×16. Un-subdivided
-        // geometry wastes a texture slot and produces no visible effect.
-        if (std.displacementMap) {
-          const geo = mesh.geometry as THREE.BufferGeometry;
-          const pos = geo.attributes.position;
-          if (pos && pos.count < 256) {   // < 16×16 subdivisions → not worth displacing
-            std.displacementMap = null;
-            std.needsUpdate = true;
-          }
-        }
-      }
-    });
+    // NOTE: also called from the render loop to catch async texture assignments that fire
+    // after this synchronous executeCode() pass.
+    this.sanitizeMaterials();
 
     // Tighter bloom for indoor scenes. stdlib.setupLighting({ isIndoor: true })
     // writes scene.userData["isIndoor"]; if not set, fall back to detecting PointLights
@@ -946,12 +927,38 @@ export class SceneRenderer {
     observer.observe(canvas);
   }
 
+  /**
+   * Strip WebGPU-budget-busting texture maps from every material in codeGroup.
+   * Called once synchronously after executeCode() and again each frame just before
+   * renderAsync(), catching any async texture callbacks that fire between frames.
+   * Only acts on materials with needsUpdate=true (changed since last check) after
+   * the initial full pass.
+   */
+  private sanitizeMaterials(onlyDirty = false): void {
+    this.codeGroup.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const std = m as THREE.MeshStandardMaterial;
+        if (!std.isMeshStandardMaterial) continue;
+        if (onlyDirty && !std.needsUpdate) continue;
+        // aoMap: never valid — GTAO post-processing provides scene-wide AO.
+        if (std.aoMap) { std.aoMap = null; std.needsUpdate = true; }
+        // displacementMap: only meaningful with ≥16×16 subdivisions.
+        if (std.displacementMap) {
+          const pos = (mesh.geometry as THREE.BufferGeometry).attributes.position;
+          if (pos && pos.count < 256) { std.displacementMap = null; std.needsUpdate = true; }
+        }
+      }
+    });
+  }
+
   private startLoop(): void {
     if (this.loopRunning) return;
     this.loopRunning = true;
 
-    this.renderer.setAnimationLoop(async (now: number) => {
-      const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
+    this.renderer.setAnimationLoop(async (now: number) => {      const delta = this.lastFrameTime > 0 ? (now - this.lastFrameTime) / 1000 : 0;
       this.lastFrameTime = now;
 
       // ── WASD movement ─────────────────────────────────────────────────────
@@ -1049,6 +1056,11 @@ export class SceneRenderer {
       // Only call renderAsync when work is queued.
       if (this.framesDue <= 0) return;
       this.framesDue--;
+
+      // Re-run material sanitizer on dirty materials each frame. Catches any aoMap /
+      // displacementMap assignments that fired async (texture loader callbacks) after
+      // the initial executeCode() pass, before the WebGPU pipeline is compiled.
+      this.sanitizeMaterials(true);
 
       // Adaptive DPR: measure frame time; regress on overrun
       const frameStart = performance.now();

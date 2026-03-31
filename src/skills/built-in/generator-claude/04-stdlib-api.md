@@ -515,15 +515,7 @@ stdlib.addAmbientSound(url: string, volume?: number): AudioContext
 // volume: 0–1 linear gain, default 0.4
 ```
 
-**Free sound CDN URLs (CC0, CORS-accessible)**:
-
-| Environment | URL |
-|-------------|-----|
-| Forest / outdoor | `https://cdn.freesound.org/previews/531/531947_11861866-lq.mp3` |
-| Crowd / stadium | `https://cdn.freesound.org/previews/493/493925_1835877-lq.mp3` |
-| Ocean waves | `https://cdn.freesound.org/previews/378/378895_4284968-lq.mp3` |
-| Rain | `https://cdn.freesound.org/previews/346/346642_5121236-lq.mp3` |
-| Fireplace / indoor | `https://cdn.freesound.org/previews/476/476178_9803805-lq.mp3` |
+**Note:** Do NOT use hardcoded CDN URLs for ambient sound — they rot and cause 404 errors that flood the console. Use `addAmbientSound` only when you have a reliable URL. Omit it when uncertain.
 
 ---
 

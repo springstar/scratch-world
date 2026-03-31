@@ -543,7 +543,12 @@ export function createStdlib(
 
     // ── Material helpers ────────────────────────────────────────────────────────
     makeMat(col: number, roughness = 0.8, metalness = 0.1) {
-      return new THREE.MeshStandardMaterial({ color: col, roughness, metalness });
+      // Guard: AI-generated code occasionally passes undefined from an uninitialised
+      // variable. THREE.MeshStandardMaterial silently accepts undefined but then
+      // logs "parameter 'color' has value of undefined" on every frame. Fall back to
+      // a neutral mid-grey so the scene at least renders correctly.
+      const safeCol = (typeof col === "number" && !isNaN(col)) ? col : 0x888888;
+      return new THREE.MeshStandardMaterial({ color: safeCol, roughness, metalness });
     },
 
     makePhysicalMat(col: number, opts: {
