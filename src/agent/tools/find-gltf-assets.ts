@@ -191,10 +191,6 @@ async function headCheck(url: string): Promise<{ accessible: boolean; contentTyp
 	}
 }
 
-// Asset categories where pre-built CC0 GLBs are rare — EmbodiedGen generation is
-// attempted IN PARALLEL with Tavily so we don't pay extra latency waiting for search.
-const GENERATION_PRIORITY_TYPES = new Set(["animal", "character"]);
-
 export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 	return {
 		name: "find_gltf_assets",
@@ -222,15 +218,12 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 			}
 
 			const max = Math.min(params.maxResults ?? 5, 10);
-			const isGenerationPriority = GENERATION_PRIORITY_TYPES.has(params.assetType.toLowerCase());
-
 			const searchQuery = `${params.query} filetype:glb OR site:github.com gltf free CC0`;
 
-			// For animal/character types, start EmbodiedGen generation in parallel with Tavily search.
-			// For all other types, only fall back to EmbodiedGen if Tavily returns nothing.
-			const embodiedGenPromise = isGenerationPriority
-				? generateWithEmbodiedGen(params.query, params.assetType)
-				: Promise.resolve(null);
+			// EmbodiedGen runs in parallel with Tavily for ALL asset types.
+			// EmbodiedGen generates purpose-built assets matching the exact description.
+			// Tavily finds existing CC0 GLBs that may only partially match — it is the fallback.
+			const embodiedGenPromise = generateWithEmbodiedGen(params.query, params.assetType);
 
 			let tavilyData: TavilyResponse;
 			try {
@@ -312,41 +305,9 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 			const accessible = checkResults.filter((c) => c.accessible).slice(0, max);
 			const inaccessible = checkResults.filter((c) => !c.accessible).length;
 
-			// If Tavily returned usable results, return them immediately (EmbodiedGen promise
-			// for generation-priority types is left to settle in background — we don't await it).
-			if (accessible.length > 0) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								query: params.query,
-								assetType: params.assetType,
-								accessible: accessible.map((c) => ({
-									url: c.url,
-									title: c.title,
-									source: c.source,
-									contentType: c.contentType,
-									notes: c.notes,
-								})),
-								checked: checkResults.length,
-								inaccessible,
-								instructions:
-									"Review the accessible candidates. Pick the best match, use its URL with stdlib.loadModel(url, { scale, position }). " +
-									"After confirming it renders correctly, call add_to_catalog to persist the entry.",
-							}),
-						},
-					],
-					details: { candidates: accessible },
-				};
-			}
-
-			// No Tavily results — await EmbodiedGen (already running for animal/character,
-			// started fresh here for all other types).
-			const generated = await (isGenerationPriority
-				? embodiedGenPromise
-				: generateWithEmbodiedGen(params.query, params.assetType));
-
+			// EmbodiedGen result takes priority — it was generated specifically for this description.
+			// Tavily results are fallback: existing CC0 models that may only partially match.
+			const generated = await embodiedGenPromise;
 			if (generated) {
 				const genCandidate: AssetCandidate = {
 					url: generated.url,
@@ -372,15 +333,43 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 								})),
 								checked: checkResults.length,
 								inaccessible,
-								generationFallback: true,
+								generationFallback: false,
 								instructions:
-									"No catalog GLB found — asset generated on-demand by EmbodiedGen. " +
+									"Asset generated on-demand by EmbodiedGen. " +
 									"Use with stdlib.loadModel(url, { scale, position }). " +
 									"After confirming it renders correctly, call add_to_catalog to persist it.",
 							}),
 						},
 					],
 					details: { candidates: [genCandidate] },
+				};
+			}
+
+			// EmbodiedGen unavailable or timed out — use Tavily results if any.
+			if (accessible.length > 0) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								query: params.query,
+								assetType: params.assetType,
+								accessible: accessible.map((c) => ({
+									url: c.url,
+									title: c.title,
+									source: c.source,
+									contentType: c.contentType,
+									notes: c.notes,
+								})),
+								checked: checkResults.length,
+								inaccessible,
+								instructions:
+									"Review the accessible candidates. Pick the best match, use its URL with stdlib.loadModel(url, { scale, position }). " +
+									"After confirming it renders correctly, call add_to_catalog to persist the entry.",
+							}),
+						},
+					],
+					details: { candidates: accessible },
 				};
 			}
 
