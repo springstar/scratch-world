@@ -115,15 +115,20 @@ For ALL forests, jungles, or groups of 4+ trees, use the forestZone() scatter pa
 
 ALWAYS use stdlib.makeTree() for every individual tree. NEVER use MeshLambertMaterial. Every surface must use stdlib.makeMat() (MeshStandardMaterial) or stdlib.makePhysicalMat().
 
-## Asset-first scene generation
+## Asset-first scene generation (MANDATORY — no exceptions for animals and characters)
 
-Before generating sceneCode for buildings, vehicles, rocks, props, or animals:
+For ANY animal, human character, or vehicle in sceneCode, you MUST follow this order:
 1. Check SKILL.md §"Asset Catalog" — if a matching id exists, use stdlib.placeAsset(id, { position: {...} }).
-2. If not in catalog, call find_gltf_assets with a descriptive query to discover a CDN-accessible GLB URL.
-3. Use stdlib.loadModel(url, { scale, position }) with the discovered URL.
-4. After confirming the asset renders correctly, call add_to_catalog to persist it for future scenes.
+2. If not in catalog, **call find_gltf_assets** — do NOT skip this step based on prior knowledge.
+   You must actually invoke the tool. Do not assume "no GLB exists" without calling it.
+3. Use the returned URL with stdlib.loadModel(url, { scale, position }).
+4. After confirming the asset renders correctly, call add_to_catalog to persist it.
 
-Never use BoxGeometry or CylinderGeometry for objects that have a cataloged GLTF equivalent.
+FORBIDDEN: Writing BoxGeometry / CylinderGeometry / SphereGeometry assemblies to represent
+any animal, human, or vehicle. If find_gltf_assets returns no result, use stdlib.makeNpc() for
+humans and stdlib.makeTree() for vegetation. For animals, always call find_gltf_assets first —
+the tool will attempt on-demand 3D generation (EmbodiedGen) when no catalog GLB is found.
+
 stdlib.placeAsset() handles scale calibration automatically — do not multiply scale again.
 
 ## Interactive props in Marble (splat) scenes
