@@ -265,43 +265,46 @@ function checkMissingLayout(code: string): SceneViolation[] {
 }
 
 /**
- * RULE: Animals and characters must use loadModel, not primitive geometry.
- * General constraint: assembling animals/humanoids from BoxGeometry/CylinderGeometry/
- * SphereGeometry produces programmer-art figures that fail the "characters" quality check.
- * When the scene prompt contains animals or characters, sceneCode must use loadModel()
- * or placeAsset() — never hand-built geometry functions.
+ * RULE: Asset pre-scan must not be skipped.
+ * General constraint: before writing sceneCode, the agent must call find_gltf_assets
+ * for the scene's main object categories. If sceneCode contains multiple user-defined
+ * object-construction functions that use primitive geometry (Box/Cylinder/SphereGeometry)
+ * AND contains zero loadModel() / placeAsset() calls, the asset pre-scan was skipped.
  *
- * Detection heuristic: function definitions whose names contain animal/character keywords
- * AND whose bodies contain geometry primitives (Box/Cylinder/SphereGeometry).
+ * This rule is type-agnostic — it applies equally to animals, buildings, vehicles, props.
+ * Detection: count named functions (function foo() or const foo = () =>) whose bodies
+ * contain primitive geometry constructors. If ≥ 2 such functions exist and no loadModel
+ * or placeAsset is present, the pre-scan was almost certainly skipped.
  */
-function checkPrimitiveAnimals(code: string): SceneViolation[] {
-	const ANIMAL_KEYWORDS =
-		/panda|bear|tiger|lion|elephant|horse|dog|cat|wolf|fox|deer|rabbit|bird|eagle|dragon|fish|monkey|gorilla|giraffe|zebra|rhino|hippo|crocodile|snake|turtle|熊猫|老虎|狮子|大象|狗|猫|鸟|鱼|猴|兔/i;
+function checkAssetPrescan(code: string): SceneViolation[] {
+	// Skip if loadModel or placeAsset is already present — pre-scan was done.
+	if (/stdlib\s*\.\s*(loadModel|placeAsset)\s*\(/.test(code)) return [];
+
 	const PRIMITIVE_GEO = /new\s+THREE\.(BoxGeometry|CylinderGeometry|SphereGeometry|ConeGeometry)/;
+	const FN_PATTERN =
+		/(?:function\s+[\w$]+\s*\([^)]*\)\s*\{|const\s+[\w$]+\s*=\s*(?:function\s*\([^)]*\)|[^=>{]+=>)\s*\{)([\s\S]{0,1200}?)\}/g;
 
-	// Match function declarations and arrow functions with animal-keyword names
-	const fnPattern =
-		/(?:function\s+([\w$]+)\s*\([^)]*\)\s*\{|const\s+([\w$]+)\s*=\s*(?:function\s*\([^)]*\)|[^=>{]+=>)\s*\{)([\s\S]{0,1200}?)\}/g;
-
-	let m = fnPattern.exec(code);
+	let count = 0;
+	let m = FN_PATTERN.exec(code);
 	while (m !== null) {
-		const fnName = m[1] ?? m[2] ?? "";
-		const body = m[3] ?? "";
-		if (ANIMAL_KEYWORDS.test(fnName) && PRIMITIVE_GEO.test(body)) {
-			return [
-				{
-					rule: "no-primitive-animals",
-					severity: "error",
-					message:
-						`Function "${fnName}" builds an animal or character from primitive geometry (BoxGeometry / CylinderGeometry / SphereGeometry). ` +
-						"This is prohibited. You MUST use stdlib.loadModel(url, ...) with a URL from find_gltf_assets. " +
-						"Steps: (1) call find_gltf_assets({ query: '...', assetType: 'animal' }), " +
-						"(2) use the returned URL with stdlib.loadModel(url, { scale, position }). " +
-						"If find_gltf_assets returns no result, use stdlib.makeNpc() for humanoids — NOT custom geometry.",
-				},
-			];
-		}
-		m = fnPattern.exec(code);
+		if (PRIMITIVE_GEO.test(m[1] ?? "")) count++;
+		m = FN_PATTERN.exec(code);
+	}
+
+	if (count >= 2) {
+		return [
+			{
+				rule: "asset-prescan-skipped",
+				severity: "error",
+				message:
+					`sceneCode defines ${count} object-construction functions using primitive geometry, ` +
+					"but no loadModel() or placeAsset() calls were found. " +
+					"The asset pre-scan step (Step 6 in pre-analysis) was skipped. " +
+					"Fix: before writing sceneCode, call find_gltf_assets for the scene's top 3 object categories. " +
+					"Use stdlib.loadModel(url, { scale, position }) for every resolved asset. " +
+					"Only use stdlib geometry (makeBuilding, makeNpc, makeTree) for categories where find_gltf_assets returned no result.",
+			},
+		];
 	}
 	return [];
 }
@@ -317,7 +320,7 @@ export function validateSceneCode(code: string): ValidationResult {
 		...checkIndoorFog(code),
 		...checkRandomInAnimate(code),
 		...checkMissingLayout(code),
-		...checkPrimitiveAnimals(code),
+		...checkAssetPrescan(code),
 	];
 
 	return {
