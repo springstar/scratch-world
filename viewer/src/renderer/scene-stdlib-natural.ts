@@ -88,6 +88,22 @@ export interface MakeGatewayOpts {
   rotationY?: number;
 }
 
+export interface MakeDisplacedGroundOpts {
+  /** World size (square footprint) in metres. Default 120. */
+  size?: number;
+  /** Maximum elevation amplitude in metres. Default 4.
+   *  1-2 = gentle meadow, 3-6 = rolling hills, 8-12 = dramatic terrain. */
+  amplitude?: number;
+  /** Deterministic seed — same seed produces identical terrain. Default 1. */
+  seed?: number;
+  /** Subdivisions per side. Default 64 (≈8 k vertices — safe on WebGPU). */
+  segments?: number;
+  /** Base mesh color (hex). Default 0x4a5a30 (muted olive-green). */
+  color?: number;
+  /** Y world position of the mesh. Default 0. */
+  yOffset?: number;
+}
+
 // ── Factory ──────────────────────────────────────────────────────────────────
 
 export interface NaturalStdlibFns {
@@ -95,6 +111,7 @@ export interface NaturalStdlibFns {
   makeKarstPeak(opts?: MakeKarstPeakOpts): THREE.Group;
   makeTerracedSlope(opts?: MakeTerracedSlopeOpts): THREE.Group;
   makeGateway(opts?: MakeGatewayOpts): THREE.Group;
+  makeDisplacedGround(opts?: MakeDisplacedGroundOpts): THREE.Mesh;
 }
 
 export function createNaturalStdlib(
@@ -359,5 +376,68 @@ export function createNaturalStdlib(
     return g;
   }
 
-  return { makeRiver, makeKarstPeak, makeTerracedSlope, makeGateway };
+  // ── makeDisplacedGround ──────────────────────────────────────────────────────
+
+  /**
+   * Ground plane with CPU-side FBm vertex displacement.
+   * Uses pure vertex position changes — no DataTexture, no extra texture slot.
+   * Safe within the WebGPU 16-slot budget.
+   *
+   * @example
+   *   stdlib.makeDisplacedGround({ size: 120, amplitude: 4, seed: 42, color: 0x4a5a30 });
+   *   // amplitude guide: 1-2 = meadow, 3-6 = rolling hills, 8-12 = dramatic terrain
+   *   // Call BEFORE forestZone() so tree trunks sit on visible ground.
+   *   // Do NOT combine with makeTerrain("floor") at y=0 — they overlap.
+   */
+  function makeDisplacedGround(opts: MakeDisplacedGroundOpts = {}): THREE.Mesh {
+    const {
+      size      = 120,
+      amplitude = 4,
+      seed      = 1,
+      segments  = 64,
+      color     = 0x4a5a30,
+      yOffset   = 0,
+    } = opts;
+
+    // Value noise: deterministic, no external dependency
+    function noise2(nx: number, nz: number): number {
+      const n = Math.sin(nx * 127.1 + nz * 311.7) * 43758.5453;
+      return (n - Math.floor(n)) * 2 - 1;
+    }
+
+    // 3-octave fractional Brownian motion
+    function fbm(fx: number, fz: number): number {
+      let v = 0, a = 0.5, f = 1;
+      for (let i = 0; i < 3; i++) {
+        v += a * noise2(fx * f, fz * f);
+        a *= 0.5;
+        f *= 2.1;
+      }
+      return v;
+    }
+
+    const geo = new THREE.PlaneGeometry(size, size, segments, segments);
+    geo.rotateX(-Math.PI / 2);
+
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const h = fbm(x * 0.04 + seed, z * 0.04 + seed) * amplitude;
+      pos.setY(i, h);
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0 });
+    applyTerrainPbr(mat, "soil_dry", 8);
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.receiveShadow = true;
+    mesh.position.y = yOffset;
+    scene.add(mesh);
+    return mesh;
+  }
+
+  return { makeRiver, makeKarstPeak, makeTerracedSlope, makeGateway, makeDisplacedGround };
 }

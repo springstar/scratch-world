@@ -71,12 +71,32 @@ Map Steps 1–3 to one of the available layout types:
 | Indoor enclosed space | `"indoor_room"` / `"indoor_arena"` |
 | None of the above | raw coordinates per §Advanced: custom layout |
 
-### Step 5 — Write a one-paragraph spatial plan
+### Step 5 — Write a structured SCENE_PARAMS block
 
-Before writing sceneCode, write (internally) a plan that names:
-- The dominant anchor and where it sits (which half of the scene, which y-level)
-- The terrain type and the stdlib primitive(s) that build it
-- The lighting preset and fog density/color
-- Which layout type or raw-coordinate approach you will use
+Before writing sceneCode, emit the following comment block as the **first lines of sceneCode**. It is the single source of truth that drives every downstream stdlib call in this scene — fill every field from Steps 1–4.
 
-**Only after completing Steps 1–5 do you write sceneCode.**
+```javascript
+// SCENE_PARAMS
+// anchor: "<dominant element, one phrase>"
+// terrain: "<flat|stepped|undulating|steep+river|cliff+drop|elevated+view>"
+// biome: "<river_valley|tropical|temperate|savanna|desert|coastal|bamboo|urban|indoor>"
+// layout: "<outdoor_riverside|outdoor_hillside|outdoor_open|outdoor_street|outdoor_soccer|outdoor_basketball|indoor_room|indoor_arena>"
+// lighting: { skybox: "<clear_day|sunset|night|overcast|dawn>", hdri: <true|false>, timeOfDay: "<morning|noon|afternoon|evening|night>" }
+// density: { hero: <1-4>, medium: <4-12>, decorative: <0-8> }
+// depth_layers: { fg: <metres>, mg: <metres>, bg: <metres> }
+```
+
+Example for "湘西古镇黄昏":
+```javascript
+// SCENE_PARAMS
+// anchor: "stilt houses over tuo river"
+// terrain: "steep+river"
+// biome: "river_valley"
+// layout: "outdoor_riverside"
+// lighting: { skybox: "sunset", hdri: true, timeOfDay: "evening" }
+// density: { hero: 3, medium: 10, decorative: 6 }
+// depth_layers: { fg: 6, mg: 28, bg: 100 }
+```
+
+**Only after writing SCENE_PARAMS do you continue with the scene code.**
+

@@ -303,3 +303,27 @@ for (let i = 0; i < 60; i++) {
 | Coastal clear | clear_day | FogExp2 | 0x90b0c0 | 0.010 | true |
 | Bamboo / Asian forest | overcast | FogExp2 | 0xa0b090 | 0.032 | true |
 | Snowy tundra | overcast | Fog | 0xd0dde0 | (linear, far=200) | true |
+
+---
+
+### Displaced Terrain — `stdlib.makeDisplacedGround()`
+
+Use for any natural outdoor scene where a flat ground plane breaks immersion.
+
+```javascript
+// Replace makeTerrain("floor") with makeDisplacedGround for natural environments:
+stdlib.makeDisplacedGround({ size: 120, amplitude: 4, seed: 42, color: 0x4a5a30 });
+```
+
+**Amplitude guide:**
+| Value | Terrain feel |
+|---|---|
+| 1–2 | Gentle meadow, barely perceptible roll |
+| 3–6 | Rolling hills, visible undulation |
+| 8–12 | Dramatic terrain, sharp ridges |
+
+**Rules:**
+- Call `makeDisplacedGround()` **before** `forestZone()` — trees are placed at y=0, so ground must be set up first
+- Do **not** combine with `makeTerrain("floor")` at y=0 — they overlap and z-fight
+- Biome-matched colors: temperate forest `0x4a6030`, river valley `0x4a5a38`, savanna `0xc8a048`, tropical `0x3a2918`
+- `seed` must be deterministic — use a consistent number per scene, not `Math.random()`

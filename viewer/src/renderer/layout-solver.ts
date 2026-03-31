@@ -74,10 +74,31 @@ interface RoleResult {
 
 type RoleFn = (dims: SceneDims) => RoleResult;
 
+/**
+ * A spatial zone within the scene — roughly Voronoi-inspired.
+ * The AI uses zone center + radius to drive scatter placement
+ * instead of inventing absolute coordinates.
+ */
+export interface ZoneDef {
+	/** Semantic identifier, e.g. "forest_left", "river_channel", "settlement_right" */
+	id: string;
+	/** Zone center X in world space */
+	cx: number;
+	/** Zone center Z in world space */
+	cz: number;
+	/** Approximate radius in metres — soft boundary, not a hard clip */
+	radius: number;
+	/** Dominant content type for this zone */
+	type: "forest" | "water" | "settlement" | "rock" | "field" | "transition" | "open";
+	/** Normalized placement density 0 (empty) → 1 (biome maximum) */
+	density: number;
+}
+
 interface SceneTypeDef {
 	baseDims: (opts: LayoutOpts) => SceneDims;
 	roles: Record<string, RoleFn>;
 	viewpoints: Record<string, (dims: SceneDims) => ViewpointDef>;
+	zones?: (dims: SceneDims) => ZoneDef[];
 }
 
 // ── Role helpers ──────────────────────────────────────────────────────────────
@@ -251,6 +272,11 @@ const SCENE_TYPES: Record<SceneType, SceneTypeDef> = {
 			default:  (d) => ({ position: v(0, 4, d.depth * 0.45), lookAt: v(0, 1, 0) }),
 			overview: (d) => ({ position: v(0, d.width * 0.4, d.width * 0.5), lookAt: v(0, 0, 0) }),
 		},
+		zones: (d) => [
+			{ id: "plaza_center",     cx: 0, cz: 0, radius: d.width * 0.20, type: "open",       density: 0.1 },
+			{ id: "perimeter_forest", cx: 0, cz: 0, radius: d.width * 0.45, type: "forest",     density: 0.6 },
+			{ id: "corner_accents",   cx: 0, cz: 0, radius: d.width * 0.50, type: "transition", density: 0.4 },
+		],
 	},
 
 	// ── Outdoor street corridor ──────────────────────────────────────────────────
@@ -275,6 +301,11 @@ const SCENE_TYPES: Record<SceneType, SceneTypeDef> = {
 			default: (d) => ({ position: v(0, 1.7, d.depth * 0.45), lookAt: v(0, 1.7, -d.depth * 0.1) }),
 			overview:(d) => ({ position: v(d.width * 2, d.width * 2, d.depth * 0.4), lookAt: v(0, 1, 0) }),
 		},
+		zones: (d) => [
+			{ id: "road_center", cx:  0,              cz: 0, radius: d.width * 0.25, type: "open",       density: 0   },
+			{ id: "sidewalk_l",  cx: -d.width * 0.40, cz: 0, radius: d.width * 0.15, type: "transition", density: 0.3 },
+			{ id: "sidewalk_r",  cx:  d.width * 0.40, cz: 0, radius: d.width * 0.15, type: "transition", density: 0.3 },
+		],
 	},
 
 	// ── Outdoor riverside settlement (river as central axis) ─────────────────────
@@ -326,6 +357,12 @@ const SCENE_TYPES: Record<SceneType, SceneTypeDef> = {
 				lookAt:   v(0, 3, -d.depth * 0.20),
 			}),
 		},
+		zones: (d) => [
+			{ id: "river_channel",    cx:  0,             cz: 0,               radius: d.width * 0.15, type: "water",      density: 0   },
+			{ id: "left_bank_forest", cx: -d.width * 0.3, cz: -d.depth * 0.10, radius: d.width * 0.25, type: "forest",     density: 0.8 },
+			{ id: "right_settlement", cx:  d.width * 0.3, cz:  0,              radius: d.width * 0.20, type: "settlement", density: 0.7 },
+			{ id: "background_karst", cx:  0,             cz: -d.depth * 0.40, radius: d.width * 0.40, type: "rock",       density: 0.3 },
+		],
 	},
 
 	// ── Outdoor hillside (terraced mountainside settlement) ─────────────────────
@@ -374,6 +411,12 @@ const SCENE_TYPES: Record<SceneType, SceneTypeDef> = {
 				lookAt:   v(0, d.height * 0.30, -d.depth * 0.30),
 			}),
 		},
+		zones: (d) => [
+			{ id: "valley_floor", cx: 0, cz:  d.depth * 0.35, radius: d.width * 0.30, type: "field",      density: 0.3 },
+			{ id: "lower_slope",  cx: 0, cz:  d.depth * 0.10, radius: d.width * 0.28, type: "settlement", density: 0.6 },
+			{ id: "mid_slope",    cx: 0, cz: -d.depth * 0.10, radius: d.width * 0.25, type: "forest",     density: 0.7 },
+			{ id: "peak_zone",    cx: 0, cz: -d.depth * 0.35, radius: d.width * 0.20, type: "rock",       density: 0.2 },
+		],
 	},
 };
 
@@ -753,6 +796,20 @@ export class SceneLayout {
 		const vpFn = this.def.viewpoints[name] ?? this.def.viewpoints["default"];
 		if (!vpFn) throw new Error(`[layout-solver] No viewpoint "${name}" for type "${this.type}"`);
 		return vpFn(this.dims);
+	}
+
+	/**
+	 * Returns spatial zone definitions for this scene type.
+	 * Each zone has a centre (cx, cz), radius, type, and density hint.
+	 * Use zones to drive scatter placement — no raw coordinate invention needed.
+	 *
+	 * @example
+	 *   const zones = L.zones();
+	 *   zones.filter(z => z.type === "forest")
+	 *        .forEach(z => forestZone(z.cx, z.cz, z.radius, Math.round(20 * z.density)));
+	 */
+	zones(): ZoneDef[] {
+		return this.def.zones ? this.def.zones(this.dims) : [];
 	}
 }
 

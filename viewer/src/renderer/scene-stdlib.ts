@@ -23,9 +23,10 @@ import {
   type MakeKarstPeakOpts,
   type MakeTerracedSlopeOpts,
   type MakeGatewayOpts,
+  type MakeDisplacedGroundOpts,
 } from "./scene-stdlib-natural.js";
 
-export type { MakeRiverOpts, MakeKarstPeakOpts, MakeTerracedSlopeOpts, MakeGatewayOpts };
+export type { MakeRiverOpts, MakeKarstPeakOpts, MakeTerracedSlopeOpts, MakeGatewayOpts, MakeDisplacedGroundOpts };
 
 // ── Type palette ──────────────────────────────────────────────────────────────
 const TYPE_COLORS: Record<string, number> = {
@@ -336,6 +337,8 @@ export interface StdlibApi {
   makeKarstPeak(opts?: MakeKarstPeakOpts): THREE.Group;
   makeTerracedSlope(opts?: MakeTerracedSlopeOpts): THREE.Group;
   makeGateway(opts?: MakeGatewayOpts): THREE.Group;
+  /** CPU-side FBm vertex-displaced ground for natural outdoor scenes. See 09-natural-biomes.md. */
+  makeDisplacedGround(opts?: MakeDisplacedGroundOpts): THREE.Mesh;
 
   // Utilities
   colorFor(type: string): number;

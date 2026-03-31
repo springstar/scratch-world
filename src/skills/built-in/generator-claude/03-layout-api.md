@@ -46,7 +46,38 @@ L.buildBoundary()         → perimeter trees / buildings / stands
 L.buildBackground()       → hills (always outside structureBounds + 30 m margin)
 L.place(role)             → returns { position, rotationY } — use to position your object
 L.viewpoint(name?)        → returns { position, lookAt } for camera setup
+L.zones()                 → returns ZoneDef[] — spatial zones for scatter placement (outdoor types)
 ```
+
+### Spatial zones — `L.zones()`
+
+Available for all outdoor types (`outdoor_open`, `outdoor_street`, `outdoor_riverside`, `outdoor_hillside`). Each zone provides:
+
+```
+{ id, cx, cz, radius, type, density }
+  id      — semantic label e.g. "forest_left", "river_channel", "settlement_right"
+  cx, cz  — zone centre in world space
+  radius  — soft boundary radius in metres
+  type    — "forest" | "water" | "settlement" | "rock" | "field" | "transition" | "open"
+  density — 0 (empty) → 1 (biome maximum count)
+```
+
+**Use zones to drive scatter — never invent coordinates by hand:**
+
+```javascript
+const zones = L.zones();
+
+// Place forest scatter in all forest zones
+zones.filter(z => z.type === "forest")
+     .forEach(z => forestZone(z.cx, z.cz, z.radius, Math.round(20 * z.density)));
+
+// Place buildings in settlement zones
+zones.filter(z => z.type === "settlement").forEach(z => {
+  stdlib.makeBuilding({ position: { x: z.cx, y: 0, z: z.cz }, width: 6, depth: 5, height: 7 });
+});
+```
+
+Indoor types (`indoor_room`, `indoor_arena`) return an empty array from `L.zones()`.
 
 ### Available roles per scene type
 
