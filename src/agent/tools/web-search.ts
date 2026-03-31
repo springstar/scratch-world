@@ -11,34 +11,39 @@ const parameters = Type.Object({
 	),
 });
 
-interface BraveResult {
+interface TavilyResult {
 	title: string;
 	url: string;
-	description?: string;
+	content: string; // short snippet
+	raw_content?: string; // full page text (markdown) — present when include_raw_content=true
+	score: number;
 }
 
-interface BraveResponse {
-	web?: {
-		results?: BraveResult[];
-	};
+interface TavilyResponse {
+	answer?: string; // AI-synthesized answer to the query
+	results?: TavilyResult[];
 }
+
+const RAW_CONTENT_LIMIT = 4000; // chars per result — enough for color/dimension facts without flooding context
 
 export function webSearchTool(): AgentTool<typeof parameters> {
 	return {
 		name: "web_search",
 		label: "Web search",
 		description:
-			"Search the web for information about real-world places, landmarks, dimensions, cultural context, or any factual data needed before building a scene. Use BEFORE writing sceneCode for any named real-world location.",
+			"Search the web for information about real-world places, landmarks, dimensions, cultural context, or any factual data needed before building a scene. " +
+			"Returns full page content (not just snippets) so you can extract specific details like water color, building dimensions, atmospheric conditions. " +
+			"Use BEFORE writing sceneCode for any named real-world location.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
-			const apiKey = process.env.BRAVE_SEARCH_API_KEY;
+			const apiKey = process.env.TAVILY_API_KEY;
 			if (!apiKey) {
 				return {
 					content: [
 						{
 							type: "text",
 							text: JSON.stringify({
-								error: "BRAVE_SEARCH_API_KEY not configured — using training knowledge only",
+								error: "TAVILY_API_KEY not configured — using training knowledge only. Set TAVILY_API_KEY in .env (free at https://tavily.com).",
 							}),
 						},
 					],
@@ -47,16 +52,19 @@ export function webSearchTool(): AgentTool<typeof parameters> {
 			}
 
 			const count = Math.min(params.count ?? 5, 10);
-			const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(params.query)}&count=${count}`;
 
-			let data: BraveResponse;
+			let data: TavilyResponse;
 			try {
-				const res = await fetch(url, {
-					headers: {
-						Accept: "application/json",
-						"Accept-Encoding": "gzip",
-						"X-Subscription-Token": apiKey,
-					},
+				const res = await fetch("https://api.tavily.com/search", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						api_key: apiKey,
+						query: params.query,
+						search_depth: "basic",
+						include_raw_content: true,
+						max_results: count,
+					}),
 				});
 				if (!res.ok) {
 					const body = await res.text();
@@ -64,13 +72,13 @@ export function webSearchTool(): AgentTool<typeof parameters> {
 						content: [
 							{
 								type: "text",
-								text: JSON.stringify({ error: `Brave Search API error ${res.status}: ${body.slice(0, 200)}` }),
+								text: JSON.stringify({ error: `Tavily API error ${res.status}: ${body.slice(0, 200)}` }),
 							},
 						],
 						details: { query: params.query, results: [] },
 					};
 				}
-				data = (await res.json()) as BraveResponse;
+				data = (await res.json()) as TavilyResponse;
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: JSON.stringify({ error: `Network error: ${String(err)}` }) }],
@@ -78,14 +86,27 @@ export function webSearchTool(): AgentTool<typeof parameters> {
 				};
 			}
 
-			const results = (data.web?.results ?? []).map((r) => ({
+			const results = (data.results ?? []).map((r) => ({
 				title: r.title,
 				url: r.url,
-				snippet: r.description ?? "",
+				snippet: r.content,
+				// Truncate raw content to stay within context budget
+				content: r.raw_content ? r.raw_content.slice(0, RAW_CONTENT_LIMIT) : r.content,
+				score: r.score,
 			}));
 
 			return {
-				content: [{ type: "text", text: JSON.stringify({ query: params.query, results }) }],
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({
+							query: params.query,
+							// Include synthesized answer when available — often has exact figures
+							answer: data.answer ?? null,
+							results,
+						}),
+					},
+				],
 				details: { query: params.query, results },
 			};
 		},

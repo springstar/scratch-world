@@ -12,6 +12,7 @@ import { evolveSkillsTool } from "./tools/evolve-skills.js";
 import { findGltfAssetsTool } from "./tools/find-gltf-assets.js";
 import { getSceneTool } from "./tools/get-scene.js";
 import { listScenesTool } from "./tools/list-scenes.js";
+import { placePropTool } from "./tools/place-prop.js";
 import { shareSceneTool } from "./tools/share-scene.js";
 import { updateSceneTool } from "./tools/update-scene.js";
 import { webSearchTool } from "./tools/web-search.js";
@@ -67,13 +68,15 @@ IMPORTANT: If a tool result contains a "violations" field, you MUST call update_
 
 After the tool call succeeds, call evaluate_scene with the returned sceneId. The viewer uploads a screenshot automatically after rendering — if none is available yet, wait 2 seconds and try once more.
 
-- If passed >= 5 of 6: accept the scene and respond to the user.
-- If passed < 5: call update_scene to fix every listed issue, then evaluate again.
-- Stop after 3 evaluation/fix iterations to avoid infinite loops. If still below 5/6 after 3 tries, respond to the user and describe what could not be fixed.
+- If passed >= 8 of 10: accept the scene and respond to the user.
+- If passed < 8: call update_scene to fix every listed issue, then evaluate again.
+- Stop after 3 evaluation/fix iterations to avoid infinite loops. If still below 8/10 after 3 tries, respond to the user and describe what could not be fixed.
+
+The 10 checks are: skeleton, anchor, scale, lighting, placement, geometry, scatter (no tree rows/colonnades), depth (3 depth layers), characters (no primitive-geometry humans), atmosphere (sky/fog matches biome).
 
 ## Self-evaluation loop (MANDATORY — after drafting sceneCode, before every create_scene or update_scene)
 
-Draft sceneCode in your reasoning, then run these 6 checks. If any fail, revise and re-check until all pass. Only then submit the tool call.
+Draft sceneCode in your reasoning, then run these 7 checks. If any fail, revise and re-check until all pass. Only then submit the tool call.
 
 1. **SKELETON** — Rotate mentally 360° from the camera start. Does every direction show a surface (ground / wall / sky / tree line)? No black void in any direction?
 2. **ANCHOR** — Can you name the ONE element that fills 40%+ of the viewport? If you cover it with your thumb, does the scene stop making sense?
@@ -81,8 +84,9 @@ Draft sceneCode in your reasoning, then run these 6 checks. If any fail, revise 
 4. **LIGHTING** — Is stdlib.setupLighting() the very first call? Is castShadow=false on every light except the stdlib sun?
 5. **PLACEMENT** — Does every mesh rest on a surface (y = surface_y + half_height)? Is all terrain/hills/trees strictly outside structure perimeters?
 6. **POSITION API** — Zero instances of mesh.position = ... or Object.assign(mesh, ...)? Only .position.set() / .copy()?
+7. **COLONNADE CHECK** — Scan every tree/vegetation loop. Does any loop increment x OR z by a constant while keeping the other fixed? If yes: that is a wall/row, not a forest. Rewrite using the forestZone() scatter pattern from SKILL.md §"Environment Design".
 
-If a check fails: fix the code, then re-run all 6 checks from the top. Submit only when all 6 pass.
+If a check fails: fix the code, then re-run all 7 checks from the top. Submit only when all 7 pass.
 
 ## Skill evolution workflow
 
@@ -95,13 +99,21 @@ When the user asks to "evolve skills", "analyze failures", "improve the skill fi
 
 ## Tree and material rules (MANDATORY — no exceptions)
 
-NEVER write custom tree functions (rainTree, makeForestTree, treeGen, etc.) that build crowns from SphereGeometry or trunks from CylinderGeometry. These produce sphere-lollipop trees regardless of how many spheres you use.
+NEVER write custom tree functions (rainTree, makeForestTree, treeGen, etc.) that build crowns from SphereGeometry or trunks from CylinderGeometry. NEVER place trees in regular loops (for x += 4 or for z += 5) — this produces a colonnade/wall, not a forest.
 
-ALWAYS use stdlib.makeTree() for every individual tree. It uses InstancedMesh leaf cards with bark PBR — it is strictly better than any hand-rolled sphere approach. For forests, use a loop:
+For ALL forests, jungles, or groups of 4+ trees, use the forestZone() scatter pattern from SKILL.md §"Environment Design". This is the equivalent of Unreal Engine's foliage painter — you define a zone and density, not individual coordinates:
 
-  stdlib.makeTree({ position: { x, y: stdlib.getTerrainHeight(x, z), z } })
+  function forestZone(cx, cz, r, count) {
+    const phi = 2.399963;
+    for (let i = 0; i < count; i++) {
+      const radius = r * 0.15 + r * 0.85 * Math.sqrt((i+0.5)/count);
+      const theta = i * phi + Math.sin(i*7.3)*0.5;
+      const scale = [0.65,0.85,1.0,1.15,1.4][i%5];
+      stdlib.makeTree({ position:{x:cx+radius*Math.cos(theta), y:0, z:cz+radius*Math.sin(theta)}, scale });
+    }
+  }
 
-NEVER use MeshLambertMaterial. It ignores PBR. Every surface must use stdlib.makeMat() (MeshStandardMaterial) or stdlib.makePhysicalMat() as minimum. This applies to trunks, ground, buildings, water, everything.
+ALWAYS use stdlib.makeTree() for every individual tree. NEVER use MeshLambertMaterial. Every surface must use stdlib.makeMat() (MeshStandardMaterial) or stdlib.makePhysicalMat().
 
 ## Asset-first scene generation
 
@@ -114,13 +126,86 @@ Before generating sceneCode for buildings, vehicles, rocks, props, or animals:
 Never use BoxGeometry or CylinderGeometry for objects that have a cataloged GLTF equivalent.
 stdlib.placeAsset() handles scale calibration automatically — do not multiply scale again.
 
+## Interactive props in Marble (splat) scenes
+
+When sceneData contains a splatUrl, you can add physical, interactable objects by including
+SceneObject entries with type "prop" in sceneData.objects. The viewer places and grounds them
+automatically — do NOT specify exact Y coordinates.
+
+Required metadata fields:
+- modelUrl: string — CDN-accessible GLB/GLTF URL (from asset catalog or find_gltf_assets)
+- physicsShape: "box" | "sphere" | "convex" — collider type (default: "box")
+- mass: number — kg (default 10; heavy crates ~50, small props ~5)
+- scale: number — world scale multiplier (default 1)
+
+Optional:
+- placement: "near_camera" | "near_entrance" | "scene_center"
+  near_camera (default): objects appear in front of the player spawn
+  near_entrance: places near the first scene viewpoint
+  scene_center: places around world origin (0,0,0)
+
+Example — a wooden crate the player can push:
+{
+  "objectId": "crate_01",
+  "name": "Wooden Crate",
+  "type": "prop",
+  "position": { "x": 0, "y": 0, "z": 0 },
+  "interactable": true,
+  "interactionHint": "Push the crate",
+  "description": "A heavy wooden storage crate",
+  "metadata": {
+    "modelUrl": "https://cdn.jsdelivr.net/...",
+    "physicsShape": "box",
+    "mass": 40,
+    "scale": 1.0,
+    "placement": "near_camera"
+  }
+}
+
+The viewer auto-corrects Y to the real ground surface. position.x/z are ignored — placement
+logic resolves all coordinates. Multiple props spread automatically, never overlapping.
+
 ## Scene composition (MANDATORY)
 
 Every scene must have three depth layers: foreground (0–6 m), midground (6–25 m), background (25–200 m).
 Before writing sceneCode, answer in your reasoning: where is foreground? where is anchor? where is background?
 Camera must be off-center from the dominant anchor (rule of thirds — never dead-center framing).
 Set scene.fog for all outdoor scenes with depth > 30 m.
-See SKILL.md §"Scene Composition Rules" for full checklist.`.trim();
+See SKILL.md §"Scene Composition Rules" for full checklist.
+
+## Natural environment rules (MANDATORY for forests, jungles, rivers, deserts, coasts)
+
+Before writing any sceneCode for a natural scene, look up the biome in SKILL.md §"Natural Environments".
+
+1. **Water color is biome-specific — never use generic teal.**
+   Amazon = muddy brown (0x5a4020). Xiangxi/mountain river = dark grey-green (0x4a6a5a). Ocean = navy-to-turquoise.
+
+2. **Trees must use golden-angle cluster scatter — never uniform loops or grids.**
+   Real forests have clusters and clearings. Uniform rows = palace colonnade, not forest.
+   Tropical rainforest: 35–50 trees in 60×60 m in 3–4 clusters. Savanna: 5–8 trees, isolated.
+
+3. **Fog density is biome-specific.** Tropical canopy = 0.028. Desert = 0.004. River valley = 0.022.
+
+4. **Humans in nature scenes must be stdlib.placeAsset() or stdlib.loadModel()** — never assembled from BoxGeometry.`.trim();
+
+// Minimal base prompt used when the active provider generates its own rendering
+// (e.g. Marble). No sceneCode instructions — agent passes prompts through only.
+export const PROVIDER_BASE_PROMPT = `\
+You are a world-building companion. You help users create and explore persistent 3D worlds through conversation.
+
+When a user describes a place or scene they want to create, call create_scene with ONLY the prompt and optional title.
+When a user wants to change something, call update_scene with ONLY the instruction and optional title.
+When a user asks what scenes they have, call list_scenes.
+When you need the current state of a scene, call get_scene.
+When a user asks to share a scene, call share_scene.
+When a user wants to place a physical object (box, crate, prop) in a Marble scene, call place_prop — do NOT call update_scene or create_scene for this.
+
+The active provider generates the complete 3D world from the text prompt.
+Do NOT write sceneCode or sceneData — the provider handles all rendering.
+Generation takes several minutes. Tell the user the scene is being generated and they will receive a link when ready.
+
+After each tool call, respond naturally — describe what the user will experience.
+When sharing a scene link, format it as: [View scene](url)`.trim();
 
 export function createAgent(
 	sceneManager: SceneManager,
@@ -157,6 +242,7 @@ export function createAgent(
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager, ownerId),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
+				placePropTool(sceneManager, viewerUrl),
 				webSearchTool(),
 				evaluateSceneTool(),
 				evolveSkillsTool(),

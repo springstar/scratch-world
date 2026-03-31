@@ -119,8 +119,9 @@ DATABASE_URL=           # PostgreSQL connection string, or "sqlite:./dev.db"
 # LLM (pi-ai)
 ANTHROPIC_API_KEY=
 
-# Web search (optional — enables real-time research for named real-world places)
-BRAVE_SEARCH_API_KEY=   # Brave Search API key — free tier at https://brave.com/search/api/
+# Web search (required — enables real-time research for named real-world places)
+TAVILY_API_KEY=      # Tavily Search API key — free tier (1000/month) at https://tavily.com
+                     # Returns full page content, not just snippets
 ```
 
 Never commit `.env` or any file containing secrets.

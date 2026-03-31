@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-29 (settlement generation, texture budget, terrain blending, walk mode)
+**Last Updated:** 2026-03-31 (SplatViewer physics walk mode, Marble coordinate invariant, bounding-box pitfall)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -292,14 +292,46 @@ All sceneCode passes through `scene-validator.ts` before storage:
 
 ### Gaussian Splat Rendering (SplatViewer)
 
-When `sceneData.splatUrl` is present, the viewer routes to `SplatViewer` (using `@sparkjsdev/spark`):
+When `sceneData.splatUrl` is present, the viewer routes to `SplatViewer` (using `@sparkjsdev/spark`).
 
-- **Camera position**: `(0, 1.7, 0)` — placed inside the scene at eye height
-- **Coordinate flip**: `splat.rotation.x = Math.PI` converts COLMAP convention (Y-down, Z-forward) to Three.js convention (Y-up, Z-backward)
-- **OrbitControls**: target set to `(0, 1.7, 5)` for natural pan/zoom
-- **WASD navigation**: full keyboard + arrow key support
-- **Loading state**: animated progress bar with gradient background
-- **Error handling**: displays error message overlay if splat fails to load
+#### Marble Coordinate System Invariant
+
+Every Marble SPZ scene is normalized so the main floor sits at **world Y = 0** after the `rotation.x = Math.PI` flip. This invariant is guaranteed by the Marble provider and baked into all hardcoded constants:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| Camera eye (free-fly) | `(0, 1.7, 0)` | 1.7 m above floor |
+| Physics body spawn | `y = 0.9` | capsule bottom = 0 = floor |
+| Gravity | `-9.81 Y` | standard downward |
+| `setUp` | `(0, +1, 0)` | standard Y-up after PI bake |
+
+**Never use `getBoundingBox()` to position the camera for Marble scenes.** COLMAP outlier splats inflate the bounding box (max.y can be 50+) placing the camera tens of metres underground. The floor-at-Y=0 invariant makes a hardcoded `(0, 1.7, 0)` always correct.
+
+#### Free-fly Mode (default)
+
+- Mouse drag rotates the splat mesh directly (no OrbitControls dependency)
+- Splat mesh has `rotation.x = Math.PI` applied to convert COLMAP Y-down → Three.js Y-up
+- `SplatMesh.matrixAutoUpdate = false` — mesh matrix is updated manually after each interaction to avoid Spark's internal matrix update fighting Three.js
+
+#### Physics / Walk Mode ("Click to enter")
+
+Triggered by pointer lock (click → browser locks pointer):
+
+1. `onLockChange` spawns the physics body at `{ x: camera.x, y: camera.y - 0.8, z: camera.z }` (body centre 0.8 m below eye)
+2. `CharacterController` (Rapier kinematic capsule): `HALF_HEIGHT=0.6`, `RADIUS=0.3`, `SPAWN.y=0.9`
+3. Per-frame: `cc.move()` computes corrected movement via `computeColliderMovement`; camera set to `pos.y + 0.8`
+4. `computedGrounded()` fires immediately (body spawned at floor level) → `verticalVel` stays 0 → no drift
+
+#### World Collider
+
+`buildWorldColliders.ts` loads the GLB collider mesh paired with the SPZ scene:
+- Applies `rotation.x = Math.PI` to match the splat flip
+- Bakes `matrixWorld` into vertex positions — floor normals become `(0, +1, 0)` in world space
+- Standard physics conventions then apply with no further coordinate transforms
+
+#### Loading State
+
+Animated progress bar with gradient background. Error overlay if splat fails to load.
 
 ### Demand Rendering and OrbitControls
 

@@ -13,6 +13,7 @@ export default defineConfig({
       "/screenshots": "http://localhost:3001",
       "/uploads": "http://localhost:3001",
       "/splat": "http://localhost:3001",
+      "/collider": "http://localhost:3001",
       // Proxy WebSocket connections for the realtime bus
       "/realtime": { target: "ws://localhost:3001", ws: true },
     },

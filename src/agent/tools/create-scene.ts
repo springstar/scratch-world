@@ -26,12 +26,13 @@ export function createSceneTool(
 	generationQueue: GenerationQueue,
 	sessionId: string,
 ): AgentTool<typeof parameters> {
+	const providerHandlesGeneration = !!sceneManager.getActiveProvider().providesOwnRendering;
 	return {
 		name: "create_scene",
 		label: "Create 3D scene",
-		description:
-			"Generate a new 3D scene from a text prompt. Always supply sceneCode — it is the sole rendering mechanism. " +
-			"Use for all scenes including settlements rendered from create_city layout data.",
+		description: providerHandlesGeneration
+			? "Generate a new 3D scene. Supply only 'prompt' and optional 'title' — do NOT provide sceneData or sceneCode. The provider generates the complete scene."
+			: "Generate a new 3D scene. Always supply sceneCode — it is the sole rendering mechanism. Use for all scenes including settlements rendered from create_city layout data.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			console.log(`[create_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);
@@ -43,8 +44,9 @@ export function createSceneTool(
 					}
 				: params.sceneData;
 
-			// Skill path (sceneData supplied directly) — always synchronous
 			if (mergedSceneData) {
+				console.log("[create_scene] taking skill path (sceneData or sceneCode provided)");
+
 				const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, mergedSceneData);
 				const validationMsg = params.sceneCode ? formatViolations(validateSceneCode(params.sceneCode)) : "";
 				return {
@@ -68,9 +70,20 @@ export function createSceneTool(
 
 			// Provider path — use async if provider supports it
 			const provider = sceneManager.getActiveProvider();
+			console.log(`[create_scene] taking provider path, provider=${provider.name}`);
 			if (provider.startGeneration) {
 				const title = params.title ?? params.prompt.slice(0, 60);
-				const { operationId } = await provider.startGeneration(params.prompt);
+				let operationId: string;
+				try {
+					({ operationId } = await provider.startGeneration(params.prompt));
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					console.error(`[create_scene] provider.startGeneration failed: ${msg}`);
+					return {
+						content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
+						details: { error: msg },
+					};
+				}
 				const scene = await sceneManager.createSceneAsync(
 					ownerId(),
 					params.prompt,

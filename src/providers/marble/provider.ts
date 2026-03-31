@@ -11,7 +11,13 @@ import type {
 
 // ── Marble API base URL and auth ─────────────────────────────────────────────
 
-const MARBLE_BASE_URL = "https://api.worldlabs.ai";
+const MARBLE_BASE_URL = process.env.MARBLE_API_URL ?? "https://api.worldlabs.ai";
+
+// The Marble staging endpoint uses a self-signed TLS certificate.
+// Disable verification when pointing at a non-default URL.
+if (process.env.MARBLE_API_URL) {
+	process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 600_000; // 10 minutes
 
@@ -166,6 +172,7 @@ type SpzMode = "proxy" | "local";
 
 export class MarbleProvider implements SceneRenderProvider {
 	readonly name = "marble";
+	readonly providesOwnRendering = true;
 
 	private readonly apiKey: string;
 	private readonly projectRoot: string;

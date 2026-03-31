@@ -31,9 +31,24 @@ Ask: **"What does the ground do in this scene?"** Flat is the exception for natu
 | **cliff + drop** | coastal cliff, mesa, karst peaks rising from flat valley floor |
 | **elevated + view** | hilltop lookout, rooftop, mountain pass |
 
-### Step 3 — Extract cultural/regional signals
+### Step 3 — Extract cultural/regional signals AND biome
 
-If the prompt names a location or culture, identify before coding:
+**For natural environments (forest, jungle, river, desert, savanna, coast, grassland):**
+Identify the biome first, then look up its color palette and scatter rules in `09-natural-biomes.md`.
+
+| Prompt contains | Biome | Mandatory lookup |
+|---|---|---|
+| amazon / tropical / jungle / rainforest | Tropical Rainforest | 09-natural-biomes §Biome 1 |
+| forest / woods / woodland (temperate) | Temperate Forest | 09-natural-biomes §Biome 2 |
+| 湘西 / li river / gorge / river valley / 山谷 | River Valley | 09-natural-biomes §Biome 3 |
+| savanna / safari / african plains | Savanna | 09-natural-biomes §Biome 4 |
+| desert / dunes / sahara / gobi | Desert | 09-natural-biomes §Biome 5 |
+| beach / coast / ocean / seaside | Coastal | 09-natural-biomes §Biome 6 |
+| bamboo / 竹林 / arashiyama | Bamboo Forest | 09-natural-biomes §Biome 7 |
+
+**Water color is determined by biome — not by aesthetic preference.** Check the Water Color Quick Reference in `09-natural-biomes.md`.
+
+**For urban/built environments** (city, town, room, interior): identify cultural context:
 - **Building material + style**: timber frame / stone / concrete / mud-brick / bamboo...
 - **Roof form**: pitched+tile / flat / thatched / curved eave (Chinese) / pagoda / straw...
 - **Water relationship**: over water (stilted) / beside water / terraced toward water / none

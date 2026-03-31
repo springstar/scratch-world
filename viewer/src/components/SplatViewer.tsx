@@ -7,8 +7,12 @@ import {
   AmbientLight,
   Clock,
   Vector3,
+  Box3,
+  Euler,
+  BoxGeometry,
+  MeshStandardMaterial,
+  Mesh,
 } from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { getRapier } from "../physics/init-rapier.js";
@@ -20,22 +24,30 @@ import {
   cleanupOldProjectiles,
   type Projectile,
 } from "../physics/projectiles.js";
-import { addPushableBoxes, syncPushableObjects, type PushableObject } from "../physics/pushable-objects.js";
+import {
+  loadPhysicsProps,
+  syncPhysicsProps,
+  disposePhysicsProps,
+  type PhysicsProp,
+} from "../physics/pushable-objects.js";
+import { pickObject } from "../physics/raycast-pick.js";
 import { extractNpcs, findNearbyNpc, type NearbyNpc } from "../physics/npc-proximity.js";
-import type { SceneObject } from "../types.js";
+import type { SceneObject, Viewpoint } from "../types.js";
 
 interface Props {
   splatUrl: string;
   colliderMeshUrl?: string;
   sceneObjects?: SceneObject[];
+  viewpoints?: Viewpoint[];
   onInteract?: (objectId: string, action: string) => void;
 }
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInteract }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, onInteract }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [isLocked, setIsLocked] = useState(false);
+  const [physicsReady, setPhysicsReady] = useState(false);
   const [nearbyNpc, setNearbyNpc] = useState<NearbyNpc | null>(null);
   const onInteractRef = useRef(onInteract);
   onInteractRef.current = onInteract;
@@ -47,6 +59,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
 
     setStatus("loading");
     setIsLocked(false);
+    setPhysicsReady(false);
     setNearbyNpc(null);
 
     const renderer = new WebGLRenderer({ canvas, antialias: true });
@@ -68,7 +81,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
     splat.rotation.x = Math.PI;
     scene.add(splat);
 
-    splat.initialized.then(() => setStatus("ready")).catch((err: unknown) => {
+    splat.initialized.then(() => {
+      // Marble normalises all SPZ scenes so the floor sits at world Y = 0
+      // and the default viewpoint is (0, 1.7, 0) — no bounding-box maths needed.
+      // Using getBoundingBox() + matrixWorld arithmetic has consistently placed
+      // the camera outside the scene across many iterations; don't do it.
+      setStatus("ready");
+    }).catch((err: unknown) => {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load splat file");
       setStatus("error");
     });
@@ -98,46 +117,86 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
     let animId: number;
     let cleanupPhysics: (() => void) | null = null;
 
-    // ── Free-fly loop (no physics) ────────────────────────────────────────────
-    function startFreeFlyLoop() {
-      const controls = new OrbitControls(camera, canvas);
-      controls.target.set(0, 1.7, 5);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.1;
-      controls.update();
+    const worldUp = new Vector3(0, 1, 0);
 
-      const fwd = new Vector3();
-      const right = new Vector3();
-      const wasdMove = new Vector3();
-      const worldUp = new Vector3(0, 1, 0);
+    // ── Free-fly: mouse-drag look + WASD ─────────────────────────────────────
+    // No pointer lock in free-fly — mouse look only while button is held.
+    // This avoids a race where the free-fly lock resolves before the physics
+    // onClick fires, making the click act as a shoot instead of "enter".
+    const flyEuler = new Euler(0, 0, 0, "YXZ");
+    let freeFlyActive = true;
+    let ffDragging = false;
 
-      function loop() {
-        animId = requestAnimationFrame(loop);
-        if (keys.size > 0) {
-          const spd = (keys.has("shift") ? 4 : 1) * 0.012;
-          camera.getWorldDirection(fwd);
-          fwd.y = 0;
-          if (fwd.lengthSq() > 0.0001) fwd.normalize();
-          right.crossVectors(fwd, worldUp).normalize();
-          wasdMove.set(0, 0, 0);
-          if (keys.has("w") || keys.has("arrowup"))    wasdMove.addScaledVector(fwd,   spd);
-          if (keys.has("s") || keys.has("arrowdown"))  wasdMove.addScaledVector(fwd,  -spd);
-          if (keys.has("a") || keys.has("arrowleft"))  wasdMove.addScaledVector(right, -spd);
-          if (keys.has("d") || keys.has("arrowright")) wasdMove.addScaledVector(right,  spd);
-          if (wasdMove.lengthSq() > 0) {
-            camera.position.add(wasdMove);
-            controls.target.add(wasdMove);
-          }
-        }
-        controls.update();
-        renderer.render(scene, camera);
+    const onMouseDown = (e: MouseEvent) => {
+      if (!freeFlyActive) return;
+      // Right-click or middle-click: drag to look
+      if (e.button !== 0) { ffDragging = true; e.preventDefault(); }
+      // Left-click passes through to physics onClick (do NOT lock here)
+    };
+    const onMouseUp = () => { ffDragging = false; };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!freeFlyActive || !ffDragging) return;
+      const sens = 0.003;
+      flyEuler.y -= e.movementX * sens;
+      flyEuler.x -= e.movementY * sens;
+      flyEuler.x = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, flyEuler.x));
+      camera.rotation.copy(flyEuler);
+    };
+    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("mouseup",   onMouseUp);
+    canvas.addEventListener("mousemove", onMouseMove);
+
+    // Keep flyEuler in sync when camera is repositioned externally
+    const syncEuler = () => { flyEuler.setFromQuaternion(camera.quaternion, "YXZ"); };
+
+    const freeFlyFwd   = new Vector3();
+    const freeFlyRight = new Vector3();
+    const freeFlyMove  = new Vector3();
+
+    function freeFlyLoop() {
+      if (!freeFlyActive) return;
+      animId = requestAnimationFrame(freeFlyLoop);
+      if (keys.size > 0) {
+        const spd = (keys.has("shift") ? 5 : 1) * 0.05;
+        camera.getWorldDirection(freeFlyFwd);
+        freeFlyFwd.y = 0;
+        if (freeFlyFwd.lengthSq() > 0.0001) freeFlyFwd.normalize();
+        freeFlyRight.crossVectors(freeFlyFwd, worldUp).normalize();
+        freeFlyMove.set(0, 0, 0);
+        if (keys.has("w") || keys.has("arrowup"))    freeFlyMove.addScaledVector(freeFlyFwd,    spd);
+        if (keys.has("s") || keys.has("arrowdown"))  freeFlyMove.addScaledVector(freeFlyFwd,   -spd);
+        if (keys.has("a") || keys.has("arrowleft"))  freeFlyMove.addScaledVector(freeFlyRight,  -spd);
+        if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
+        if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
       }
-      animId = requestAnimationFrame(loop);
-      cleanupPhysics = () => controls.dispose();
+      renderer.render(scene, camera);
+    }
+    freeFlyLoop();
+
+    function stopFreeFly() {
+      freeFlyActive = false;
+      ffDragging = false;
+      cancelAnimationFrame(animId);
+      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("mouseup",   onMouseUp);
+      canvas.removeEventListener("mousemove", onMouseMove);
     }
 
+    function restartFreeFly() {
+      syncEuler();
+      freeFlyActive = true;
+      freeFlyLoop();
+    }
+
+    // Default cleanup (used if physics never initialises)
+    cleanupPhysics = () => { stopFreeFly(); };
+
     // ── Physics loop ──────────────────────────────────────────────────────────
-    async function startPhysicsLoop() {
+    // Loads asynchronously while free-fly keeps rendering. On success, free-fly
+    // continues until the user clicks to enter (pointer lock). At that point the
+    // character body is teleported to the camera's current position so physics
+    // starts from inside the scene, not from an arbitrary spawn coordinate.
+    async function initPhysics() {
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const cv: HTMLCanvasElement = canvas!;
       if (cancelled) return;
@@ -145,59 +204,45 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
       const RAPIER = await getRapier();
       if (cancelled) return;
 
-      const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
-
+      const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 }); // standard -Y gravity; after PI-bake the floor is at world Y < camera
       await buildWorldColliders(world, colliderMeshUrl!);
       if (cancelled) { world.free(); return; }
 
       const cc = createCharacterController(world);
-      const pushables: PushableObject[] = addPushableBoxes(world, scene);
+
+      const props: PhysicsProp[] = await loadPhysicsProps(
+        world,
+        scene,
+        sceneObjects ?? [],
+        viewpoints ?? [],
+      );
+      if (cancelled) { disposePhysicsProps(props, world, scene); world.free(); return; }
+      const propMeshes = props.flatMap((p) => p.meshes);
       const projectiles: Projectile[] = [];
       const npcs = extractNpcs(sceneObjects ?? []);
 
-      // PointerLockControls for mouse look
-      const plc = new PointerLockControls(camera, cv);
-      const onLockChange = () => setIsLocked(document.pointerLockElement === cv);
-      document.addEventListener("pointerlockchange", onLockChange);
+      // Physics loaded — free-fly is still running; show the "Click to enter" overlay
+      setPhysicsReady(true);
 
-      // Left-click when locked OR F key: shoot. Left-click when unlocked: lock pointer.
+      const plc = new PointerLockControls(camera, cv);
+      let inPhysicsMode = false;
+
+      const tempBoxGeo = new BoxGeometry(0.6, 0.6, 0.6);
+      const tempBoxMat = new MeshStandardMaterial({ color: 0x4488cc });
+      const tempBoxes: { body: InstanceType<typeof RAPIER.RigidBody>; mesh: Mesh }[] = [];
+
+      const fwd = new Vector3();
+      const right = new Vector3();
+      let lastNearbyId: string | null = null;
+
       const doShoot = () => shootProjectile(world, camera, scene, projectiles);
       const doInteract = (npc: NearbyNpc) => {
         onInteractRef.current?.(npc.objectId, npc.interactionHint ?? "你好");
       };
 
-      const onClick = () => {
-        if (document.pointerLockElement !== cv) { plc.lock(); return; }
-        doShoot();
-      };
-      const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
-      const onKeyShoot = (e: KeyboardEvent) => {
-        const k = e.key.toLowerCase();
-        if (k === "f" && document.pointerLockElement === cv) { doShoot(); return; }
-        if (k === "e") {
-          const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
-          if (npc) doInteract(npc);
-        }
-      };
-      cv.addEventListener("click", onClick);
-      cv.addEventListener("contextmenu", onContextMenu);
-      window.addEventListener("keydown", onKeyShoot);
-
-      // Expose callbacks for touch buttons
-      (window as unknown as Record<string, unknown>).__physicsShoot = doShoot;
-      (window as unknown as Record<string, unknown>).__physicsInteract = () => {
-        const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
-        if (npc) doInteract(npc);
-      };
-      (window as unknown as Record<string, unknown>).__nearbyNpc = null;
-
-      const fwd = new Vector3();
-      const right = new Vector3();
-      const worldUp = new Vector3(0, 1, 0);
-      let lastNearbyId: string | null = null;
-
-      function loop() {
-        animId = requestAnimationFrame(loop);
+      function physicsLoop() {
+        if (!inPhysicsMode) return;
+        animId = requestAnimationFrame(physicsLoop);
         const delta = clock.getDelta();
         const spd = (keys.has("shift") ? 4 : 1) * 4 * delta;
 
@@ -216,10 +261,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
         world.step();
 
         const pos = cc.body.translation();
+        // Eye is 0.8m above body center (standard Y-up: eye = body.y + 0.8)
         camera.position.set(pos.x, pos.y + 0.8, pos.z);
         (window as unknown as Record<string, unknown>).__playerPosition = { x: pos.x, y: pos.y, z: pos.z };
 
-        // NPC proximity check (every frame, cheap distance math)
         if (npcs.length > 0) {
           const nearby = findNearbyNpc(npcs, pos.x, pos.y + 0.8, pos.z);
           const newId = nearby?.objectId ?? null;
@@ -230,20 +275,106 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
           }
         }
 
+        for (const b of tempBoxes) {
+          const t = b.body.translation();
+          b.mesh.position.set(t.x, t.y, t.z);
+          const r = b.body.rotation();
+          b.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+        }
         syncProjectiles(projectiles);
-        syncPushableObjects(pushables);
+        syncPhysicsProps(props);
         cleanupOldProjectiles(world, projectiles, scene);
 
         renderer.render(scene, camera);
       }
-      animId = requestAnimationFrame(loop);
+
+      const onLockChange = () => {
+        const locked = document.pointerLockElement === cv;
+        setIsLocked(locked);
+        if (locked && !inPhysicsMode) {
+          stopFreeFly();
+          // Marble scenes: floor at world Y=0, camera eye at Y=1.7.
+          // Body centre = camera.y - 0.8 = 0.9; capsule bottom = 0 = floor.
+          // No raycast needed — floor position is always Y=0 by Marble convention.
+          cc.body.setNextKinematicTranslation({
+            x: camera.position.x,
+            y: camera.position.y - 0.8,
+            z: camera.position.z,
+          });
+          cc.verticalVel = 0;
+          world.step(); // commit teleport before cc.move() reads body.translation()
+          clock.getDelta(); // flush accumulated delta
+          inPhysicsMode = true;
+          physicsLoop();
+        } else if (!locked && inPhysicsMode) {
+          // Transition: physics walking → free-fly (Escape key)
+          inPhysicsMode = false;
+          cancelAnimationFrame(animId);
+          syncEuler(); // sync free-fly rotation from current camera state
+          restartFreeFly();
+        }
+      };
+      document.addEventListener("pointerlockchange", onLockChange);
+
+      const onClick = () => {
+        if (document.pointerLockElement !== cv) { plc.lock(); return; }
+        doShoot();
+      };
+      const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
+      const onKeyAction = (e: KeyboardEvent) => {
+        const k = e.key.toLowerCase();
+        if (k === "f" && document.pointerLockElement === cv) { doShoot(); return; }
+        if (k === "g" && document.pointerLockElement === cv) {
+          // Spawn a pushable box 2m ahead of the camera
+          const dir = new Vector3();
+          camera.getWorldDirection(dir);
+          dir.y = 0;
+          if (dir.lengthSq() < 0.0001) dir.set(0, 0, 1);
+          dir.normalize();
+          const pos = camera.position.clone().addScaledVector(dir, 2);
+          const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+            .setTranslation(pos.x, pos.y, pos.z)
+            .setAdditionalMass(10);
+          const body = world.createRigidBody(bodyDesc);
+          const HALF = 0.3;
+          world.createCollider(
+            RAPIER.ColliderDesc.cuboid(HALF, HALF, HALF).setRestitution(0.3).setFriction(0.8),
+            body,
+          );
+          const mesh = new Mesh(tempBoxGeo, tempBoxMat);
+          mesh.position.copy(pos);
+          scene.add(mesh);
+          tempBoxes.push({ body, mesh });
+          return;
+        }
+        if (k === "e") {
+          if (document.pointerLockElement === cv) {
+            const propId = pickObject(camera, propMeshes, 4);
+            if (propId) { onInteractRef.current?.(propId, "pick"); return; }
+          }
+          const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
+          if (npc) doInteract(npc);
+        }
+      };
+      cv.addEventListener("click", onClick);
+      cv.addEventListener("contextmenu", onContextMenu);
+      window.addEventListener("keydown", onKeyAction);
+
+      (window as unknown as Record<string, unknown>).__physicsShoot = doShoot;
+      (window as unknown as Record<string, unknown>).__physicsInteract = () => {
+        const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
+        if (npc) doInteract(npc);
+      };
+      (window as unknown as Record<string, unknown>).__nearbyNpc = null;
 
       cleanupPhysics = () => {
+        inPhysicsMode = false;
+        stopFreeFly();
         plc.dispose();
         document.removeEventListener("pointerlockchange", onLockChange);
         cv.removeEventListener("click", onClick);
         cv.removeEventListener("contextmenu", onContextMenu);
-        window.removeEventListener("keydown", onKeyShoot);
+        window.removeEventListener("keydown", onKeyAction);
         delete (window as unknown as Record<string, unknown>).__physicsShoot;
         delete (window as unknown as Record<string, unknown>).__physicsInteract;
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
@@ -254,11 +385,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
           scene.remove(p.mesh);
           p.mesh.geometry.dispose();
         }
-        for (const o of pushables) {
-          world.removeRigidBody(o.body);
-          scene.remove(o.mesh);
-          o.mesh.geometry.dispose();
+        for (const b of tempBoxes) {
+          world.removeRigidBody(b.body);
+          scene.remove(b.mesh);
         }
+        tempBoxGeo.dispose();
+        tempBoxMat.dispose();
+        disposePhysicsProps(props, world, scene);
         world.free();
       };
     }
@@ -266,14 +399,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
     let cancelled = false;
 
     if (colliderMeshUrl) {
-      startPhysicsLoop().catch((err: unknown) => {
+      initPhysics().catch((err: unknown) => {
         if (!cancelled) {
-          console.error("[SplatViewer] physics init failed, falling back to free-fly:", err);
-          startFreeFlyLoop();
+          console.error("[SplatViewer] physics init failed, staying in free-fly:", err);
+          // free-fly loop is already running — nothing to do
         }
       });
-    } else {
-      startFreeFlyLoop();
     }
 
     return () => {
@@ -297,7 +428,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
       />
 
       {/* Physics mode: "click to enter" overlay */}
-      {colliderMeshUrl && status === "ready" && !isLocked && (
+      {physicsReady && status === "ready" && !isLocked && (
         <div style={{
           position: "absolute", inset: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
@@ -314,7 +445,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
       )}
 
       {/* NPC proximity prompt — shown when walking near an NPC */}
-      {colliderMeshUrl && status === "ready" && isLocked && nearbyNpc && (
+      {physicsReady && status === "ready" && isLocked && nearbyNpc && (
         <div style={{
           position: "absolute", bottom: 120, left: "50%", transform: "translateX(-50%)",
           background: "rgba(10,10,30,0.82)", backdropFilter: "blur(6px)",
@@ -353,7 +484,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, onInterac
       )}
 
       {/* Touch shoot button */}
-      {colliderMeshUrl && status === "ready" && isTouch && isLocked && (
+      {physicsReady && status === "ready" && isTouch && isLocked && (
         <button
           onPointerDown={(e) => {
             e.preventDefault();

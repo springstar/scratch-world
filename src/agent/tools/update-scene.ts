@@ -25,12 +25,13 @@ export function updateSceneTool(
 	generationQueue: GenerationQueue,
 	sessionId: string,
 ): AgentTool<typeof parameters> {
+	const providerHandlesGeneration = !!sceneManager.getActiveProvider().providesOwnRendering;
 	return {
 		name: "update_scene",
 		label: "Update 3D scene",
-		description:
-			"Modify an existing scene based on a natural language instruction. Always supply sceneCode — it is the sole rendering mechanism. " +
-			"Use this when the user wants to add, remove, or change something in a scene.",
+		description: providerHandlesGeneration
+			? "Modify an existing scene. Supply only 'sceneId' and 'instruction' — do NOT provide sceneData or sceneCode. The provider regenerates the scene from the instruction."
+			: "Modify an existing scene based on a natural language instruction. Always supply sceneCode — it is the sole rendering mechanism. Use this when the user wants to add, remove, or change something in a scene.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			console.log(`[update_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);

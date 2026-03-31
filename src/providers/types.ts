@@ -33,6 +33,16 @@ export interface ProviderDescription {
 export interface SceneRenderProvider {
 	readonly name: string;
 
+	/**
+	 * When true, the provider generates the complete visual world on its own
+	 * (e.g. Marble photorealistic splats). The agent must NOT write sceneCode —
+	 * it should pass only a text prompt and let the provider handle rendering.
+	 *
+	 * When false (default), the agent writes sceneCode or sceneData directly
+	 * via the generator-claude skill and the provider is bypassed.
+	 */
+	readonly providesOwnRendering?: boolean;
+
 	// Generate a new scene from a text prompt
 	generate(prompt: string, options?: GenerateOptions): Promise<ProviderResult>;
 

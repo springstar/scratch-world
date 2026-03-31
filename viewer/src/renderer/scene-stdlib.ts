@@ -970,13 +970,17 @@ export function createStdlib(
 
       const group = new THREE.Group();
 
-      // ── Trunk: tapered multi-section with bark PBR ──────────────────────────
+      // ── Trunk: tapered multi-section, no texture maps (sampler budget) ─────────
       const trunkH = 2.6 + seed * 1.4;          // 2.6–4.0 m
       const trunkR0 = 0.22 + seed * 0.08;        // base radius
       const trunkR1 = 0.10 + seed * 0.04;        // top radius
       const trunkTilt = (rng(1) - 0.5) * 0.08;  // slight lean
-      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3018, roughness: 0.95 });
-      applyTerrainPbr(trunkMat, "bark_brown_02", 2, inv);
+      // Bark color varies per tree via seed; roughness 0.95 gives matte bark look.
+      // applyTerrainPbr omitted — its 3 texture maps push per-stage sampler count
+      // over WebGPU's hard limit of 16 when combined with leaf alphaMap + HDRI + shadows.
+      const barkL = 0.10 + seed * 0.06;  // lightness 0.10–0.16
+      const trunkColor = new THREE.Color().setHSL(0.07, 0.45, barkL);
+      const trunkMat = new THREE.MeshStandardMaterial({ color: trunkColor, roughness: 0.95, metalness: 0 });
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(trunkR1, trunkR0, trunkH, 10), trunkMat);
       trunk.position.y = trunkH / 2;
       trunk.rotation.z = trunkTilt;
@@ -1225,9 +1229,7 @@ export function createStdlib(
       const finalRough = mix(0.72, 0.91, slopeRough);
 
       const mat = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
-      // @ts-expect-error TSL node assignment
       mat.colorNode = finalColor;
-      // @ts-expect-error TSL node assignment
       mat.roughnessNode = finalRough;
 
       const mesh = new THREE.Mesh(geo, mat);

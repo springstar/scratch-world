@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ViewerCanvas } from "./components/ViewerCanvas.js";
-import { MarbleViewer } from "./components/MarbleViewer.js";
 import { SplatViewer } from "./components/SplatViewer.js";
 import { NarrativeOverlay } from "./components/NarrativeOverlay.js";
 import { uploadScreenshot } from "./api.js";
@@ -237,11 +236,21 @@ export function App() {
           scene.sceneData.splatUrl ? (
             <SplatViewer
               splatUrl={scene.sceneData.splatUrl}
+              colliderMeshUrl={scene.sceneData.colliderMeshUrl ? `/collider/${scene.sceneId}` : undefined}
               sceneObjects={scene.sceneData.objects}
+              viewpoints={scene.sceneData.viewpoints}
               onInteract={handleSplatInteract}
             />
-          ) : scene.providerRef.provider === "marble" && scene.providerRef.viewUrl ? (
-            <MarbleViewer marbleUrl={scene.providerRef.viewUrl} sceneData={scene.sceneData} />
+          ) : scene.providerRef.provider === "marble" ? (
+            // Marble scenes always use SplatViewer via SPZ proxy.
+            // If splatUrl is missing the scene was generated before that change or
+            // is still generating — show a neutral waiting state.
+            <div style={{ position: "relative", width: "100%", height: "100%", background: "#0a0a14", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <StarField />
+              <div style={{ color: "rgba(200,220,255,0.7)", fontFamily: "system-ui, sans-serif", fontSize: 14, letterSpacing: 0.5, position: "relative", zIndex: 1 }}>
+                {scene.status === "generating" ? "Scene generating…" : "Scene not available (no splat data)"}
+              </div>
+            </div>
           ) : (
             <ViewerCanvas
                 sceneData={scene.sceneData}

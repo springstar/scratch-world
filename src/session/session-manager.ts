@@ -1,6 +1,6 @@
 import type { Agent } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { createAgent } from "../agent/agent-factory.js";
+import { BASE_SYSTEM_PROMPT, createAgent, PROVIDER_BASE_PROMPT } from "../agent/agent-factory.js";
 import { trimContext } from "../agent/context-trimmer.js";
 import { isRejectionSignal, logFeedback } from "../agent/feedback-logger.js";
 import type { ChannelGateway } from "../channels/gateway.js";
@@ -70,8 +70,7 @@ export class SessionManager {
 
 	private async _dispatch(msg: ChatMessage): Promise<void> {
 		const agent = await this.getOrCreateAgent(msg);
-		await this.hydrateActiveScene(agent, msg.sessionId);
-		this.hydrateActiveSkills(agent);
+		await this.hydrateSystemPrompt(agent, msg.sessionId);
 
 		// Seed activeSceneId from persisted record so it survives turns where no scene tool runs
 		const record = await this.sessionRepo.findById(msg.sessionId);
@@ -151,10 +150,8 @@ export class SessionManager {
 
 		const agent = await this.getOrCreateAgent(msg);
 		console.log("[SessionManager] agent ready");
-		await this.hydrateActiveScene(agent, sessionId);
-		console.log("[SessionManager] hydrateActiveScene done");
-		this.hydrateActiveSkills(agent);
-		console.log("[SessionManager] hydrateActiveSkills done");
+		await this.hydrateSystemPrompt(agent, sessionId);
+		console.log("[SessionManager] hydrateSystemPrompt done");
 
 		let fullText = "";
 		let activeSceneId: string | null = existing?.activeSceneId ?? null;
@@ -238,8 +235,7 @@ export class SessionManager {
 		};
 
 		const agent = await this.getOrCreateAgent(msg);
-		await this.hydrateActiveScene(agent, sessionId);
-		this.hydrateActiveSkills(agent);
+		await this.hydrateSystemPrompt(agent, sessionId);
 
 		// Stream text deltas to viewer via WebSocket
 		let fullText = "";
@@ -296,7 +292,13 @@ export class SessionManager {
 		if (record?.agentMessages) {
 			try {
 				const messages = JSON.parse(record.agentMessages);
-				agent.replaceMessages(messages);
+				// Don't restore history from a previous session that ran under a different
+				// generation mode. If the provider now handles generation (startGeneration),
+				// old messages that show sceneCode calls would push the agent back to that path.
+				const providerHandlesGeneration = !!this.sceneManager.getActiveProvider().providesOwnRendering;
+				if (!providerHandlesGeneration) {
+					agent.replaceMessages(messages);
+				}
 			} catch {
 				// Corrupt history — start fresh
 			}
@@ -317,48 +319,36 @@ export class SessionManager {
 		}
 	}
 
-	private async hydrateActiveScene(agent: Agent, sessionId: string): Promise<void> {
+	private async hydrateSystemPrompt(agent: Agent, sessionId: string): Promise<void> {
+		const activeProvider = this.sceneManager.getActiveProvider();
+		const providerHandlesGeneration = !!activeProvider.providesOwnRendering;
+
+		// Select the correct base prompt — never append to an unknown previous state
+		let prompt = providerHandlesGeneration ? PROVIDER_BASE_PROMPT : BASE_SYSTEM_PROMPT;
+
+		// Append active scene context
 		const record = await this.sessionRepo.findById(sessionId);
-		if (!record?.activeSceneId) return;
-		const scene = await this.sceneManager.getScene(record.activeSceneId);
-		if (!scene) return;
-		const base = agent.state.systemPrompt.split("\n\nActive scene:")[0];
-		agent.setSystemPrompt(`${base}\n\nActive scene: ${scene.sceneId} ("${scene.title}")`);
-	}
-
-	private hydrateActiveSkills(agent: Agent): void {
-		let prompt = agent.state.systemPrompt
-			.split("\n\n## Scene Generation")[0]
-			.split("\n\n## Renderer Capabilities")[0]
-			.split("\n\n## Three.js Reference")[0]
-			.split("\n\nIMPORTANT: The active 3D world provider")[0];
-
-		const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
-
-		// Only inject the provider-auto-generate notice when no generator skill is active.
-		// When generator-claude (or any generator skill) is active, the agent writes sceneCode
-		// directly in the tool call — the provider's startGeneration path is bypassed.
-		if (!generatorMd) {
-			const provider = this.sceneManager.getActiveProvider();
-			if (provider.startGeneration) {
-				prompt +=
-					"\n\nIMPORTANT: The active 3D world provider generates the scene automatically from the prompt. " +
-					"When calling create_scene or update_scene, provide ONLY `prompt` (and optional `title`). " +
-					"Do NOT provide `sceneData` or `sceneCode` — the provider ignores them and will overwrite with its own output.";
+		if (record?.activeSceneId) {
+			const scene = await this.sceneManager.getScene(record.activeSceneId);
+			if (scene) {
+				prompt += `\n\nActive scene: ${scene.sceneId} ("${scene.title}")`;
 			}
 		}
-		if (generatorMd) {
-			prompt += `\n\n## Scene Generation\n\n${generatorMd}`;
-		}
 
-		const rendererMd = this.skillLoader.getActivePromptMarkdown("renderer");
-		if (rendererMd) {
-			prompt += `\n\n## Renderer Capabilities\n\n${rendererMd}`;
-		}
-
-		const threejsMd = this.skillLoader.getThreejsMarkdown();
-		if (threejsMd) {
-			prompt += `\n\n## Three.js Reference\n\n${threejsMd}`;
+		// In LLM code-gen mode: append generator + renderer + Three.js skills
+		if (!providerHandlesGeneration) {
+			const generatorMd = this.skillLoader.getActivePromptMarkdown("generator");
+			if (generatorMd) {
+				prompt += `\n\n## Scene Generation\n\n${generatorMd}`;
+			}
+			const rendererMd = this.skillLoader.getActivePromptMarkdown("renderer");
+			if (rendererMd) {
+				prompt += `\n\n## Renderer Capabilities\n\n${rendererMd}`;
+			}
+			const threejsMd = this.skillLoader.getThreejsMarkdown();
+			if (threejsMd) {
+				prompt += `\n\n## Three.js Reference\n\n${threejsMd}`;
+			}
 		}
 
 		agent.setSystemPrompt(prompt);

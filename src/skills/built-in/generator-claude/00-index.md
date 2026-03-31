@@ -17,3 +17,5 @@
    ```
    For dense forests (20+ trees), use a loop — never a custom geometry function.
 10. **`MeshStandardMaterial` minimum for all surfaces** — `MeshLambertMaterial` is prohibited. It ignores PBR and produces flat plastic-looking surfaces regardless of lighting. Use `stdlib.makeMat()` (returns MeshStandardMaterial) or `stdlib.makePhysicalMat()` for special surfaces.
+11. **Natural environments require biome lookup** — for any forest, jungle, river, desert, savanna, or coastal scene: read `09-natural-biomes.md` BEFORE writing code. Water color, fog density, tree density, and scatter pattern are all biome-specific. Never default to generic teal water or uniform tree grids. Amazon = muddy brown. Dense forest = cluster scatter, NOT loops.
+12. **For-loop tree placement is PROHIBITED in natural scenes** — any loop that increments x or z by a constant to place trees produces a colonnade (see screenshot failure). Read `10-environment-design.md` for the `forestZone()` scatter pattern that must replace all such loops. Rows are only correct for cultivated gardens and urban street trees.

@@ -36,13 +36,15 @@ const parameters = Type.Object({
 	),
 });
 
-interface BraveResult {
+interface TavilyResult {
 	title: string;
 	url: string;
-	description?: string;
+	content: string;
+	raw_content?: string;
+	score: number;
 }
-interface BraveResponse {
-	web?: { results?: BraveResult[] };
+interface TavilyResponse {
+	results?: TavilyResult[];
 }
 
 interface AssetCandidate {
@@ -54,7 +56,7 @@ interface AssetCandidate {
 	notes: string;
 }
 
-function extractGlbUrls(results: BraveResult[]): { url: string; title: string; source: string }[] {
+function extractGlbUrls(results: TavilyResult[]): { url: string; title: string; source: string }[] {
 	const candidates: { url: string; title: string; source: string }[] = [];
 
 	for (const r of results) {
@@ -65,12 +67,13 @@ function extractGlbUrls(results: BraveResult[]): { url: string; title: string; s
 			continue;
 		}
 
-		// jsDelivr or raw.githubusercontent pattern — extract from snippet
-		const snippetUrls = (r.description ?? "").match(
+		// Extract GLB URLs from raw_content (full page text) and snippet
+		const searchText = `${r.raw_content ?? ""} ${r.content ?? ""}`;
+		const contentUrls = searchText.match(
 			/https?:\/\/(?:cdn\.jsdelivr\.net|raw\.githubusercontent\.com)[^\s"'<>)]+\.glb/gi,
 		);
-		if (snippetUrls) {
-			for (const u of snippetUrls) {
+		if (contentUrls) {
+			for (const u of contentUrls) {
 				candidates.push({ url: u, title: r.title, source: "cdn.jsdelivr.net" });
 			}
 		}
@@ -117,14 +120,14 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 			"After successfully using a discovered asset, call add_to_catalog to persist it.",
 		parameters,
 		execute: async (_id, params) => {
-			const apiKey = process.env.BRAVE_SEARCH_API_KEY;
+			const apiKey = process.env.TAVILY_API_KEY;
 			if (!apiKey) {
 				return {
 					content: [
 						{
 							type: "text",
 							text: JSON.stringify({
-								error: "BRAVE_SEARCH_API_KEY not configured — cannot search for assets",
+								error: "TAVILY_API_KEY not configured — cannot search for assets",
 							}),
 						},
 					],
@@ -134,18 +137,21 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 
 			const max = Math.min(params.maxResults ?? 5, 10);
 
-			// Append "glb" and "free" to bias toward direct downloads
 			const searchQuery = `${params.query} filetype:glb OR site:github.com gltf free CC0`;
-			const searchUrl = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(searchQuery)}&count=10`;
 
-			let braveData: BraveResponse;
+			let tavilyData: TavilyResponse;
 			try {
-				const res = await fetch(searchUrl, {
-					headers: {
-						Accept: "application/json",
-						"Accept-Encoding": "gzip",
-						"X-Subscription-Token": apiKey,
-					},
+				const res = await fetch("https://api.tavily.com/search", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						api_key: apiKey,
+						query: searchQuery,
+						search_depth: "basic",
+						include_raw_content: true,
+						max_results: 10,
+						include_domains: TRUSTED_DOMAINS,
+					}),
 				});
 				if (!res.ok) {
 					const body = await res.text();
@@ -153,13 +159,13 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 						content: [
 							{
 								type: "text",
-								text: JSON.stringify({ error: `Brave API error ${res.status}: ${body.slice(0, 200)}` }),
+								text: JSON.stringify({ error: `Tavily API error ${res.status}: ${body.slice(0, 200)}` }),
 							},
 						],
 						details: { candidates: [] },
 					};
 				}
-				braveData = (await res.json()) as BraveResponse;
+				tavilyData = (await res.json()) as TavilyResponse;
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: JSON.stringify({ error: `Network error: ${String(err)}` }) }],
@@ -167,7 +173,7 @@ export function findGltfAssetsTool(): AgentTool<typeof parameters> {
 				};
 			}
 
-			const rawResults = braveData.web?.results ?? [];
+			const rawResults = tavilyData.results ?? [];
 			const extracted = extractGlbUrls(rawResults);
 
 			// Also include raw search result URLs if they're trusted GLB hosts

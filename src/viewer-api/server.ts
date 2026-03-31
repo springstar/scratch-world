@@ -10,6 +10,7 @@ import type { SessionManager } from "../session/session-manager.js";
 import type { SkillLoader } from "../skills/skill-loader.js";
 import { RealtimeBus } from "./realtime.js";
 import { chatRoute } from "./routes/chat.js";
+import { colliderProxyRoute } from "./routes/collider-proxy.js";
 import { generatorsRoute } from "./routes/generators.js";
 import { interactRoute } from "./routes/interact.js";
 import { scenesRoute } from "./routes/scenes.js";
@@ -67,6 +68,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/interact", interactRoute(sessionManager, bus));
 	app.route("/chat", chatRoute(sessionManager, bus));
 	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));
+	app.route("/collider", colliderProxyRoute(sceneManager, marbleApiKey));
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));

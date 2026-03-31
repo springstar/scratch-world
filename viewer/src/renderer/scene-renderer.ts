@@ -625,10 +625,20 @@ export class SceneRenderer {
     );
 
     try {
+      // Strip re-declarations of sandbox-provided variable names.
+      // Old sceneCode sometimes writes `const scene = new THREE.Scene()` etc.
+      // which conflicts with the parameter name injected by new Function().
+      const SANDBOX_VARS = ["THREE", "tsl", "scene", "camera", "renderer", "controls", "animate", "WaterMesh", "stdlib"];
+      const reDecl = new RegExp(
+        `\\b(?:const|let|var)\\s+(${SANDBOX_VARS.join("|")})\\b\\s*=`,
+        "g",
+      );
+      const sanitized = code.replace(reDecl, (_, name) => `${name} =`);
+
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const fn = new Function(
         "THREE", "tsl", "scene", "camera", "renderer", "controls", "animate", "WaterMesh", "stdlib",
-        code,
+        sanitized,
       );
       fn(
         THREE,
