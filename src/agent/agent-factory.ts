@@ -233,22 +233,46 @@ When a user wants to place ANY physical object in a Marble scene — robot, char
 
 ## Asset catalog (modelUrl + scale for place_prop)
 
+Prefer photorealistic (Polyhaven PBR) assets for Marble/splat scenes — they match the scene's
+photo-quality renderer. Stylized assets (Three.js characters) are kept only because no
+photorealistic rigged alternative exists. All Polyhaven models are in metres (scale=1).
+
+### Furniture — photorealistic PBR (Polyhaven)
+| Name | modelUrl | scale |
+|------|----------|-------|
+| Armchair (victorian) | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/ArmChair_01/ArmChair_01_1k.gltf | 1 |
+| Green chair (gothic) | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/GreenChair_01/GreenChair_01_1k.gltf | 1 |
+| Rocking chair | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Rockingchair_01/Rockingchair_01_1k.gltf | 1 |
+| Coffee table | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/CoffeeTable_01/CoffeeTable_01_1k.gltf | 1 |
+| Park bench | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/painted_wooden_bench/painted_wooden_bench_1k.gltf | 1 |
+| Velvet sofa | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/GlamVelvetSofa/glTF-Binary/GlamVelvetSofa.glb | 1 |
+
+### Props — industrial / decorative (Polyhaven)
+| Name | modelUrl | scale |
+|------|----------|-------|
+| Metal barrel | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Barrel_01/Barrel_01_1k.gltf | 1 |
+| Wooden barrel cluster | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_barrels_01/wooden_barrels_01_1k.gltf | 1 |
+| Cardboard box | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/cardboard_box_01/cardboard_box_01_1k.gltf | 1 |
+| Boombox / radio | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/boombox/boombox_1k.gltf | 1 |
+| Fire extinguisher | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/korean_fire_extinguisher_01/korean_fire_extinguisher_01_1k.gltf | 1 |
+| Wet floor sign | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/WetFloorSign_01/WetFloorSign_01_1k.gltf | 1 |
+| Cash register | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/CashRegister_01/CashRegister_01_1k.gltf | 1 |
+| Vintage camera | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Camera_01/Camera_01_1k.gltf | 1 |
+| Tool chest | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/metal_tool_chest/metal_tool_chest_1k.gltf | 1 |
+| Hurricane lantern | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Lantern_01/Lantern_01_1k.gltf | 1 |
+| Chandelier | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Chandelier_02/Chandelier_02_1k.gltf | 1 |
+| Brass vase | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/brass_vase_01/brass_vase_01_1k.gltf | 1 |
+| Ceramic vase | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/ceramic_vase_01/ceramic_vase_01_1k.gltf | 1 |
+| Planter box | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/planter_box_01/planter_box_01_1k.gltf | 1 |
+| Potted plant | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/potted_plant_01/potted_plant_01_1k.gltf | 1 |
+
+### Characters / Animals — stylized rigged (no photorealistic alternative)
 | Name | modelUrl | scale |
 |------|----------|-------|
 | Robot (expressive) | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb | 1 |
 | Soldier | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb | 1 |
 | Female character | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Michelle.glb | 1 |
-| Horse | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Horse.glb | 0.012 |
 | Fox | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Fox/glTF-Binary/Fox.glb | 0.02 |
-| Duck | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF-Binary/Duck.glb | 0.01 |
-| Milk truck | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb | 1 |
-| Chair | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/SheenChair/glTF-Binary/SheenChair.glb | 1 |
-| Sofa | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/GlamVelvetSofa/glTF-Binary/GlamVelvetSofa.glb | 1 |
-| Lantern | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Lantern/glTF-Binary/Lantern.glb | 1 |
-| Boom box | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/BoomBox/glTF-Binary/BoomBox.glb | 80 |
-| Plant (potted) | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/DiffuseTransmissionPlant/glTF-Binary/DiffuseTransmissionPlant.glb | 1 |
-| Damaged helmet | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/DamagedHelmet/glTF-Binary/DamagedHelmet.glb | 1 |
-| Water bottle | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/WaterBottle/glTF-Binary/WaterBottle.glb | 8 |
 
 The active provider generates the complete 3D world from the text prompt.
 Do NOT write sceneCode or sceneData — the provider handles all rendering.
