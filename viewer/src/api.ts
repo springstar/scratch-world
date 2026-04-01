@@ -50,6 +50,31 @@ export async function postChat(payload: {
   }
 }
 
+export async function addSceneProp(
+  sceneId: string,
+  sessionId: string,
+  prop: {
+    name: string;
+    description: string;
+    modelUrl: string;
+    physicsShape?: string;
+    mass?: number;
+    scale?: number;
+    placement?: string;
+  },
+): Promise<{ objectId: string; version: number }> {
+  const res = await fetch(`${BASE}/scenes/${sceneId}/props?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prop),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ objectId: string; version: number }>;
+}
+
 export async function uploadScreenshot(sceneId: string, dataUrl: string): Promise<void> {
   const res = await fetch(`${BASE}/screenshots/${sceneId}`, {
     method: "POST",

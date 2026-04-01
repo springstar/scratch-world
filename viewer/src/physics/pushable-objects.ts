@@ -13,7 +13,7 @@ export interface PhysicsProp {
 
 const loader = new GLTFLoader();
 
-function loadGltf(url: string): Promise<THREE.Group> {
+export function loadGltf(url: string): Promise<THREE.Group> {
   return new Promise((resolve, reject) => {
     loader.load(url, (gltf) => resolve(gltf.scene), undefined, reject);
   });
@@ -23,7 +23,7 @@ function loadGltf(url: string): Promise<THREE.Group> {
  * Build a Rapier collider for the group using the requested shape.
  * Falls back to bounding box when convex hull computation fails.
  */
-function buildCollider(
+export function buildCollider(
   world: InstanceType<typeof RAPIER.World>,
   body: InstanceType<typeof RAPIER.RigidBody>,
   group: THREE.Group,

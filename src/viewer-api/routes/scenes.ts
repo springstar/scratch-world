@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { SceneManager } from "../../scene/scene-manager.js";
+import type { RealtimeBus } from "../realtime.js";
 
-export function scenesRoute(sceneManager: SceneManager, projectRoot: string): Hono {
+export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus: RealtimeBus): Hono {
 	const app = new Hono();
 
 	// GET /scenes/:sceneId — viewer fetches scene data on mount
@@ -83,6 +85,57 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string): Ho
 		const updated = await sceneManager.updateScene(sceneId, "Set panorama skybox", merged);
 
 		return c.json({ sceneId: updated.sceneId, version: updated.version, skyboxUrl });
+	});
+
+	// POST /scenes/:sceneId/props — add a physical prop directly without going through the agent.
+	// Auth: same as GET (?session=web:<userId> required, must be owner).
+	// Body: { name, description, modelUrl, physicsShape?, mass?, scale?, placement? }
+	app.post("/:sceneId/props", async (c) => {
+		const { sceneId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
+		const body = await c.req.json<{
+			name?: string;
+			description?: string;
+			modelUrl?: string;
+			physicsShape?: string;
+			mass?: number;
+			scale?: number;
+			placement?: string;
+		}>();
+		if (!body.name || !body.description || !body.modelUrl) {
+			return c.json({ error: "Missing required fields: name, description, modelUrl" }, 400);
+		}
+
+		const objectId = `prop_${randomUUID().slice(0, 8)}`;
+		const newObject = {
+			objectId,
+			name: body.name,
+			type: "prop" as const,
+			position: { x: 0, y: 0, z: 0 },
+			description: body.description,
+			interactable: true,
+			metadata: {
+				modelUrl: body.modelUrl,
+				physicsShape: body.physicsShape ?? "box",
+				mass: body.mass ?? 10,
+				scale: body.scale ?? 1,
+				placement: body.placement ?? "near_camera",
+			},
+		};
+
+		const updated = await sceneManager.addPropsToScene(sceneId, [newObject]);
+		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+
+		return c.json({ ok: true, objectId, version: updated.version });
 	});
 
 	return app;

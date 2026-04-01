@@ -8,7 +8,7 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postChat, connectRealtime } from "./api.js";
+import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent } from "./types.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
@@ -240,6 +240,17 @@ export function App() {
               sceneObjects={scene.sceneData.objects}
               viewpoints={scene.sceneData.viewpoints}
               onInteract={handleSplatInteract}
+              onAddProp={(entry, _objectId) => {
+                if (!scene) return;
+                addSceneProp(scene.sceneId, sessionId, {
+                  name: entry.id,
+                  description: entry.tags.join(", "),
+                  modelUrl: entry.url,
+                  scale: entry.scale,
+                  mass: 10,
+                  placement: "near_camera",
+                }).catch(console.warn);
+              }}
             />
           ) : scene.providerRef.provider === "marble" ? (
             // Marble scenes always use SplatViewer via SPZ proxy.

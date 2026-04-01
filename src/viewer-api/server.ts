@@ -63,7 +63,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	// Static file serving for uploaded panoramas and locally-cached splats
 	app.use("/uploads/*", serveStatic({ root: projectRoot }));
 
-	app.route("/scenes", scenesRoute(sceneManager, projectRoot));
+	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus));
 	app.route("/screenshots", screenshotsRoute);
 	app.route("/interact", interactRoute(sessionManager, bus));
 	app.route("/chat", chatRoute(sessionManager, bus));

@@ -38,8 +38,8 @@ export function updateSceneTool(
 		name: "update_scene",
 		label: "Update 3D scene",
 		description: providerHandlesGeneration
-			? "Modify an existing scene. Supply only 'sceneId' and 'instruction' — do NOT provide sceneData or sceneCode. The provider regenerates the scene from the instruction."
-			: "Modify an existing scene based on a natural language instruction. Always supply sceneCode — it is the sole rendering mechanism. Use this when the user wants to add, remove, or change something in a scene.",
+			? "Modify an existing scene. Supply only 'sceneId' and 'instruction' — do NOT provide sceneData or sceneCode. The provider regenerates the scene from the instruction. NEVER use this to place props or objects in a Marble/splat scene — call place_prop instead."
+			: "Modify an existing scene based on a natural language instruction. Always supply sceneCode — it is the sole rendering mechanism. Use this when the user wants to add, remove, or change something in a scene. NEVER use this to place props or objects in a Marble/splat scene — call place_prop instead.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			console.log(`[update_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);
