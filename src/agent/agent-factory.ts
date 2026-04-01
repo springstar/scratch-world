@@ -13,6 +13,7 @@ import { findGltfAssetsTool } from "./tools/find-gltf-assets.js";
 import { getSceneTool } from "./tools/get-scene.js";
 import { listScenesTool } from "./tools/list-scenes.js";
 import { placePropTool } from "./tools/place-prop.js";
+import { removePropTool } from "./tools/remove-prop.js";
 import { shareSceneTool } from "./tools/share-scene.js";
 import { updateSceneTool } from "./tools/update-scene.js";
 import { webSearchTool } from "./tools/web-search.js";
@@ -24,6 +25,7 @@ When a user describes a place, scene, or environment they want to create, call c
 When a user wants a city, town, village, settlement, or commercial district, call create_city THEN immediately call create_scene (see settlement workflow below).
 When a user wants to change or add something to an existing scene, call update_scene.
 When a user asks what scenes they have, call list_scenes.
+When a user wants to load, open, switch to, or revisit a scene by name (e.g. "加载阶梯教室", "open my classroom", "切换到森林场景"), call list_scenes first, find the best title match, then share its view link — do NOT create a new scene.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, get a link, or make a scene public, call share_scene.
 
@@ -216,11 +218,37 @@ export const PROVIDER_BASE_PROMPT = `\
 You are a world-building companion. You help users create and explore persistent 3D worlds through conversation.
 
 When a user describes a place or scene they want to create, call create_scene with ONLY the prompt and optional title.
-When a user wants to change something, call update_scene with ONLY the instruction and optional title.
+When a user wants to change something about the scene itself (lighting, atmosphere, layout), call update_scene with ONLY the instruction and optional title.
 When a user asks what scenes they have, call list_scenes.
+When a user wants to load, open, switch to, or revisit a scene by name (e.g. "加载阶梯教室", "open my classroom", "切换到森林场景"), call list_scenes first, find the best title match, then share its view link — do NOT create a new scene.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, call share_scene.
-When a user wants to place a physical object (box, crate, prop) in a Marble scene, call place_prop — do NOT call update_scene or create_scene for this.
+When a user wants to place ANY physical object in a Marble scene — robot, character, animal, vehicle, furniture, crate, box, plant, prop, or any other standalone object — call place_prop. Do NOT call update_scene or create_scene for object placement.
+
+## Placing props — workflow
+
+1. If you do not have the sceneId, call list_scenes to find it.
+2. Pick a modelUrl from the catalog below. If nothing fits, call find_gltf_assets.
+3. Call place_prop with the sceneId, name, description, modelUrl, scale, and placement.
+
+## Asset catalog (modelUrl + scale for place_prop)
+
+| Name | modelUrl | scale |
+|------|----------|-------|
+| Robot (expressive) | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/RobotExpressive/RobotExpressive.glb | 1 |
+| Soldier | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Soldier.glb | 1 |
+| Female character | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Michelle.glb | 1 |
+| Horse | https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/Horse.glb | 0.012 |
+| Fox | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Fox/glTF-Binary/Fox.glb | 0.02 |
+| Duck | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Duck/glTF-Binary/Duck.glb | 0.01 |
+| Milk truck | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb | 1 |
+| Chair | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/SheenChair/glTF-Binary/SheenChair.glb | 1 |
+| Sofa | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/GlamVelvetSofa/glTF-Binary/GlamVelvetSofa.glb | 1 |
+| Lantern | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/Lantern/glTF-Binary/Lantern.glb | 1 |
+| Boom box | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/BoomBox/glTF-Binary/BoomBox.glb | 80 |
+| Plant (potted) | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/DiffuseTransmissionPlant/glTF-Binary/DiffuseTransmissionPlant.glb | 1 |
+| Damaged helmet | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/DamagedHelmet/glTF-Binary/DamagedHelmet.glb | 1 |
+| Water bottle | https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models/WaterBottle/glTF-Binary/WaterBottle.glb | 8 |
 
 The active provider generates the complete 3D world from the text prompt.
 Do NOT write sceneCode or sceneData — the provider handles all rendering.
@@ -265,6 +293,7 @@ export function createAgent(
 				listScenesTool(sceneManager, ownerId),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 				placePropTool(sceneManager, viewerUrl),
+				removePropTool(sceneManager),
 				webSearchTool(),
 				evaluateSceneTool(),
 				evolveSkillsTool(),

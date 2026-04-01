@@ -18,6 +18,21 @@ const PropMetadataSchema = Type.Object({
 			description: "Where to place the prop in the scene (default: near_camera)",
 		}),
 	),
+	playerPosition: Type.Optional(
+		Type.Object(
+			{
+				x: Type.Number(),
+				y: Type.Number(),
+				z: Type.Number(),
+			},
+			{
+				description:
+					"Player's world position at the time of the request. " +
+					"Copy from the [玩家当前位置] prefix in the message when available. " +
+					"Used to place the prop near where the player is standing.",
+			},
+		),
+	),
 });
 
 const parameters = Type.Object({

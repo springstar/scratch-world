@@ -9,7 +9,7 @@ import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp } from "./api.js";
-import type { SceneResponse, Viewpoint, RealtimeEvent } from "./types.js";
+import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -131,7 +131,35 @@ export function App() {
         loadSceneById(event.sceneId, { session: sessionId });
 
       } else if (event.type === "scene_updated" && sceneRef.current && event.sceneId === sceneRef.current.sceneId) {
-        fetchScene(event.sceneId, { session: sessionId }).then((s) => { setScene(s); sceneRef.current = s; }).catch(console.error);
+        const prevObjects = sceneRef.current.sceneData.objects;
+        fetchScene(event.sceneId, { session: sessionId }).then((s) => {
+          setScene(s);
+          sceneRef.current = s;
+          const prevIds = new Set(prevObjects.map((o) => o.objectId));
+          const newIds = new Set(s.sceneData.objects.map((o) => o.objectId));
+          const loadFn = (window as Record<string, unknown>).__loadSceneProp as
+            | ((obj: SceneObject) => Promise<void>)
+            | undefined;
+          const removeFn = (window as Record<string, unknown>).__removeSceneProp as
+            | ((objectId: string) => void)
+            | undefined;
+          // Remove props that no longer exist
+          if (removeFn) {
+            for (const obj of prevObjects) {
+              if (obj.type === "prop" && !newIds.has(obj.objectId)) {
+                removeFn(obj.objectId);
+              }
+            }
+          }
+          // Load newly added props
+          if (loadFn) {
+            for (const obj of s.sceneData.objects) {
+              if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string" && !prevIds.has(obj.objectId)) {
+                loadFn(obj).catch(console.warn);
+              }
+            }
+          }
+        }).catch(console.error);
 
       } else if (event.type === "error") {
         setNarrativeLines([`Error: ${event.message}`]);
@@ -239,9 +267,13 @@ export function App() {
               colliderMeshUrl={scene.sceneData.colliderMeshUrl ? `/collider/${scene.sceneId}` : undefined}
               sceneObjects={scene.sceneData.objects}
               viewpoints={scene.sceneData.viewpoints}
+              splatGroundOffset={scene.sceneData.splatGroundOffset}
               onInteract={handleSplatInteract}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
+                const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+                  | { x: number; y: number; z: number }
+                  | undefined;
                 addSceneProp(scene.sceneId, sessionId, {
                   name: entry.id,
                   description: entry.tags.join(", "),
@@ -249,6 +281,7 @@ export function App() {
                   scale: entry.scale,
                   mass: 10,
                   placement: "near_camera",
+                  playerPosition,
                 }).catch(console.warn);
               }}
             />

@@ -41,8 +41,9 @@ export interface SceneData {
   environment: EnvironmentConfig;
   viewpoints: Viewpoint[];
   sceneCode?: string;
-  splatUrl?: string; // URL to a Gaussian splat file (.spz / .ply / .splat) — activates SplatViewer
-  colliderMeshUrl?: string; // URL to physics collision mesh (.glb) — public CDN, no auth required
+  splatUrl?: string;
+  colliderMeshUrl?: string;
+  splatGroundOffset?: number; // Marble ground_plane_offset — negate for Three.js fallback Y
 }
 
 export interface SceneResponse {

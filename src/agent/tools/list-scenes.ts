@@ -20,6 +20,7 @@ export function listScenesTool(sceneManager: SceneManager, ownerId: () => string
 							scenes.map((s) => ({
 								sceneId: s.sceneId,
 								title: s.title,
+								status: s.status ?? "ready",
 								version: s.version,
 								updatedAt: s.updatedAt,
 							})),

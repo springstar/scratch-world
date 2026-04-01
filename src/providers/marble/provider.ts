@@ -35,7 +35,13 @@ interface MarbleWorld {
 		thumbnail_url: string | null;
 		imagery: { pano_url: string } | null;
 		mesh: { collider_mesh_url: string } | null;
-		splats: { spz_urls: string[] | Record<string, string> } | null;
+		splats: {
+			spz_urls: string[] | Record<string, string>;
+			semantics_metadata?: {
+				ground_plane_offset: number;
+				metric_scale_factor: number;
+			};
+		} | null;
 	} | null;
 }
 
@@ -108,10 +114,12 @@ async function pollOperation(apiKey: string, operationId: string): Promise<Marbl
 
 function worldToSceneData(world: MarbleWorld, prompt: string, splatUrl?: string): SceneData {
 	const caption = world.assets?.caption ?? prompt;
+	const splatGroundOffset = world.assets?.splats?.semantics_metadata?.ground_plane_offset;
 
 	return {
 		splatUrl,
 		colliderMeshUrl: world.assets?.mesh?.collider_mesh_url ?? undefined,
+		splatGroundOffset,
 		environment: {
 			skybox: "clear_day",
 			timeOfDay: "noon",

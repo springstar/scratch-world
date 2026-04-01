@@ -40,6 +40,7 @@ export interface SceneData {
 	sceneCode?: string;
 	splatUrl?: string; // URL to a Gaussian splat file (.spz / .ply / .splat) — activates SplatViewer
 	colliderMeshUrl?: string; // URL to physics collision mesh (.glb) — public CDN, no auth required
+	splatGroundOffset?: number; // Marble semantics_metadata.ground_plane_offset — used as physics fallback ground Y (negate to get Three.js Y)
 }
 
 // Opaque per-provider pointer to the generated asset

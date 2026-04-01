@@ -30,13 +30,15 @@ const SLOTS: Array<[number, number]> = [
 
 /**
  * Cast a ray straight down from (x, startY, z) and return the ground Y.
+ * startY should be just above the player so the ray originates inside the room,
+ * not above the ceiling (which would give the ceiling top face as the "ground").
  * Falls back to fallbackY if nothing is hit.
  */
 function groundY(
   world: InstanceType<typeof RAPIER.World>,
   x: number,
   z: number,
-  startY = 10,
+  startY = 2,
   fallbackY = 0,
 ): number {
   const ray = new RAPIER.Ray({ x, y: startY, z }, { x: 0, y: -1, z: 0 });
@@ -61,11 +63,12 @@ function tooClose(
 /**
  * Resolve a world position for a prop.
  *
- * @param hint   - "near_camera" | "near_entrance" | "scene_center" (default: "near_camera")
- * @param world  - Rapier world (already has collision mesh loaded)
- * @param occupied - positions already taken by earlier props
- * @param viewpoints - viewpoints from SceneData (used for near_entrance)
- * @param index  - prop index (fallback spiral offset when slots exhausted)
+ * @param hint          - "near_camera" | "near_entrance" | "scene_center" (default: "near_camera")
+ * @param world         - Rapier world (already has collision mesh loaded)
+ * @param occupied      - positions already taken by earlier props
+ * @param viewpoints    - viewpoints from SceneData (used for near_entrance)
+ * @param index         - prop index (fallback spiral offset when slots exhausted)
+ * @param playerPosition - player's world position when the request was made (used as near_camera anchor)
  */
 export function resolvePosition(
   hint: PlacementHint | undefined,
@@ -73,11 +76,18 @@ export function resolvePosition(
   occupied: ResolvedPosition[],
   viewpoints: Viewpoint[],
   index: number,
+  playerPosition?: { x: number; y: number; z: number },
+  splatGroundOffset?: number,
 ): ResolvedPosition {
   // Determine anchor from hint
   let ax = 0;
   let az = 0;
-
+  // Ray origin: start just above the player so the ray begins inside the room,
+  // not above the ceiling. Fall back to 2m if no player position available.
+  const rayStartY = playerPosition ? playerPosition.y + 2 : 2;
+  // fallbackY when raycast misses entirely: use -ground_plane_offset (Marble coordinate
+  // flip gives floor at -offset in Three.js space) or 0 for non-Marble scenes.
+  const fallbackY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
   if (hint === "near_entrance" && viewpoints.length > 0) {
     const vp = viewpoints[0];
     ax = vp.position.x;
@@ -85,15 +95,19 @@ export function resolvePosition(
   } else if (hint === "scene_center") {
     ax = 0;
     az = 0;
+  } else if (playerPosition) {
+    // near_camera (default): use the player's actual position at request time
+    ax = playerPosition.x;
+    az = playerPosition.z;
   }
-  // "near_camera" and default: anchor stays at (0, 0) — camera starts there
+  // fallback if no playerPosition: anchor stays at (0, 0)
 
   // Try pre-computed arc slots
   for (const [dx, dz] of SLOTS) {
     const cx = ax + dx;
     const cz = az + dz;
     if (!tooClose(cx, cz, occupied)) {
-      const y = groundY(world, cx, cz);
+      const y = groundY(world, cx, cz, rayStartY, fallbackY);
       return { x: cx, y, z: cz };
     }
   }
@@ -106,13 +120,13 @@ export function resolvePosition(
     const cx = ax + r * Math.cos(theta);
     const cz = az + r * Math.sin(theta);
     if (!tooClose(cx, cz, occupied)) {
-      const y = groundY(world, cx, cz);
+      const y = groundY(world, cx, cz, rayStartY, fallbackY);
       return { x: cx, y, z: cz };
     }
   }
 
   // Final fallback: linear offset in +X
   const cx = ax + 3 + index * MIN_SEP;
-  const y = groundY(world, cx, az);
+  const y = groundY(world, cx, az, rayStartY, fallbackY);
   return { x: cx, y, z: az };
 }

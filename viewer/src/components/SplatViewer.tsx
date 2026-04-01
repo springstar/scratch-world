@@ -32,6 +32,7 @@ import {
   disposePhysicsProps,
   type PhysicsProp,
 } from "../physics/pushable-objects.js";
+import { type PlacementHint, resolvePosition } from "../physics/prop-placement.js";
 import { pickObject } from "../physics/raycast-pick.js";
 import { extractNpcs, findNearbyNpc, type NearbyNpc } from "../physics/npc-proximity.js";
 import type { SceneObject, Viewpoint } from "../types.js";
@@ -44,11 +45,12 @@ interface Props {
   colliderMeshUrl?: string;
   sceneObjects?: SceneObject[];
   viewpoints?: Viewpoint[];
+  splatGroundOffset?: number;
   onInteract?: (objectId: string, action: string) => void;
   onAddProp?: (entry: AssetEntry, objectId: string) => void;
 }
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, onInteract, onAddProp }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, onInteract, onAddProp }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -220,18 +222,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
       const cc = createCharacterController(world);
 
-      const props: PhysicsProp[] = await loadPhysicsProps(
+      const disposed = { value: false };
+      const props: PhysicsProp[] = loadPhysicsProps(
         world,
         scene,
         sceneObjects ?? [],
         viewpoints ?? [],
+        disposed,
+        splatGroundOffset,
       );
-      if (cancelled) { disposePhysicsProps(props, world, scene); world.free(); return; }
-      const propMeshes = props.flatMap((p) => p.meshes);
+      if (cancelled) { disposed.value = true; disposePhysicsProps(props, world, scene); world.free(); return; }
       const projectiles: Projectile[] = [];
       const npcs = extractNpcs(sceneObjects ?? []);
 
-      // Physics loaded — free-fly is still running; show the "Click to enter" overlay
+      // Physics ready — GLBs load in background; show "Click to enter" immediately
       setPhysicsReady(true);
 
       const plc = new PointerLockControls(camera, cv);
@@ -242,8 +246,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const tempBoxes: { body: InstanceType<typeof RAPIER.RigidBody>; mesh: Mesh }[] = [];
 
       // Spawn a GLB asset from the catalog into the live physics world.
-      // Returns the generated objectId. Exposed as window.__spawnProp for PropPicker.
-      const spawnGlbProp = async (entry: AssetEntry): Promise<string> => {
+      // Accepts an optional pre-generated objectId (from PropPicker) so the same
+      // id can be used for both local spawn and REST persistence.
+      const spawnGlbProp = async (entry: AssetEntry, objectId?: string): Promise<void> => {
         const group = await loadGltf(entry.url);
         group.scale.setScalar(entry.scale);
         group.updateMatrixWorld(true);
@@ -266,15 +271,62 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         );
         buildCollider(world, body, group, "box");
         const meshes: import("three").Object3D[] = [];
-        const objectId = `spawned_${Math.random().toString(36).slice(2, 8)}`;
+        const oid = objectId ?? `spawned_${Math.random().toString(36).slice(2, 8)}`;
         group.traverse((c) => {
-          c.userData.objectId = objectId;
+          c.userData.objectId = oid;
           if (c instanceof Mesh) meshes.push(c);
         });
-        props.push({ body, group, objectId, meshes });
-        return objectId;
+        props.push({ body, group, objectId: oid, meshes });
       };
       (window as Record<string, unknown>).__spawnProp = spawnGlbProp;
+
+      // Load a persisted SceneObject prop into the live physics world.
+      // Called by App.tsx when scene_updated brings in new props so they appear
+      // without requiring a page reload.
+      const loadSceneProp = async (obj: import("../types.js").SceneObject): Promise<void> => {
+        const modelUrl = obj.metadata.modelUrl as string;
+        const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
+        const physicsShape = (obj.metadata.physicsShape as string | undefined) ?? "box";
+        const mass = typeof obj.metadata.mass === "number" ? obj.metadata.mass : 10;
+        const hint = obj.metadata.placement as PlacementHint | undefined;
+        const playerPos = obj.metadata.playerPosition as { x: number; y: number; z: number } | undefined;
+        const occupied = props.map((p) => {
+          const t = p.body.translation();
+          return { x: t.x, y: t.y, z: t.z };
+        });
+        const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], props.length, playerPos, splatGroundOffset);
+        const group = await loadGltf(modelUrl);
+        group.scale.setScalar(scale);
+        group.updateMatrixWorld(true);
+        const bbox = new Box3().setFromObject(group);
+        const groundOffset = -bbox.min.y * scale;
+        group.position.set(pos.x, pos.y + groundOffset, pos.z);
+        scene.add(group);
+        group.updateMatrixWorld(true);
+        const bboxWorld = new Box3().setFromObject(group);
+        const centre = new Vector3();
+        bboxWorld.getCenter(centre);
+        const body = world.createRigidBody(
+          RAPIER.RigidBodyDesc.dynamic().setTranslation(centre.x, centre.y, centre.z).setAdditionalMass(mass),
+        );
+        buildCollider(world, body, group, physicsShape);
+        const meshes: import("three").Object3D[] = [];
+        group.traverse((c) => {
+          c.userData.objectId = obj.objectId;
+          if (c instanceof Mesh) meshes.push(c);
+        });
+        props.push({ body, group, objectId: obj.objectId, meshes });
+      };
+      (window as Record<string, unknown>).__loadSceneProp = loadSceneProp;
+
+      const removeSceneProp = (objectId: string): void => {
+        const idx = props.findIndex((p) => p.objectId === objectId);
+        if (idx === -1) return;
+        const [removed] = props.splice(idx, 1);
+        scene.remove(removed.group);
+        world.removeRigidBody(removed.body);
+      };
+      (window as Record<string, unknown>).__removeSceneProp = removeSceneProp;
 
       const fwd = new Vector3();
       const right = new Vector3();
@@ -384,7 +436,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         if (k === "e") {
           if (document.pointerLockElement === cv) {
-            const propId = pickObject(camera, propMeshes, 4);
+            const propId = pickObject(camera, props.flatMap((p) => p.meshes), 4);
             if (propId) { onInteractRef.current?.(propId, "pick"); return; }
           }
           const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
@@ -404,6 +456,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
       cleanupPhysics = () => {
         inPhysicsMode = false;
+        disposed.value = true;
         stopFreeFly();
         plc.dispose();
         document.removeEventListener("pointerlockchange", onLockChange);
@@ -415,6 +468,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
         delete (window as unknown as Record<string, unknown>).__playerPosition;
         delete (window as unknown as Record<string, unknown>).__spawnProp;
+        delete (window as unknown as Record<string, unknown>).__loadSceneProp;
+        delete (window as unknown as Record<string, unknown>).__removeSceneProp;
         if (document.pointerLockElement === cv) document.exitPointerLock();
         for (const p of projectiles) {
           world.removeRigidBody(p.body);
@@ -469,12 +524,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         onSelect={(entry) => {
           selectedPropRef.current = entry;
           setShowPicker(false);
-          const spawnFn = (window as Record<string, unknown>).__spawnProp as
-            | ((e: AssetEntry) => Promise<string>)
-            | undefined;
-          spawnFn?.(entry)
-            .then((objectId) => { onAddPropRef.current?.(entry, objectId); })
-            .catch(console.warn);
+          // Persist via REST; App.tsx's scene_updated handler will call
+          // window.__loadSceneProp to inject it into the live physics world.
+          onAddPropRef.current?.(entry, "");
         }}
         onClose={() => setShowPicker(false)}
       />

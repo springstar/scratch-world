@@ -61,6 +61,7 @@ export async function addSceneProp(
     mass?: number;
     scale?: number;
     placement?: string;
+    playerPosition?: { x: number; y: number; z: number };
   },
 ): Promise<{ objectId: string; version: number }> {
   const res = await fetch(`${BASE}/scenes/${sceneId}/props?session=${encodeURIComponent(sessionId)}`, {
@@ -73,6 +74,22 @@ export async function addSceneProp(
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<{ objectId: string; version: number }>;
+}
+
+export async function removeSceneProp(
+  sceneId: string,
+  sessionId: string,
+  propId: string,
+): Promise<{ version: number }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/props/${encodeURIComponent(propId)}?session=${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ version: number }>;
 }
 
 export async function uploadScreenshot(sceneId: string, dataUrl: string): Promise<void> {

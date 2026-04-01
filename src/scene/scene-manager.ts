@@ -176,6 +176,32 @@ export class SceneManager {
 		return scene;
 	}
 
+	/** Remove a prop from an existing scene by objectId. Throws if not found. */
+	async removePropFromScene(sceneId: string, objectId: string): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		const before = scene.sceneData.objects.length;
+		const filtered = scene.sceneData.objects.filter((o) => o.objectId !== objectId);
+		if (filtered.length === before) {
+			throw Object.assign(new Error(`Prop ${objectId} not found in scene ${sceneId}`), { status: 404 });
+		}
+		const now = Date.now();
+		const updated: Scene = {
+			...scene,
+			sceneData: { ...scene.sceneData, objects: filtered },
+			version: scene.version + 1,
+			updatedAt: now,
+		};
+		await this.repo.saveVersion({
+			sceneId: updated.sceneId,
+			version: updated.version,
+			sceneData: updated.sceneData,
+			providerRef: updated.providerRef,
+			createdAt: now,
+		});
+		await this.repo.save(updated);
+		return updated;
+	}
+
 	/** Append new objects to an existing scene without calling the provider. */
 	async addPropsToScene(sceneId: string, newObjects: SceneData["objects"]): Promise<Scene> {
 		const scene = await this.requireScene(sceneId);

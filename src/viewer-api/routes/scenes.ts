@@ -110,6 +110,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			mass?: number;
 			scale?: number;
 			placement?: string;
+			playerPosition?: { x: number; y: number; z: number };
 		}>();
 		if (!body.name || !body.description || !body.modelUrl) {
 			return c.json({ error: "Missing required fields: name, description, modelUrl" }, 400);
@@ -129,6 +130,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 				mass: body.mass ?? 10,
 				scale: body.scale ?? 1,
 				placement: body.placement ?? "near_camera",
+				...(body.playerPosition ? { playerPosition: body.playerPosition } : {}),
 			},
 		};
 
@@ -136,6 +138,30 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 
 		return c.json({ ok: true, objectId, version: updated.version });
+	});
+
+	// DELETE /scenes/:sceneId/props/:propId — remove a physical prop.
+	// Auth: same as POST (?session=web:<userId> required, must be owner or public scene).
+	app.delete("/:sceneId/props/:propId", async (c) => {
+		const { sceneId, propId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
+		try {
+			const updated = await sceneManager.removePropFromScene(sceneId, propId);
+			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			return c.json({ ok: true, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json({ error: err instanceof Error ? err.message : "Failed to remove prop" }, status as 404 | 500);
+		}
 	});
 
 	return app;
