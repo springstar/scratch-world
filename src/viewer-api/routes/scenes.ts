@@ -15,15 +15,21 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		if (!userId) return c.json({ error: "session required" }, 401);
 		const scenes = await sceneManager.listScenes(userId);
 		return c.json({
-			scenes: scenes.map((s) => ({
-				sceneId: s.sceneId,
-				title: s.title,
-				status: s.status ?? "ready",
-				createdAt: s.createdAt,
-				updatedAt: s.updatedAt,
-				thumbnailUrl: s.thumbnailUrl ?? null,
-				provider: s.providerRef.provider,
-			})),
+			scenes: scenes.map((s) => {
+				// thumbnailUrl may be stored at top level (new scenes) or in the terrain
+				// object's metadata (older scenes written before the column was added).
+				const metaThumb = s.sceneData.objects[0]?.metadata?.thumbnailUrl;
+				const thumbnailUrl = s.thumbnailUrl ?? (typeof metaThumb === "string" && metaThumb ? metaThumb : null);
+				return {
+					sceneId: s.sceneId,
+					title: s.title,
+					status: s.status ?? "ready",
+					createdAt: s.createdAt,
+					updatedAt: s.updatedAt,
+					thumbnailUrl,
+					provider: s.providerRef.provider,
+				};
+			}),
 		});
 	});
 
@@ -180,6 +186,24 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
 			return c.json({ error: err instanceof Error ? err.message : "Failed to remove prop" }, status as 404 | 500);
+		}
+	});
+
+	// DELETE /scenes/:sceneId — permanently delete a scene (owner only)
+	app.delete("/:sceneId", async (c) => {
+		const { sceneId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+		try {
+			await sceneManager.deleteScene(sceneId, sessionUserId);
+			return c.json({ ok: true });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json(
+				{ error: err instanceof Error ? err.message : "Failed to delete scene" },
+				status as 403 | 404 | 500,
+			);
 		}
 	});
 

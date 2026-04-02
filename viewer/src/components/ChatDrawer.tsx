@@ -30,6 +30,7 @@ interface Props {
   onSend: (text: string, images?: PendingImage[]) => void;
   onSceneSelect: (card: SceneCard) => void;
   onCommand: (cmd: string) => void;
+  onDeleteScene: (sceneId: string) => void;
 }
 
 export type { PendingImage };
@@ -86,7 +87,7 @@ function relativeTime(ts: number): string {
   return `${days} 天前`;
 }
 
-export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSelect, onCommand }: Props) {
+export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSelect, onCommand, onDeleteScene }: Props) {
   const [state, setState] = useState<DrawerState>("peek");
   const [draft, setDraft] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
@@ -332,7 +333,6 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                         {msg.scenes.map((scene) => (
                           <div
                             key={scene.sceneId}
-                            onClick={() => onSceneSelect({ sceneId: scene.sceneId, title: scene.title, viewUrl: "" })}
                             style={{
                               background: "rgba(255,255,255,0.04)",
                               border: "1px solid rgba(140,100,255,0.18)",
@@ -340,8 +340,38 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                               overflow: "hidden",
                               cursor: "pointer",
                               transition: "border-color 0.18s, background 0.18s",
+                              position: "relative",
                             }}
                           >
+                            {/* Delete button */}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onDeleteScene(scene.sceneId); }}
+                              title="删除场景"
+                              style={{
+                                position: "absolute",
+                                top: 4,
+                                left: 4,
+                                zIndex: 2,
+                                width: 22,
+                                height: 22,
+                                borderRadius: "50%",
+                                border: "none",
+                                background: "rgba(20,10,40,0.75)",
+                                color: "rgba(220,160,160,0.85)",
+                                fontSize: 14,
+                                lineHeight: 1,
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: 0,
+                                backdropFilter: "blur(4px)",
+                              }}
+                            >
+                              ×
+                            </button>
+                            {/* Clickable area */}
+                            <div onClick={() => onSceneSelect({ sceneId: scene.sceneId, title: scene.title, viewUrl: "" })}>
                             {/* Thumbnail */}
                             <div style={{ width: "100%", aspectRatio: "16/9", background: "linear-gradient(135deg, rgba(40,30,80,0.8) 0%, rgba(20,40,90,0.8) 100%)", position: "relative", overflow: "hidden" }}>
                               {scene.thumbnailUrl ? (
@@ -373,6 +403,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                               <div style={{ fontSize: 10, color: "rgba(140,160,220,0.5)", marginTop: 2, fontFamily: "system-ui, -apple-system, sans-serif" }}>
                                 {relativeTime(scene.createdAt)}
                               </div>
+                            </div>
                             </div>
                           </div>
                         ))}

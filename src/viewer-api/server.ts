@@ -54,7 +54,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.use("*", async (c, next) => {
 		await next();
 		c.res.headers.set("Access-Control-Allow-Origin", "*");
-		c.res.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		c.res.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
 		c.res.headers.set("Access-Control-Allow-Headers", "Content-Type");
 	});
 

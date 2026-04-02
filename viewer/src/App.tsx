@@ -8,7 +8,7 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp, fetchSceneList } from "./api.js";
+import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp, fetchSceneList, deleteScene } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
@@ -228,6 +228,32 @@ export function App() {
     }
   }, [sessionId]);
 
+  // Delete scene from /list result
+  const handleDeleteScene = useCallback(async (sceneId: string) => {
+    try {
+      await deleteScene(sceneId, sessionId);
+      // Remove from every command_result message that contains this scene
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.role === "command_result" && m.scenes
+            ? { ...m, scenes: m.scenes.filter((s) => s.sceneId !== sceneId), text: `${(m.scenes.length - 1)} 个场景` }
+            : m,
+        ),
+      );
+      // If the deleted scene is currently loaded, clear it
+      if (sceneRef.current?.sceneId === sceneId) {
+        setScene(null);
+        sceneRef.current = null;
+        history.pushState(null, "", "/");
+      }
+    } catch (err) {
+      setChatMessages((prev) => [
+        ...prev,
+        { id: nextId(), role: "agent", text: `Error: ${err instanceof Error ? err.message : "Failed to delete scene"}` },
+      ]);
+    }
+  }, [sessionId]);
+
   // Object interaction (existing flow)
   const handleObjectClick = useCallback(
     (objectId: string, name: string, interactable: boolean) => {
@@ -395,6 +421,7 @@ export function App() {
         onSend={handleSend}
         onSceneSelect={handleSceneSelect}
         onCommand={handleCommand}
+        onDeleteScene={handleDeleteScene}
       />
     </div>
   );

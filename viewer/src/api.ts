@@ -121,6 +121,17 @@ export async function fetchSceneList(sessionId: string): Promise<SceneListItem[]
   return body.scenes;
 }
 
+export async function deleteScene(sceneId: string, sessionId: string): Promise<void> {
+  const res = await fetch(
+    `${BASE}/scenes/${encodeURIComponent(sceneId)}?session=${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+}
+
 export function connectRealtime(  sessionId: string,
   onEvent: (event: RealtimeEvent) => void,
 ): () => void {

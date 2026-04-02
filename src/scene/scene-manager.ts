@@ -118,6 +118,12 @@ export class SceneManager {
 		return this.repo.findByOwner(ownerId);
 	}
 
+	async deleteScene(sceneId: string, ownerId: string): Promise<void> {
+		const scene = await this.requireScene(sceneId);
+		if (scene.ownerId !== ownerId) throw Object.assign(new Error("Forbidden"), { status: 403 });
+		await this.repo.delete(sceneId);
+	}
+
 	getActiveProvider() {
 		return this.providerRegistryRef.current.getActiveProvider();
 	}
