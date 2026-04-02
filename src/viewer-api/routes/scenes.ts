@@ -8,6 +8,25 @@ import type { RealtimeBus } from "../realtime.js";
 export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus: RealtimeBus): Hono {
 	const app = new Hono();
 
+	// GET /scenes?session=web:<userId> — list all scenes for this user
+	app.get("/", async (c) => {
+		const session = c.req.query("session");
+		const userId = session?.startsWith("web:") ? session.slice(4) : null;
+		if (!userId) return c.json({ error: "session required" }, 401);
+		const scenes = await sceneManager.listScenes(userId);
+		return c.json({
+			scenes: scenes.map((s) => ({
+				sceneId: s.sceneId,
+				title: s.title,
+				status: s.status ?? "ready",
+				createdAt: s.createdAt,
+				updatedAt: s.updatedAt,
+				thumbnailUrl: s.thumbnailUrl ?? null,
+				provider: s.providerRef.provider,
+			})),
+		});
+	});
+
 	// GET /scenes/:sceneId — viewer fetches scene data on mount
 	// Access granted if:  is_public=true  OR  ?token=<share_token>  OR  called by the owner (no auth on viewer — open by token only)
 	app.get("/:sceneId", async (c) => {

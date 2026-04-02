@@ -65,6 +65,7 @@ export interface Scene {
 	shareToken?: string; // opaque token appended to viewer URL for access
 	status?: "generating" | "ready" | "failed"; // async generation lifecycle
 	operationId?: string; // provider operationId while status === "generating"
+	thumbnailUrl?: string; // Marble thumbnail_url (absent for non-Marble or older scenes)
 }
 
 export interface SceneVersion {

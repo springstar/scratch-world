@@ -8,7 +8,7 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp } from "./api.js";
+import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp, fetchSceneList } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
@@ -204,6 +204,30 @@ export function App() {
     loadSceneById(card.sceneId, { session: sessionId });
   }, [sessionId, loadSceneById]);
 
+  // Slash-command handler
+  const handleCommand = useCallback(async (cmd: string) => {
+    setChatMessages((prev) => [...prev, { id: nextId(), role: "user", text: cmd }]);
+    if (cmd === "/list") {
+      try {
+        const scenes = await fetchSceneList(sessionId);
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "command_result" as const,
+            text: `${scenes.length} 个场景`,
+            scenes,
+          },
+        ]);
+      } catch (err) {
+        setChatMessages((prev) => [
+          ...prev,
+          { id: nextId(), role: "agent", text: `Error: ${err instanceof Error ? err.message : "Failed to fetch scenes"}` },
+        ]);
+      }
+    }
+  }, [sessionId]);
+
   // Object interaction (existing flow)
   const handleObjectClick = useCallback(
     (objectId: string, name: string, interactable: boolean) => {
@@ -370,6 +394,7 @@ export function App() {
         isTyping={isTyping}
         onSend={handleSend}
         onSceneSelect={handleSceneSelect}
+        onCommand={handleCommand}
       />
     </div>
   );

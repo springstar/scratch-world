@@ -104,8 +104,24 @@ export async function uploadScreenshot(sceneId: string, dataUrl: string): Promis
   }
 }
 
-export function connectRealtime(
-  sessionId: string,
+export interface SceneListItem {
+  sceneId: string;
+  title: string;
+  status: "generating" | "ready" | "failed";
+  createdAt: number;
+  updatedAt: number;
+  thumbnailUrl: string | null;
+  provider: string;
+}
+
+export async function fetchSceneList(sessionId: string): Promise<SceneListItem[]> {
+  const res = await fetch(`${BASE}/scenes?session=${encodeURIComponent(sessionId)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as { scenes: SceneListItem[] };
+  return body.scenes;
+}
+
+export function connectRealtime(  sessionId: string,
   onEvent: (event: RealtimeEvent) => void,
 ): () => void {
   const wsBase = BASE.replace(/^http/, "ws") || `ws://${location.host}`;

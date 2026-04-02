@@ -16,6 +16,7 @@ interface SceneRow {
 	share_token: string | null;
 	status: string | null;
 	operation_id: string | null;
+	thumbnail_url: string | null;
 }
 
 interface SceneVersionRow {
@@ -41,6 +42,7 @@ function rowToScene(row: SceneRow): Scene {
 		shareToken: row.share_token ?? undefined,
 		status: (row.status as Scene["status"]) ?? undefined,
 		operationId: row.operation_id ?? undefined,
+		thumbnailUrl: row.thumbnail_url ?? undefined,
 	};
 }
 
@@ -101,6 +103,9 @@ export class SqliteSceneRepo implements SceneRepository {
 		if (!names.has("operation_id")) {
 			this.db.exec("ALTER TABLE scenes ADD COLUMN operation_id TEXT");
 		}
+		if (!names.has("thumbnail_url")) {
+			this.db.exec("ALTER TABLE scenes ADD COLUMN thumbnail_url TEXT");
+		}
 	}
 
 	async save(scene: Scene): Promise<void> {
@@ -120,10 +125,11 @@ export class SqliteSceneRepo implements SceneRepository {
 					string | null,
 					string | null,
 					string | null,
+					string | null,
 				]
 			>(`
-				INSERT INTO scenes (scene_id, owner_id, title, description, scene_data, provider_ref, version, created_at, updated_at, is_public, share_token, status, operation_id)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO scenes (scene_id, owner_id, title, description, scene_data, provider_ref, version, created_at, updated_at, is_public, share_token, status, operation_id, thumbnail_url)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(scene_id) DO UPDATE SET
 					title        = excluded.title,
 					description  = excluded.description,
@@ -134,7 +140,8 @@ export class SqliteSceneRepo implements SceneRepository {
 					is_public    = excluded.is_public,
 					share_token  = excluded.share_token,
 					status       = excluded.status,
-					operation_id = excluded.operation_id
+					operation_id = excluded.operation_id,
+					thumbnail_url = excluded.thumbnail_url
 			`)
 			.run(
 				scene.sceneId,
@@ -150,6 +157,7 @@ export class SqliteSceneRepo implements SceneRepository {
 				scene.shareToken ?? null,
 				scene.status ?? null,
 				scene.operationId ?? null,
+				scene.thumbnailUrl ?? null,
 			);
 	}
 

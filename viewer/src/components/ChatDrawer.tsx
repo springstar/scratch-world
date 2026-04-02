@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { SceneListItem } from "../api.js";
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "agent";
+  role: "user" | "agent" | "command_result";
   text: string;
   images?: string[]; // data URLs for display
   isStreaming?: boolean;
+  scenes?: SceneListItem[]; // populated when role === "command_result"
 }
 
 export interface SceneCard {
@@ -27,6 +29,7 @@ interface Props {
   isTyping: boolean;
   onSend: (text: string, images?: PendingImage[]) => void;
   onSceneSelect: (card: SceneCard) => void;
+  onCommand: (cmd: string) => void;
 }
 
 export type { PendingImage };
@@ -35,6 +38,10 @@ type DrawerState = "peek" | "open";
 
 const PEEK_HEIGHT = 72;
 const OPEN_HEIGHT_VH = 54;
+
+const COMMANDS: Array<{ name: string; description: string }> = [
+  { name: "/list", description: "列出所有已生成的场景" },
+];
 
 // Minimal markdown link rendering: [text](url) → <a>
 function renderText(text: string): React.ReactNode {
@@ -68,7 +75,18 @@ function renderText(text: string): React.ReactNode {
   return nodes;
 }
 
-export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSelect }: Props) {
+function relativeTime(ts: number): string {
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 60) return "刚刚";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days} 天前`;
+}
+
+export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSelect, onCommand }: Props) {
   const [state, setState] = useState<DrawerState>("peek");
   const [draft, setDraft] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
@@ -94,13 +112,20 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
 
   const handleSend = useCallback(() => {
     const text = draft.trim();
+    if (text.startsWith("/")) {
+      setDraft("");
+      if (inputRef.current) inputRef.current.style.height = "40px";
+      onCommand(text);
+      setState("open");
+      return;
+    }
     if (!text && pendingImages.length === 0) return;
     setDraft("");
     setPendingImages([]);
     onSend(text, pendingImages.length > 0 ? pendingImages : undefined);
     setState("open");
     if (inputRef.current) inputRef.current.style.height = "40px";
-  }, [draft, pendingImages, onSend]);
+  }, [draft, pendingImages, onSend, onCommand]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -169,6 +194,11 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
   const drawerHeight = isOpen ? `${OPEN_HEIGHT_VH}vh` : `${PEEK_HEIGHT}px`;
   const lastMsg = messages[messages.length - 1];
   const canSend = !!(draft.trim() || pendingImages.length > 0);
+
+  // Command autocomplete: show when draft starts with "/" and drawer is open
+  const matchingCommands = isOpen && draft.startsWith("/")
+    ? COMMANDS.filter((c) => c.name.startsWith(draft.trim()))
+    : [];
 
   const dotColors = ["#a78bfa", "#818cf8", "#60a5fa"];
 
@@ -285,72 +315,140 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               </div>
             )}
 
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                style={{
-                  alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
-                  maxWidth: "82%",
-                  animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both",
-                }}
-              >
-                {/* Image thumbnails (user messages) */}
-                {msg.images && msg.images.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4, justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
-                    {msg.images.map((src, i) => (
-                      <img
-                        key={i}
-                        src={src}
-                        alt=""
-                        style={{ maxWidth: 140, maxHeight: 100, borderRadius: 8, objectFit: "cover", border: "1px solid rgba(140,100,255,0.3)" }}
-                      />
-                    ))}
+            {messages.map((msg) => {
+              // command_result — render scene grid instead of a bubble
+              if (msg.role === "command_result" && msg.scenes) {
+                return (
+                  <div key={msg.id} style={{ alignSelf: "stretch", animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both" }}>
+                    <div style={{ fontSize: 12, color: "rgba(140,120,200,0.55)", fontFamily: "monospace", marginBottom: 6 }}>
+                      {msg.text}
+                    </div>
+                    {msg.scenes.length === 0 ? (
+                      <div style={{ color: "rgba(160,140,210,0.5)", fontSize: 13, fontFamily: "system-ui, -apple-system, sans-serif" }}>
+                        还没有场景
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        {msg.scenes.map((scene) => (
+                          <div
+                            key={scene.sceneId}
+                            onClick={() => onSceneSelect({ sceneId: scene.sceneId, title: scene.title, viewUrl: "" })}
+                            style={{
+                              background: "rgba(255,255,255,0.04)",
+                              border: "1px solid rgba(140,100,255,0.18)",
+                              borderRadius: 10,
+                              overflow: "hidden",
+                              cursor: "pointer",
+                              transition: "border-color 0.18s, background 0.18s",
+                            }}
+                          >
+                            {/* Thumbnail */}
+                            <div style={{ width: "100%", aspectRatio: "16/9", background: "linear-gradient(135deg, rgba(40,30,80,0.8) 0%, rgba(20,40,90,0.8) 100%)", position: "relative", overflow: "hidden" }}>
+                              {scene.thumbnailUrl ? (
+                                <img
+                                  src={scene.thumbnailUrl}
+                                  alt={scene.title}
+                                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                                />
+                              ) : (
+                                <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                  <svg width={20} height={20} viewBox="0 0 16 16" fill="none" stroke="rgba(120,160,255,0.4)" strokeWidth={1.2} strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M8 2L2 5v6l6 3 6-3V5L8 2z" />
+                                  </svg>
+                                </div>
+                              )}
+                              {/* Status badge */}
+                              {scene.status === "generating" && (
+                                <div style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#f59e0b", boxShadow: "0 0 5px #f59e0b" }} />
+                              )}
+                              {scene.status === "failed" && (
+                                <div style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#ef4444", boxShadow: "0 0 5px #ef4444" }} />
+                              )}
+                            </div>
+                            {/* Meta */}
+                            <div style={{ padding: "6px 8px" }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: "#c8d8ff", fontFamily: "system-ui, -apple-system, sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {scene.title}
+                              </div>
+                              <div style={{ fontSize: 10, color: "rgba(140,160,220,0.5)", marginTop: 2, fontFamily: "system-ui, -apple-system, sans-serif" }}>
+                                {relativeTime(scene.createdAt)}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+                );
+              }
+
+              return (
                 <div
+                  key={msg.id}
                   style={{
-                    background:
-                      msg.role === "user"
-                        ? "linear-gradient(135deg, rgba(130,80,240,0.7) 0%, rgba(80,100,230,0.65) 100%)"
-                        : "rgba(255,255,255,0.065)",
-                    borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                    padding: "9px 13px",
-                    fontSize: 14,
-                    lineHeight: 1.55,
-                    color: msg.role === "user" ? "rgba(238,228,255,0.97)" : "rgba(210,230,255,0.92)",
-                    fontFamily: "system-ui, -apple-system, sans-serif",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    border: msg.role === "agent" ? "1px solid rgba(140,120,220,0.12)" : "none",
-                    boxShadow:
-                      msg.role === "user"
-                        ? "0 2px 16px rgba(100,60,220,0.3)"
-                        : "none",
-                    display: msg.text ? undefined : "none",
+                    alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
+                    maxWidth: "82%",
+                    animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both",
                   }}
                 >
-                  {msg.isStreaming ? (
-                    <>
-                      {renderText(msg.text)}
-                      <span
-                        style={{
-                          display: "inline-block",
-                          width: 6,
-                          height: 14,
-                          background: "rgba(180,210,255,0.8)",
-                          marginLeft: 2,
-                          verticalAlign: "middle",
-                          borderRadius: 1,
-                          animation: "blink 0.9s step-end infinite",
-                        }}
-                      />
-                    </>
-                  ) : (
-                    renderText(msg.text)
+                  {/* Image thumbnails (user messages) */}
+                  {msg.images && msg.images.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4, justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
+                      {msg.images.map((src, i) => (
+                        <img
+                          key={i}
+                          src={src}
+                          alt=""
+                          style={{ maxWidth: 140, maxHeight: 100, borderRadius: 8, objectFit: "cover", border: "1px solid rgba(140,100,255,0.3)" }}
+                        />
+                      ))}
+                    </div>
                   )}
+                  <div
+                    style={{
+                      background:
+                        msg.role === "user"
+                          ? "linear-gradient(135deg, rgba(130,80,240,0.7) 0%, rgba(80,100,230,0.65) 100%)"
+                          : "rgba(255,255,255,0.065)",
+                      borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                      padding: "9px 13px",
+                      fontSize: 14,
+                      lineHeight: 1.55,
+                      color: msg.role === "user" ? "rgba(238,228,255,0.97)" : "rgba(210,230,255,0.92)",
+                      fontFamily: "system-ui, -apple-system, sans-serif",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      border: msg.role === "agent" ? "1px solid rgba(140,120,220,0.12)" : "none",
+                      boxShadow:
+                        msg.role === "user"
+                          ? "0 2px 16px rgba(100,60,220,0.3)"
+                          : "none",
+                      display: msg.text ? undefined : "none",
+                    }}
+                  >
+                    {msg.isStreaming ? (
+                      <>
+                        {renderText(msg.text)}
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 6,
+                            height: 14,
+                            background: "rgba(180,210,255,0.8)",
+                            marginLeft: 2,
+                            verticalAlign: "middle",
+                            borderRadius: 1,
+                            animation: "blink 0.9s step-end infinite",
+                          }}
+                        />
+                      </>
+                    ) : (
+                      renderText(msg.text)
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {/* Scene cards */}
             {sceneCards.map((card) => (
@@ -441,8 +539,52 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               flexDirection: "column",
               gap: 6,
               borderTop: "1px solid rgba(120,90,200,0.12)",
+              position: "relative",
             }}
           >
+            {/* Command autocomplete */}
+            {matchingCommands.length > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "100%",
+                  left: 12,
+                  right: 12,
+                  background: "rgba(18,12,42,0.97)",
+                  border: "1px solid rgba(140,100,255,0.28)",
+                  borderRadius: 10,
+                  overflow: "hidden",
+                  boxShadow: "0 -4px 20px rgba(80,40,200,0.25)",
+                  zIndex: 10,
+                }}
+              >
+                {matchingCommands.map((cmd) => (
+                  <div
+                    key={cmd.name}
+                    onClick={() => {
+                      setDraft(cmd.name);
+                      inputRef.current?.focus();
+                    }}
+                    style={{
+                      padding: "8px 14px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      cursor: "pointer",
+                      borderBottom: "1px solid rgba(140,100,255,0.1)",
+                    }}
+                  >
+                    <span style={{ fontFamily: "monospace", fontSize: 13, color: "#b8a0ff", fontWeight: 600 }}>
+                      {cmd.name}
+                    </span>
+                    <span style={{ fontSize: 12, color: "rgba(160,150,220,0.55)", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+                      {cmd.description}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Pending image previews */}
             {pendingImages.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 0" }}>
@@ -525,7 +667,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                 onPaste={handlePaste}
                 onFocus={() => setInputFocused(true)}
                 onBlur={() => setInputFocused(false)}
-                placeholder="描述一个场景，或粘贴图片…"
+                placeholder="描述一个场景，或输入 / 查看命令…"
                 rows={1}
                 style={{
                   flex: 1,

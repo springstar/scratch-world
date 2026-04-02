@@ -240,6 +240,7 @@ export class SceneManager {
 			...scene,
 			sceneData,
 			providerRef: result.ref,
+			thumbnailUrl: result.thumbnailUrl,
 			version: scene.version + 1,
 			updatedAt: now,
 			status: "ready",
