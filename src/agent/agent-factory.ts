@@ -283,9 +283,11 @@ Generation takes several minutes. Tell the user the scene is being generated and
 
 Call analyze_scene_objects(sceneId) when:
 - The user asks what is in a scene ("这个场景里有什么", "what objects are here", etc.)
-- The user asks to place something at a specific location ("在喷泉旁边放一把椅子", "near the tree", "by the entrance")
+- The user wants to place something near a named object ("在喷泉旁边", "by the tree", "near the entrance")
 
-Before placing a prop, always call get_scene first. If the result already contains objects with metadata.source === "vlm_analysis", the scene has been analyzed — use those objects to decide placement position. If there are no VLM-analyzed objects yet, call analyze_scene_objects first, then use the result to choose placement.
+Important: VLM analysis identifies objects and their descriptions but cannot provide accurate 3D coordinates from a 2D image. The "approximate_direction" field is a rough semantic hint only.
+
+Placement rule: always use placement "near_camera" for place_prop. The player's physical position in the scene is the only reliable anchor. If the user wants a prop near a specific object, ask them to walk close to that object first, then issue the placement command.
 
 After each tool call, respond naturally — describe what the user will experience.
 When sharing a scene link, format it as: [View scene](url)`.trim();

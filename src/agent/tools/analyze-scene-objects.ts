@@ -3,7 +3,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import type { SceneManager } from "../../scene/scene-manager.js";
-import type { SceneObject, Vec3 } from "../../scene/types.js";
+import type { SceneObject } from "../../scene/types.js";
 
 const parameters = Type.Object({
 	sceneId: Type.String({ description: "ID of the Marble scene to analyze" }),
@@ -32,29 +32,6 @@ Return ONLY a JSON array (no markdown fences, no explanation):
 [{ "name": "...", "type": "...", "description": "...", "approximate_direction": "...", "interactable": true/false, "interactionHint": "..." }]
 
 Include 5–15 objects. Skip featureless sky or flat ground unless they have notable characteristics.`;
-
-function directionToPosition(dir: string): Vec3 {
-	switch (dir) {
-		case "front":
-			return { x: 0, y: 1, z: 10 };
-		case "front_left":
-			return { x: -7, y: 1, z: 7 };
-		case "front_right":
-			return { x: 7, y: 1, z: 7 };
-		case "left":
-			return { x: -10, y: 1, z: 0 };
-		case "right":
-			return { x: 10, y: 1, z: 0 };
-		case "behind":
-			return { x: 0, y: 1, z: -10 };
-		case "above":
-			return { x: 0, y: 5, z: 0 };
-		case "below":
-			return { x: 0, y: 0, z: 0 };
-		default:
-			return { x: 0, y: 1, z: 10 };
-	}
-}
 
 export function analyzeSceneObjectsTool(sceneManager: SceneManager): AgentTool<typeof parameters> {
 	return {
@@ -196,7 +173,7 @@ export function analyzeSceneObjectsTool(sceneManager: SceneManager): AgentTool<t
 				objectId: `vlm_${randomUUID().slice(0, 8)}`,
 				name: item.name,
 				type: item.type,
-				position: directionToPosition(item.approximate_direction),
+				position: { x: 0, y: 0, z: 0 }, // position not derivable from 2D image; use near_camera for prop placement
 				description: item.description,
 				interactable: item.interactable === true,
 				interactionHint: item.interactionHint,
