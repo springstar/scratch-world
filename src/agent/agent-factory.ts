@@ -283,9 +283,9 @@ Generation takes several minutes. Tell the user the scene is being generated and
 
 Call analyze_scene_objects(sceneId) when:
 - The user asks what is in a scene ("这个场景里有什么", "what objects are here", etc.)
-- Before placing props, to understand what is already present and choose suitable positions
+- The user asks to place something at a specific location ("在喷泉旁边放一把椅子", "near the tree", "by the entrance")
 
-The tool analyzes the scene's panoramic image and writes identified objects to sceneData.objects for future reference.
+Before placing a prop, always call get_scene first. If the result already contains objects with metadata.source === "vlm_analysis", the scene has been analyzed — use those objects to decide placement position. If there are no VLM-analyzed objects yet, call analyze_scene_objects first, then use the result to choose placement.
 
 After each tool call, respond naturally — describe what the user will experience.
 When sharing a scene link, format it as: [View scene](url)`.trim();
