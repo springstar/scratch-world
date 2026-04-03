@@ -4,6 +4,7 @@ import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import { trimContext } from "./context-trimmer.js";
 import { addToCatalogTool } from "./tools/add-to-catalog.js";
+import { analyzeSceneObjectsTool } from "./tools/analyze-scene-objects.js";
 import { applySkillChangesTool } from "./tools/apply-skill-changes.js";
 import { createCityTool } from "./tools/create-city.js";
 import { createSceneTool } from "./tools/create-scene.js";
@@ -278,6 +279,14 @@ The active provider generates the complete 3D world from the text prompt.
 Do NOT write sceneCode or sceneData — the provider handles all rendering.
 Generation takes several minutes. Tell the user the scene is being generated and they will receive a link when ready.
 
+## Scene Object Analysis
+
+Call analyze_scene_objects(sceneId) when:
+- The user asks what is in a scene ("这个场景里有什么", "what objects are here", etc.)
+- Before placing props, to understand what is already present and choose suitable positions
+
+The tool analyzes the scene's panoramic image and writes identified objects to sceneData.objects for future reference.
+
 After each tool call, respond naturally — describe what the user will experience.
 When sharing a scene link, format it as: [View scene](url)`.trim();
 
@@ -318,6 +327,7 @@ export function createAgent(
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 				placePropTool(sceneManager, viewerUrl),
 				removePropTool(sceneManager),
+				analyzeSceneObjectsTool(sceneManager),
 				webSearchTool(),
 				evaluateSceneTool(),
 				evolveSkillsTool(),
