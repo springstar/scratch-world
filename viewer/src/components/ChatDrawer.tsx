@@ -42,6 +42,7 @@ const OPEN_HEIGHT_VH = 54;
 
 const COMMANDS: Array<{ name: string; description: string }> = [
   { name: "/list", description: "列出所有已生成的场景" },
+  { name: "/find", description: "按名称或描述模糊查找场景，如 /find 森林" },
 ];
 
 // Minimal markdown link rendering: [text](url) → <a>
@@ -93,6 +94,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
   const [inputFocused, setInputFocused] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
+  const lastMsgRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -101,10 +103,16 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
     if (messages.length > 0 && state === "peek") setState("open");
   }, [messages.length]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll: show top of command_result grids; otherwise scroll to bottom
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const last = messages[messages.length - 1];
+    if (last?.role === "command_result" && lastMsgRef.current) {
+      lastMsgRef.current.scrollIntoView({ block: "start", behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages, isTyping]);
 
   const toggleState = useCallback(() => {
@@ -196,9 +204,10 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
   const lastMsg = messages[messages.length - 1];
   const canSend = !!(draft.trim() || pendingImages.length > 0);
 
-  // Command autocomplete: show when draft starts with "/" and drawer is open
-  const matchingCommands = isOpen && draft.startsWith("/")
-    ? COMMANDS.filter((c) => c.name.startsWith(draft.trim()))
+  // Command autocomplete: show only while typing the command word (no space yet)
+  const cmdToken = draft.trim();
+  const matchingCommands = isOpen && cmdToken.startsWith("/") && !cmdToken.includes(" ")
+    ? COMMANDS.filter((c) => c.name.startsWith(cmdToken))
     : [];
 
   const dotColors = ["#a78bfa", "#818cf8", "#60a5fa"];
@@ -316,11 +325,12 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               </div>
             )}
 
-            {messages.map((msg) => {
+            {messages.map((msg, idx) => {
               // command_result — render scene grid instead of a bubble
               if (msg.role === "command_result" && msg.scenes) {
+                const isLast = idx === messages.length - 1;
                 return (
-                  <div key={msg.id} style={{ alignSelf: "stretch", animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both" }}>
+                  <div key={msg.id} ref={isLast ? lastMsgRef : undefined} style={{ alignSelf: "stretch", animation: "msgIn 0.22s cubic-bezier(0.2,0,0,1) both" }}>
                     <div style={{ fontSize: 12, color: "rgba(140,120,200,0.55)", fontFamily: "monospace", marginBottom: 6 }}>
                       {msg.text}
                     </div>
@@ -371,7 +381,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
                               ×
                             </button>
                             {/* Clickable area */}
-                            <div onClick={() => onSceneSelect({ sceneId: scene.sceneId, title: scene.title, viewUrl: "" })}>
+                            <div onClick={() => { setState("peek"); onSceneSelect({ sceneId: scene.sceneId, title: scene.title, viewUrl: "" }); }}>
                             {/* Thumbnail */}
                             <div style={{ width: "100%", aspectRatio: "16/9", background: "linear-gradient(135deg, rgba(40,30,80,0.8) 0%, rgba(20,40,90,0.8) 100%)", position: "relative", overflow: "hidden" }}>
                               {scene.thumbnailUrl ? (

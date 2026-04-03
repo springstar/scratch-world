@@ -37,6 +37,18 @@ interface SelectedObject {
 let msgCounter = 0;
 function nextId() { return String(++msgCounter); }
 
+// Fuzzy match: every character of query must appear in text in order
+function fuzzyMatch(text: string, query: string): boolean {
+  let ti = 0;
+  for (let qi = 0; qi < query.length; qi++) {
+    const ch = query[qi];
+    while (ti < text.length && text[ti] !== ch) ti++;
+    if (ti >= text.length) return false;
+    ti++;
+  }
+  return true;
+}
+
 export function App() {
   const userId = useRef(getOrCreateUserId());
   const sessionId = `web:${userId.current}`;
@@ -77,7 +89,7 @@ export function App() {
     [sessionId],
   );
 
-  // Load initial scene from URL
+  // Load initial scene from URL if specified
   useEffect(() => {
     if (!urlInfo.sceneId) return;
     loadSceneById(urlInfo.sceneId, { token: urlInfo.token ?? undefined, session: sessionId });
@@ -207,18 +219,21 @@ export function App() {
   // Slash-command handler
   const handleCommand = useCallback(async (cmd: string) => {
     setChatMessages((prev) => [...prev, { id: nextId(), role: "user", text: cmd }]);
-    if (cmd === "/list") {
+    const [verb, ...argParts] = cmd.trim().split(/\s+/);
+    const arg = argParts.join(" ");
+
+    if (verb === "/list" || verb === "/find") {
       try {
-        const scenes = await fetchSceneList(sessionId);
-        setChatMessages((prev) => [
-          ...prev,
-          {
-            id: nextId(),
-            role: "command_result" as const,
-            text: `${scenes.length} 个场景`,
-            scenes,
-          },
-        ]);
+        const all = await fetchSceneList(sessionId);
+        const marble = all
+          .filter((s) => s.provider === "marble" && s.status === "ready")
+          .sort((a, b) => b.updatedAt - a.updatedAt);
+        const q = arg.toLowerCase();
+        const scenes = verb === "/find" && q ? marble.filter((s) => fuzzyMatch(s.title.toLowerCase(), q)) : marble;
+        const text = verb === "/find" && q
+          ? (scenes.length > 0 ? `找到 ${scenes.length} 个场景` : `未找到匹配 "${arg}" 的场景`)
+          : `${scenes.length} 个场景`;
+        setChatMessages((prev) => [...prev, { id: nextId(), role: "command_result" as const, text, scenes }]);
       } catch (err) {
         setChatMessages((prev) => [
           ...prev,

@@ -46,10 +46,22 @@ export function splatProxyRoute(sceneManager: SceneManager, marbleApiKey: string
 			return c.json({ error: "No SPZ URL available for this scene" }, 404);
 		}
 
-		// Fetch from Marble CDN with API key
-		const upstream = await fetch(spzUrl, {
-			headers: { "WLT-Api-Key": marbleApiKey },
-		});
+		// Fetch from Marble CDN with API key and a hard timeout
+		const abort = new AbortController();
+		const timer = setTimeout(() => abort.abort(), 30_000);
+		let upstream: Response;
+		try {
+			upstream = await fetch(spzUrl, {
+				headers: { "WLT-Api-Key": marbleApiKey },
+				signal: abort.signal,
+			});
+		} catch (err) {
+			clearTimeout(timer);
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[splat-proxy] fetch failed for ${sceneId}: ${msg}`);
+			return c.json({ error: `Failed to fetch splat: ${msg}` }, 502);
+		}
+		clearTimeout(timer);
 
 		if (!upstream.ok) {
 			return c.json({ error: `Marble CDN returned ${upstream.status}` }, 502);

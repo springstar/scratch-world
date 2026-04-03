@@ -15,7 +15,6 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint, sceneI
   const rendererRef = useRef<SceneRenderer | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [fading, setFading] = useState(false);
-  const [gpuSupported] = useState(() => !!navigator.gpu);
   const [fpLocked, setFpLocked] = useState(false);
   // Drag detection: skip click if mouse moved more than threshold pixels
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
@@ -24,7 +23,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint, sceneI
   // Init renderer once
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !gpuSupported) return;
+    if (!canvas) return;
     const r = new SceneRenderer(canvas);
     rendererRef.current = r;
     r.init().catch(console.error);
@@ -32,7 +31,7 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint, sceneI
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
-  }, [gpuSupported]);
+  }, []);
 
   // Track pointer lock state via browser event
   useEffect(() => {
@@ -133,27 +132,16 @@ export function ViewerCanvas({ sceneData, onObjectClick, activeViewpoint, sceneI
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {!gpuSupported ? (
-        <div style={{
-          position: "absolute", inset: 0, display: "flex", alignItems: "center",
-          justifyContent: "center", background: "#111", color: "#fff", fontSize: 16,
-          textAlign: "center", padding: 24,
-        }}>
-          WebGPU is not supported in this browser.<br />
-          Please use Chrome 113+ or another browser with WebGPU enabled.
-        </div>
-      ) : (
-        <canvas
-          ref={canvasRef}
-          style={{ width: "100%", height: "100%", display: "block", cursor: fpLocked ? "none" : hovered ? "pointer" : "default" }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onClick={handleClick}
-        />
-      )}
+      <canvas
+        ref={canvasRef}
+        style={{ width: "100%", height: "100%", display: "block", cursor: fpLocked ? "none" : hovered ? "pointer" : "default" }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onClick={handleClick}
+      />
 
       {/* Walk mode button — bottom-right corner */}
-      {gpuSupported && !fpLocked && (
+      {!fpLocked && (
         <button
           onClick={handleEnterWalkMode}
           title="Enter walk mode (WASD + mouse look)"
