@@ -419,6 +419,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       };
       const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
       const onKeyAction = (e: KeyboardEvent) => {
+        // Never fire scene shortcuts when the user is typing in a text field
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
         const k = e.key.toLowerCase();
         if (k === "f" && document.pointerLockElement === cv) { doShoot(); return; }
         if (k === "g" && document.pointerLockElement === cv) {
