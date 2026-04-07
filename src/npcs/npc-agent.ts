@@ -64,16 +64,16 @@ export async function runNpcAgent(opts: {
 	const systemPrompt =
 		`你是${npcName}。${personality}${skillSection}${memorySection}${perceptionSection}\n\n` +
 		`你可以使用以下工具来响应玩家：\n` +
-		`- speak(text)：说出一句话\n` +
+		`- speak(text)：对玩家说出一句话\n` +
 		`- observe_scene()：查看周围的场景对象（包含准确坐标）\n` +
 		`- move_to(x, z)：移动到场景中某个位置（使用感知中的坐标）\n` +
-		`- speak_to_npc(targetObjectId, text)：向附近的NPC说一句话并等待其回应\n` +
+		`- speak_to_npc(targetObjectId, text)：走近另一个NPC（自动停在其1.5米旁）并向他说一句话，等待对方回应\n` +
 		`- emote(animation)：播放一个动作（idle/walk/talk/wave/bow）\n` +
 		(skillToolNames ? `${skillToolNames}\n` : "") +
 		`\n行为准则：\n` +
 		`- 你了解场景中其他NPC的角色，可以主动和他们互动\n` +
-		`- 如果玩家让你去找某人，先用move_to移动过去，再用speak_to_npc开口\n` +
-		`- 至少调用一次 speak()。完成后停止。`;
+		`- 如果玩家让你去找某人，直接用speak_to_npc开口（工具会自动走过去站在旁边）\n` +
+		`- 和其他NPC交互结束后，用speak()向玩家汇报结果，然后停止`;
 
 	const tools: AgentTool[] = [
 		{
@@ -146,6 +146,11 @@ export async function runNpcAgent(opts: {
 				const { targetObjectId, text } = params as { targetObjectId: string; text: string };
 				const targetNpc = sceneObjects.find((o) => o.objectId === targetObjectId && o.type === "npc");
 				if (!targetNpc) return { content: [{ type: "text", text: "找不到该NPC" }], details: null };
+
+				// Reposition initiating NPC 1.5m to the side of the target so they don't overlap
+				const tx = targetNpc.position.x;
+				const tz = targetNpc.position.z;
+				bus.publish(sessionId, { type: "npc_move", npcId, position: { x: tx + 1.5, y: 0, z: tz }, sceneId });
 
 				// Publish the initiating NPC's speech first
 				bus.publish(sessionId, { type: "npc_speech", npcId, npcName, text, sceneId });

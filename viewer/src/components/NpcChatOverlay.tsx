@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 export interface NpcChatMessage {
   role: "user" | "npc";
   text: string;
+  npcName?: string; // set when an NPC other than the primary chat target speaks
 }
 
 interface Props {
@@ -125,6 +126,11 @@ export function NpcChatOverlay({ npcName, history, pending, onSend, onClose }: P
               wordBreak: "break-word",
             }}
           >
+            {msg.role === "npc" && msg.npcName && (
+              <div style={{ fontSize: 11, color: "rgba(160,140,255,0.75)", marginBottom: 2, fontWeight: 600 }}>
+                {msg.npcName}
+              </div>
+            )}
             {msg.text}
           </div>
         ))}

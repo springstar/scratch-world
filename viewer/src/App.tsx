@@ -73,6 +73,9 @@ export function App() {
   const [selected, setSelected] = useState<SelectedObject | null>(null);
   const [activeViewpoint, setActiveViewpoint] = useState<Viewpoint | null>(null);
   const streamingBuffer = useRef("");
+  // World speech feed — queue of recent NPC speeches shown as subtitles regardless of player proximity
+  const [speechFeed, setSpeechFeed] = useState<Array<{ id: string; npcId: string; npcName: string; text: string }>>([]);
+  // Legacy single-entry for SplatViewer proximity bubble (only shown near the NPC)
   const [npcSpeech, setNpcSpeech] = useState<{ npcId: string; npcName: string; text: string } | null>(null);
   const npcSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showNpcDrawer, setShowNpcDrawer] = useState(false);
@@ -214,8 +217,12 @@ export function App() {
         if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
         // Feed into the chat overlay if open, otherwise show the legacy speech bubble
         setNpcChatPending(false);
-        setNpcChatHistory((prev) => [...prev, { role: "npc", text: event.text }]);
-        // Also keep the speech bubble for non-overlay contexts (ViewerCanvas scenes)
+        setNpcChatHistory((prev) => [...prev, { role: "npc", text: event.text, npcName: event.npcName }]);
+        // Add to world speech feed (shown as subtitles regardless of player proximity)
+        const feedId = `${event.npcId}_${Date.now()}`;
+        setSpeechFeed((prev) => [...prev.slice(-4), { id: feedId, npcId: event.npcId, npcName: event.npcName, text: event.text }]);
+        setTimeout(() => setSpeechFeed((prev) => prev.filter((e) => e.id !== feedId)), 8000);
+        // Legacy proximity bubble
         if (npcSpeechTimerRef.current) clearTimeout(npcSpeechTimerRef.current);
         setNpcSpeech({ npcId: event.npcId, npcName: event.npcName, text: event.text });
         npcSpeechTimerRef.current = setTimeout(() => setNpcSpeech(null), 8000);
@@ -550,6 +557,32 @@ export function App() {
           <>
             <ViewpointBar viewpoints={scene.sceneData.viewpoints} onSelect={handleViewpointSelect} />
             <NarrativeOverlay lines={narrativeLines} isStreaming={isStreaming} />
+            {/* World speech feed — subtitles for NPC-to-NPC dialogue visible to the player */}
+            {speechFeed.length > 0 && (
+              <div style={{
+                position: "absolute", bottom: 72, left: "50%", transform: "translateX(-50%)",
+                display: "flex", flexDirection: "column", gap: 6, alignItems: "center",
+                pointerEvents: "none", zIndex: 90,
+                maxWidth: 480, width: "calc(100% - 32px)",
+              }}>
+                {speechFeed.map((entry) => (
+                  <div key={entry.id} style={{
+                    background: "rgba(8,6,20,0.82)",
+                    backdropFilter: "blur(10px)",
+                    border: "1px solid rgba(120,100,255,0.22)",
+                    borderRadius: 10,
+                    padding: "6px 14px",
+                    textAlign: "center",
+                    fontFamily: "system-ui, -apple-system, sans-serif",
+                  }}>
+                    <span style={{ fontSize: 11, color: "rgba(160,140,255,0.8)", fontWeight: 600, marginRight: 6 }}>
+                      {entry.npcName}
+                    </span>
+                    <span style={{ fontSize: 13, color: "rgba(210,220,255,0.92)" }}>{entry.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {selected && (
               <InteractionPrompt
                 objectName={selected.name}
