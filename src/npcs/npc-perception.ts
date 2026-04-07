@@ -102,13 +102,27 @@ function firstObstacle(from: Vec3, to: Vec3, objects: SceneObject[]): string | n
 
 const NEARBY_RADIUS = 20; // metres — objects beyond this are ignored
 
+/**
+ * Extract a scene caption from the object list.
+ * Marble scenes store the AI-generated caption in the terrain/world object's description.
+ * Returns undefined if no useful caption is found.
+ */
+export function extractSceneCaption(objects: SceneObject[]): string | undefined {
+	const world = objects.find((o) => o.type === "terrain" && o.description && o.description.length > 10);
+	return world?.description || undefined;
+}
+
 export function buildPerceptionContext(
 	npcObj: SceneObject,
 	allObjects: SceneObject[],
 	playerPosition: Vec3 | undefined,
 	environment: { timeOfDay?: string; weather?: string },
+	sceneCaption?: string,
 ): string {
 	const lines: string[] = [];
+
+	// ── Scene caption (Marble / provider description) ────────────────────────
+	if (sceneCaption) lines.push(`场景：${sceneCaption}`);
 
 	// ── Environment ──────────────────────────────────────────────────────────
 	const envParts: string[] = [];

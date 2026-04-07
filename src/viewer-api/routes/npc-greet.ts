@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { buildPerceptionContext, extractSceneCaption } from "../../npcs/npc-perception.js";
 import { greetAsNpc } from "../../npcs/npc-runner.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { RealtimeBus } from "../realtime.js";
@@ -39,18 +40,13 @@ export function npcGreetRoute(sceneManager: SceneManager, bus: RealtimeBus): Hon
 			return raw.filter((x): x is string => typeof x === "string");
 		})();
 
-		const env = scene.sceneData.environment;
-		const envLines: string[] = [];
-		if (env.timeOfDay) envLines.push(`当前时间：${env.timeOfDay}`);
-		if (env.weather) envLines.push(`天气：${env.weather}`);
-		if (playerPosition) {
-			const dx = npcObj.position.x - playerPosition.x;
-			const dy = npcObj.position.y - playerPosition.y;
-			const dz = npcObj.position.z - playerPosition.z;
-			const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-			envLines.push(`玩家距离你约 ${d.toFixed(1)} 米`);
-		}
-		const perceptionContext = envLines.length > 0 ? envLines.join("\n") : undefined;
+		const perceptionContext = buildPerceptionContext(
+			npcObj,
+			scene.sceneData.objects,
+			playerPosition,
+			scene.sceneData.environment,
+			extractSceneCaption(scene.sceneData.objects),
+		);
 
 		// Fire-and-forget — respond immediately, greeting arrives via realtime bus
 		greetAsNpc(npcObj.objectId, npcObj.name, personality, memory, perceptionContext)

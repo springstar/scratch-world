@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { runNpcAgent } from "../../npcs/npc-agent.js";
 import { createEvolutionEntry, type EvolutionLogEntry, generateEvolutionDiff } from "../../npcs/npc-evolution.js";
-import { buildPerceptionContext } from "../../npcs/npc-perception.js";
+import { buildPerceptionContext, extractSceneCaption } from "../../npcs/npc-perception.js";
 import { reactAsNpc, spontaneousNpcLine, updateMemory } from "../../npcs/npc-runner.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SceneObject } from "../../scene/types.js";
@@ -114,6 +114,7 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 			scene.sceneData.objects,
 			playerPosition,
 			scene.sceneData.environment,
+			extractSceneCaption(scene.sceneData.objects),
 		);
 
 		// Route: action keywords → agent loop (speak/move/emote/observe); otherwise → fast path
