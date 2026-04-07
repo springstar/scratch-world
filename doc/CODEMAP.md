@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-04-07 (NPC system: reactive NPCs, memory, evolution, heartbeat, agent loop, proximity chat)
+**Last Updated:** 2026-04-07 (image-to-3D via Hunyuan; structured logger + /debug/logs; NPC system)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -46,7 +46,7 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Telegram Adapter** | `src/channels/telegram/adapter.ts` | Telegram bot integration | `TelegramAdapter` |
 | **Session Manager** | `src/session/session-manager.ts` | Maintains per-user state, dispatches to agent, injects active skills | `SessionManager` |
 | **Agent Factory** | `src/agent/agent-factory.ts` | Wires Claude with scene tools | `createAgent()` |
-| **Scene Tools** | `src/agent/tools/*.ts` | Tool implementations (create, update, get, list, navigate, interact, share) | Tool functions |
+| **Scene Tools** | `src/agent/tools/*.ts` | Tool implementations (create, update, get, list, navigate, interact, share, image-to-3d) | Tool functions |
 | **Scene Validator** | `src/agent/scene-validator.ts` | Static analysis of sceneCode before storage; catches spatial and code-quality violations so agent can self-correct | `validateSceneCode()`, `formatViolations()` |
 | **Scene Manager** | `src/scene/scene-manager.ts` | Scene CRUD, orchestrates provider calls (sync and async), versioning | `SceneManager` |
 | **Scene Types** | `src/scene/types.ts` | Core domain interfaces with async fields (Scene.status, operationId) | Type definitions |
@@ -57,7 +57,7 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Splat Proxy Route** | `src/viewer-api/routes/splat-proxy.ts` | Proxy GET /splat/:sceneId to serve SPZ files with API key server-side | `splatProxyRoute()` |
 | **Stub Provider** | `src/providers/stub/provider.ts` | Mock provider with static fixtures (local dev) | `StubProvider` |
 | **Storage Repos** | `src/storage/*.ts` | Scene and Session persistence | `SceneRepository`, `SessionRepository` |
-| **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat | Hono app |
+| **Viewer API** | `src/viewer-api/server.ts` | HTTP + WebSocket server for viewer and web chat; GET /debug/logs ring-buffer endpoint | Hono app |
 | **Chat Route** | `src/viewer-api/routes/chat.ts` | POST /chat endpoint for web UI | `chatRoute()` |
 | **Scene Renderer** | `viewer/src/renderer/scene-renderer.ts` | Three.js WebGPU scene construction from SceneData; executes sceneCode sandbox; post-processing pipeline (bloom → SMAA → film grain → vignette) | `SceneRenderer` |
 | **Scene Stdlib** | `viewer/src/renderer/scene-stdlib.ts` | Standard library injected into sceneCode sandbox as `stdlib`; lighting, terrain, buildings, NPCs, trees, layout; 2000m horizon fill plane + shadow frustum ±80m | `createStdlib()`, `StdlibApi` |
@@ -75,6 +75,8 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **NPC Proximity** | `viewer/src/physics/npc-proximity.ts` | 2.5 m proximity radius, nearest-NPC search with position overrides | `findNearbyNpc()`, `extractNpcs()` |
 | **NPC Chat Overlay** | `viewer/src/components/NpcChatOverlay.tsx` | Floating in-viewer chat panel; auto-opens/closes on proximity | `NpcChatOverlay` |
 | **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, approve/reject evolution | `NpcDrawer` |
+| **Image-to-3D Tool** | `src/agent/tools/image-to-3d.ts` | Converts user-uploaded photo to GLB via Tencent Hunyuan 3D API (submit → poll → download); 10-min timeout | `imageToSdTool()` |
+| **Logger** | `src/logger.ts` | Structured session/tool-scoped logger with timer helpers and 500-entry in-memory ring buffer; powers /debug/logs | `createLogger()`, `getRecentLogs()` |
 
 ## Settlement Generation (Two-Stage Architecture)
 
