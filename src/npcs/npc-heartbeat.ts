@@ -1,5 +1,6 @@
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
+import { buildPerceptionContext } from "./npc-perception.js";
 import { spontaneousNpcLine } from "./npc-runner.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -60,10 +61,7 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 	})();
 
 	const env = scene.sceneData.environment;
-	const envLines: string[] = [];
-	if (env.timeOfDay) envLines.push(`当前时间：${env.timeOfDay}`);
-	if (env.weather) envLines.push(`天气：${env.weather}`);
-	const perceptionContext = envLines.length > 0 ? envLines.join("\n") : undefined;
+	const perceptionContext = buildPerceptionContext(candidate, scene.sceneData.objects, undefined, env);
 
 	try {
 		const text = await spontaneousNpcLine(candidate.objectId, candidate.name, personality, memory, perceptionContext);

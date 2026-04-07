@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { runNpcAgent } from "../../npcs/npc-agent.js";
 import { createEvolutionEntry, type EvolutionLogEntry, generateEvolutionDiff } from "../../npcs/npc-evolution.js";
+import { buildPerceptionContext } from "../../npcs/npc-perception.js";
 import { reactAsNpc, spontaneousNpcLine, updateMemory } from "../../npcs/npc-runner.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SceneObject } from "../../scene/types.js";
@@ -21,45 +22,14 @@ interface NpcInteractBody {
 	playerPosition?: { x: number; y: number; z: number };
 }
 
-function dist(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
-	const dx = a.x - b.x;
-	const dy = a.y - b.y;
-	const dz = a.z - b.z;
-	return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-function buildPerceptionContext(
-	npcObj: SceneObject,
-	allObjects: SceneObject[],
-	playerPosition: { x: number; y: number; z: number } | undefined,
-	environment: { timeOfDay?: string; weather?: string },
-): string {
-	const lines: string[] = [];
-
-	if (environment.timeOfDay) lines.push(`当前时间：${environment.timeOfDay}`);
-	if (environment.weather) lines.push(`天气：${environment.weather}`);
-
-	if (playerPosition) {
-		const d = dist(npcObj.position, playerPosition);
-		lines.push(`玩家距离你约 ${d.toFixed(1)} 米`);
-	}
-
-	// Find up to 5 nearest non-terrain, non-floor objects (excluding the NPC itself)
-	const nearby = allObjects
-		.filter((o) => o.objectId !== npcObj.objectId && o.type !== "terrain" && o.type !== "floor" && o.type !== "sky")
-		.map((o) => ({ o, d: dist(npcObj.position, o.position) }))
-		.sort((a, b) => a.d - b.d)
-		.slice(0, 5);
-
-	if (nearby.length > 0) {
-		lines.push(`附近事物：${nearby.map(({ o, d }) => `${o.name}（${d.toFixed(1)}米）`).join("、")}`);
-	}
-
-	return lines.join("\n");
-}
-
 // Radius within which other NPCs can "hear" an interaction
 const PERCEPTION_RADIUS = 15;
+
+function dist2d(a: { x: number; z: number }, b: { x: number; z: number }): number {
+	const dx = a.x - b.x;
+	const dz = a.z - b.z;
+	return Math.sqrt(dx * dx + dz * dz);
+}
 
 /**
  * After an NPC responds, nearby NPCs may independently react (15% chance each).
@@ -79,7 +49,7 @@ function triggerPerceptionBus(
 			o.objectId !== speakingNpc.objectId &&
 			o.type === "npc" &&
 			typeof o.metadata?.npcPersonality === "string" &&
-			dist(speakingNpc.position, o.position) <= PERCEPTION_RADIUS,
+			dist2d(speakingNpc.position, o.position) <= PERCEPTION_RADIUS,
 	);
 
 	for (const bystander of bystanders) {
