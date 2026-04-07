@@ -3,6 +3,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import type { IncomingMessage } from "http";
 import { WebSocketServer } from "ws";
+import { getRecentLogs } from "../logger.js";
 import type { NarratorRegistry } from "../narrators/narrator-registry.js";
 import { startNpcHeartbeat } from "../npcs/npc-heartbeat.js";
 import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
@@ -79,6 +80,13 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));
+
+	// Debug log viewer — returns the last N structured log entries from the in-memory ring buffer.
+	// Usage: GET /debug/logs?limit=100
+	app.get("/debug/logs", (c) => {
+		const limit = Math.min(Number(c.req.query("limit") ?? 200), 500);
+		return c.json({ logs: getRecentLogs(limit) });
+	});
 
 	// Start HTTP server
 	const server = serve({ fetch: app.fetch, port }, () => {

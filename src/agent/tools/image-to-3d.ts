@@ -3,9 +3,10 @@ import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "crypto";
 import { createWriteStream } from "fs";
-import { mkdir, readFile } from "fs/promises";
+import { mkdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { pipeline } from "stream/promises";
+import { createLogger } from "../../logger.js";
 
 /**
  * image-to-3d.ts
@@ -102,8 +103,9 @@ async function submitJob(imageBase64: string): Promise<string> {
  * Query job status. Returns the full QueryResult when complete.
  * Throws if the job failed or timed out.
  */
-async function pollJob(jobId: string): Promise<QueryResult> {
-	const deadline = Date.now() + GENERATION_TIMEOUT_MS;
+async function pollJob(jobId: string, log: ReturnType<typeof createLogger>, jobStart: number): Promise<QueryResult> {
+	const deadline = jobStart + GENERATION_TIMEOUT_MS;
+	let pollCount = 0;
 
 	while (Date.now() < deadline) {
 		const res = await fetch(`${HUNYUAN_BASE_URL}/v1/ai3d/query`, {
@@ -121,6 +123,10 @@ async function pollJob(jobId: string): Promise<QueryResult> {
 
 		const result = data.Response;
 		const status = result.Status ?? "";
+		pollCount++;
+		const elapsed = Date.now() - jobStart;
+
+		log.info("poll", { poll: pollCount, status, elapsed: `${(elapsed / 1000).toFixed(1)}s`, jobId });
 
 		if (status === "FAILED") {
 			const msg = result.ErrorMessage || result.ErrorCode || "unknown error";
@@ -166,7 +172,10 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 			"imagePath comes from the [上传图片: path=...] prefix in the user message.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
+			const log = createLogger({ tool: "image_to_3d" });
+
 			if (!process.env.HUNYUAN_API_KEY) {
+				log.error("HUNYUAN_API_KEY not configured");
 				return {
 					content: [
 						{ type: "text", text: JSON.stringify({ error: "HUNYUAN_API_KEY is not configured on the server." }) },
@@ -180,10 +189,14 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 
 			// ── 1. Read and encode image ──────────────────────────────────────
 			let imageBase64: string;
+			let imageSizeKb: number;
 			try {
 				const buf = await readFile(params.imagePath);
 				imageBase64 = buf.toString("base64");
+				const st = await stat(params.imagePath);
+				imageSizeKb = Math.round(st.size / 1024);
 			} catch (err) {
+				log.error("read image failed", err, { path: params.imagePath });
 				return {
 					content: [
 						{ type: "text", text: JSON.stringify({ error: `Failed to read image file: ${String(err)}` }) },
@@ -194,9 +207,13 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 
 			// ── 2. Submit generation job ──────────────────────────────────────
 			let jobId: string;
+			const jobStart = Date.now();
 			try {
+				const t = log.timer("submit", { assetName: params.assetName, sizeKb: imageSizeKb });
 				jobId = await submitJob(imageBase64);
+				t.end({ jobId });
 			} catch (err) {
+				log.error("submit failed", err);
 				return {
 					content: [
 						{ type: "text", text: JSON.stringify({ error: `Failed to submit Hunyuan job: ${String(err)}` }) },
@@ -208,8 +225,10 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 			// ── 3. Poll until complete ────────────────────────────────────────
 			let result: QueryResult;
 			try {
-				result = await pollJob(jobId);
+				result = await pollJob(jobId, log, jobStart);
+				log.info("generation done", { jobId, elapsed: `${((Date.now() - jobStart) / 1000).toFixed(1)}s` });
 			} catch (err) {
+				log.error("generation failed", err, { jobId });
 				return {
 					content: [
 						{
@@ -233,8 +252,12 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 			const destPath = join(generatedDir, fileName);
 
 			try {
+				const t = log.timer("download", { url: glbFile.Url.slice(0, 60) });
 				await downloadFile(glbFile.Url, destPath);
+				const st = await stat(destPath);
+				t.end({ sizeKb: Math.round(st.size / 1024), dest: fileName });
 			} catch (err) {
+				log.error("download failed", err, { jobId });
 				return {
 					content: [
 						{ type: "text", text: JSON.stringify({ error: `Failed to download generated GLB: ${String(err)}` }) },
@@ -245,6 +268,7 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 
 			// ── 5. Return hosted URL ──────────────────────────────────────────
 			const hostedUrl = `${viewerBaseUrl}/uploads/generated/${fileName}`;
+			log.info("complete", { jobId, modelUrl: hostedUrl });
 			return {
 				content: [
 					{

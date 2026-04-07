@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Agent } from "@mariozechner/pi-agent-core";
 import { getModel, Type } from "@mariozechner/pi-ai";
+import { createLogger } from "../logger.js";
 import type { SceneObject } from "../scene/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
 
@@ -31,6 +32,9 @@ export async function runNpcAgent(opts: {
 }): Promise<void> {
 	const { npcId, npcName, personality, memory, perceptionContext, userText, sceneObjects, sessionId, sceneId, bus } =
 		opts;
+
+	const log = createLogger({ tool: "npc_agent", npc: npcId });
+	const t = log.timer("agent_run", { npcName, userText: userText.slice(0, 60) });
 
 	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
@@ -127,8 +131,10 @@ export async function runNpcAgent(opts: {
 				abort.signal.addEventListener("abort", () => reject(new Error("NPC agent timeout"))),
 			),
 		]);
+		t.end({ outcome: "done" });
 	} catch (err) {
 		if ((err as Error).message !== "NPC agent timeout") throw err;
+		log.warn("agent timed out", { npcName, timeoutMs: AGENT_TIMEOUT_MS });
 	} finally {
 		clearTimeout(timer);
 	}

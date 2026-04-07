@@ -1,4 +1,5 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import { createLogger } from "../logger.js";
 
 const COOLDOWN_MS = 10_000;
 // npcId → timestamp of last reaction (in-memory, resets on process restart)
@@ -37,6 +38,9 @@ export async function reactAsNpc(
 	if (now - (cooldowns.get(npcId) ?? 0) < COOLDOWN_MS) return null;
 	cooldowns.set(npcId, now);
 
+	const log = createLogger({ tool: "npc_react", npc: npcId });
+	const t = log.timer("react");
+
 	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
@@ -47,7 +51,9 @@ export async function reactAsNpc(
 		messages: [{ role: "user", content: userText, timestamp: Date.now() }],
 	});
 
-	return extractText(response) || null;
+	const reply = extractText(response) || null;
+	t.end({ npcName, tokens: response.usage?.output });
+	return reply;
 }
 
 // Heartbeat cooldown: one spontaneous line per NPC per 4 minutes minimum
@@ -74,6 +80,9 @@ export async function spontaneousNpcLine(
 	if (now - (heartbeatCooldowns.get(npcId) ?? 0) < HEARTBEAT_COOLDOWN_MS) return null;
 	heartbeatCooldowns.set(npcId, now);
 
+	const log = createLogger({ tool: "npc_heartbeat", npc: npcId });
+	const t = log.timer("spontaneous");
+
 	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
@@ -84,7 +93,9 @@ export async function spontaneousNpcLine(
 		messages: [{ role: "user", content: "（心跳触发）", timestamp: Date.now() }],
 	});
 
-	return extractText(response) || null;
+	const reply = extractText(response) || null;
+	t.end({ npcName });
+	return reply;
 }
 
 /**
@@ -103,6 +114,9 @@ export async function greetAsNpc(
 	if (now - (greetCooldowns.get(npcId) ?? 0) < GREET_COOLDOWN_MS) return null;
 	greetCooldowns.set(npcId, now);
 
+	const log = createLogger({ tool: "npc_greet", npc: npcId });
+	const t = log.timer("greet");
+
 	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
@@ -113,7 +127,9 @@ export async function greetAsNpc(
 		messages: [{ role: "user", content: "（玩家走近了）", timestamp: Date.now() }],
 	});
 
-	return extractText(response) || null;
+	const reply = extractText(response) || null;
+	t.end({ npcName });
+	return reply;
 }
 
 // Memory items are capped at this count; older items are compressed if exceeded.
@@ -132,6 +148,9 @@ export async function updateMemory(
 	userText: string,
 	npcReply: string,
 ): Promise<string[]> {
+	const log = createLogger({ tool: "npc_memory" });
+	const t = log.timer("update", { npcName, existing: existingMemory.length });
+
 	const prompt =
 		`以下是${npcName}与玩家的一次对话：\n` +
 		`玩家：${userText}\n` +
@@ -151,11 +170,15 @@ export async function updateMemory(
 		}
 	} catch {
 		// Compression failed — don't update memory this round
+		log.warn("extract facts failed", { npcName });
 		return existingMemory;
 	}
 
 	const merged = [...existingMemory, ...newFacts];
-	if (merged.length <= MEMORY_CAP) return merged;
+	if (merged.length <= MEMORY_CAP) {
+		t.end({ added: newFacts.length, total: merged.length });
+		return merged;
+	}
 
 	// Cap exceeded: compress the oldest half down to a few summary lines
 	const toCompress = merged.slice(0, Math.floor(MEMORY_CAP / 2));
@@ -169,10 +192,13 @@ export async function updateMemory(
 		const compressed: unknown = JSON.parse(extractText(r2));
 		if (Array.isArray(compressed)) {
 			const compressedFacts = compressed.filter((x): x is string => typeof x === "string").slice(0, 5);
+			t.end({ added: newFacts.length, compressed: true, total: compressedFacts.length + keep.length });
 			return [...compressedFacts, ...keep];
 		}
 	} catch {
 		// Compression failed — just truncate from the front
+		log.warn("memory compression failed, truncating", { npcName });
 	}
+	t.end({ added: newFacts.length, truncated: true });
 	return merged.slice(-MEMORY_CAP);
 }
