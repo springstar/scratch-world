@@ -75,7 +75,7 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **NPC Proximity** | `viewer/src/physics/npc-proximity.ts` | 2.5 m proximity radius, nearest-NPC search with position overrides | `findNearbyNpc()`, `extractNpcs()` |
 | **NPC Chat Overlay** | `viewer/src/components/NpcChatOverlay.tsx` | Floating in-viewer chat panel; auto-opens/closes on proximity | `NpcChatOverlay` |
 | **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, approve/reject evolution | `NpcDrawer` |
-| **NPC Perception** | `src/npcs/npc-perception.ts` | Builds spatial context string: self-position, compass bearings, 2D obstacle detection between NPC and player/peers | `buildPerceptionContext()` |
+| **NPC Perception** | `src/npcs/npc-perception.ts` | Builds spatial context string: self-position, compass bearings, 2D obstacle detection, scene caption injection | `buildPerceptionContext()`, `extractSceneCaption()` |
 | **Image-to-3D Tool** | `src/agent/tools/image-to-3d.ts` | Converts user-uploaded photo to GLB via Tencent Hunyuan 3D API (submit → poll → download); 10-min timeout | `imageToSdTool()` |
 | **Logger** | `src/logger.ts` | Structured session/tool-scoped logger with timer helpers and 500-entry in-memory ring buffer; powers /debug/logs | `createLogger()`, `getRecentLogs()` |
 
