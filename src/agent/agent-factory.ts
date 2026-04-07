@@ -1,5 +1,6 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import { getModel } from "@mariozechner/pi-ai";
+import { join } from "path";
 import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import { trimContext } from "./context-trimmer.js";
@@ -12,6 +13,7 @@ import { evaluateSceneTool } from "./tools/evaluate-scene.js";
 import { evolveSkillsTool } from "./tools/evolve-skills.js";
 import { findGltfAssetsTool } from "./tools/find-gltf-assets.js";
 import { getSceneTool } from "./tools/get-scene.js";
+import { imageToSdTool } from "./tools/image-to-3d.js";
 import { listScenesTool } from "./tools/list-scenes.js";
 import { placePropTool } from "./tools/place-prop.js";
 import { removePropTool } from "./tools/remove-prop.js";
@@ -164,7 +166,8 @@ Required metadata fields:
 - scale: number — world scale multiplier (default 1)
 
 Optional:
-- placement: "near_camera" | "near_entrance" | "scene_center"
+- placement: "near_camera" | "near_entrance" | "scene_center" | "exact"
+  exact: places the prop at the exact [点击目标] coordinates (use when click target provided)
   near_camera (default): objects appear in front of the player spawn
   near_entrance: places near the first scene viewpoint
   scene_center: places around world origin (0,0,0)
@@ -224,6 +227,8 @@ When a user asks what scenes they have, call list_scenes.
 When a user wants to load, open, switch to, or revisit a scene by name (e.g. "加载阶梯教室", "open my classroom", "切换到森林场景"), call list_scenes first, find the best title match, then share its view link — do NOT create a new scene.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, call share_scene.
+When a user uploads a photo and asks to place it in the scene, turn it into a 3D object, or add it to the asset library, call image_to_3d with the imagePath from the [上传图片: path=...] prefix and a descriptive assetName. After success, call add_to_catalog to persist it, then call place_prop to add it to the active scene.
+
 When a user wants to place ANY physical object in a Marble scene — robot, character, animal, vehicle, furniture, crate, box, plant, prop, or any other standalone object — call place_prop. Do NOT call update_scene or create_scene for object placement.
 
 ## Placing props — workflow
@@ -287,7 +292,12 @@ Call analyze_scene_objects(sceneId) when:
 
 Important: VLM analysis identifies objects and their descriptions but cannot provide accurate 3D coordinates from a 2D image. The "approximate_direction" field is a rough semantic hint only.
 
-Placement rule: always use placement "near_camera" for place_prop. The player's physical position in the scene is the only reliable anchor. If the user wants a prop near a specific object, ask them to walk close to that object first, then issue the placement command.
+## Prop Placement
+
+When the user asks to place something, choose the anchor in this order:
+1. If "[点击目标: x=..., y=..., z=...]" appears in the context, copy those coordinates into playerPosition and set placement to "exact". The prop will land at the exact clicked position.
+2. If no click target but "[玩家当前位置: ...]" is present, copy those coordinates into playerPosition and use placement "near_camera" — the prop appears in front of where the player is standing.
+3. If neither is available, ask the user to either click on the desired spot in the scene then repeat the command, or walk near the desired location then repeat the command.
 
 After each tool call, respond naturally — describe what the user will experience.
 When sharing a scene link, format it as: [View scene](url)`.trim();
@@ -299,6 +309,7 @@ export function createAgent(
 	sessionId: string,
 	skillPrompt: string | null = null,
 	generationQueue: GenerationQueue,
+	projectRoot: string = process.cwd(),
 ): Agent {
 	const ownerId = () => userId;
 	const viewerUrl = (sceneId: string) => `${viewerBaseUrl}/scene/${sceneId}?session=${sessionId}`;
@@ -336,6 +347,7 @@ export function createAgent(
 				applySkillChangesTool(),
 				findGltfAssetsTool(),
 				addToCatalogTool(),
+				imageToSdTool(join(projectRoot, "uploads"), viewerBaseUrl),
 			],
 		},
 		transformContext: async (messages) => trimContext(messages),

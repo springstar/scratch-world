@@ -91,6 +91,7 @@ async function main() {
 		viewerBaseUrl,
 		skillLoader,
 		generationQueue,
+		projectRoot,
 	);
 	gateway.onMessage(async (msg) => {
 		await sessionManager.dispatch(msg);

@@ -66,4 +66,7 @@ export type RealtimeEvent =
   | { type: "scene_created"; sceneId: string; title: string; viewUrl: string }
   | { type: "scene_updated"; sceneId: string; version: number }
   | { type: "interaction_result"; outcome: string; sceneChanged: boolean }
+  | { type: "npc_speech"; npcId: string; npcName: string; text: string; sceneId?: string }
+  | { type: "npc_move"; npcId: string; position: { x: number; y: number; z: number }; sceneId?: string }
+  | { type: "npc_emote"; npcId: string; animation: string; sceneId?: string }
   | { type: "error"; message: string };

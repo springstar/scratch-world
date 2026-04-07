@@ -208,6 +208,53 @@ export class SceneManager {
 		return updated;
 	}
 
+	/** Update name, metadata, or other mutable fields of an existing scene object.
+	 *  metadata is merged (not replaced). Throws 404 if objectId not found.
+	 */
+	async updateSceneObject(
+		sceneId: string,
+		objectId: string,
+		patch: {
+			name?: string;
+			description?: string;
+			interactionHint?: string;
+			metadata?: Record<string, unknown>;
+		},
+	): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		let found = false;
+		const objects = scene.sceneData.objects.map((o) => {
+			if (o.objectId !== objectId) return o;
+			found = true;
+			return {
+				...o,
+				...(patch.name !== undefined ? { name: patch.name } : {}),
+				...(patch.description !== undefined ? { description: patch.description } : {}),
+				...(patch.interactionHint !== undefined ? { interactionHint: patch.interactionHint } : {}),
+				...(patch.metadata ? { metadata: { ...o.metadata, ...patch.metadata } } : {}),
+			};
+		});
+		if (!found) {
+			throw Object.assign(new Error(`Object ${objectId} not found in scene ${sceneId}`), { status: 404 });
+		}
+		const now = Date.now();
+		const updated: Scene = {
+			...scene,
+			sceneData: { ...scene.sceneData, objects },
+			version: scene.version + 1,
+			updatedAt: now,
+		};
+		await this.repo.saveVersion({
+			sceneId: updated.sceneId,
+			version: updated.version,
+			sceneData: updated.sceneData,
+			providerRef: updated.providerRef,
+			createdAt: now,
+		});
+		await this.repo.save(updated);
+		return updated;
+	}
+
 	/** Append new objects to an existing scene without calling the provider. */
 	async addPropsToScene(sceneId: string, newObjects: SceneData["objects"]): Promise<Scene> {
 		const scene = await this.requireScene(sceneId);

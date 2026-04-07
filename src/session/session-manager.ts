@@ -1,5 +1,8 @@
 import type { Agent } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { randomUUID } from "crypto";
+import { mkdir, writeFile } from "fs/promises";
+import { join } from "path";
 import { BASE_SYSTEM_PROMPT, createAgent, PROVIDER_BASE_PROMPT } from "../agent/agent-factory.js";
 import { trimContext } from "../agent/context-trimmer.js";
 import { isRejectionSignal, logFeedback } from "../agent/feedback-logger.js";
@@ -32,6 +35,7 @@ export class SessionManager {
 		private viewerBaseUrl: string,
 		private skillLoader: SkillLoader,
 		private generationQueue: GenerationQueue,
+		private projectRoot: string = process.cwd(),
 		private agentTtlMs: number = DEFAULT_AGENT_TTL_MS,
 	) {}
 
@@ -50,8 +54,11 @@ export class SessionManager {
 		bus: RealtimeBus,
 		images?: Array<{ base64: string; mimeType: string }>,
 		playerPosition?: { x: number; y: number; z: number },
+		clickPosition?: { x: number; y: number; z: number },
 	): Promise<void> {
-		return this.enqueue(sessionId, () => this._dispatchWebChat(sessionId, userId, text, bus, images, playerPosition));
+		return this.enqueue(sessionId, () =>
+			this._dispatchWebChat(sessionId, userId, text, bus, images, playerPosition, clickPosition),
+		);
 	}
 
 	// ── Private helpers ──────────────────────────────────────────────────────
@@ -118,6 +125,7 @@ export class SessionManager {
 		bus: RealtimeBus,
 		images?: Array<{ base64: string; mimeType: string }>,
 		playerPosition?: { x: number; y: number; z: number },
+		clickPosition?: { x: number; y: number; z: number },
 	): Promise<void> {
 		console.log(`[SessionManager] _dispatchWebChat sessionId=${sessionId}`);
 		// Upsert session record — web sessions may not exist yet
@@ -162,20 +170,34 @@ export class SessionManager {
 				bus.publish(sessionId, { type: "text_delta", delta });
 			} else if (event.type === "tool_execution_end" && !event.isError) {
 				const details = event.result?.details as
-					| { sceneId?: string; title?: string; generating?: boolean }
+					| { sceneId?: string; title?: string; generating?: boolean; sceneChanged?: boolean }
 					| undefined;
 				if (details?.sceneId) {
 					activeSceneId = details.sceneId;
 					// Async paths (Marble/LLM provider): GenerationQueue will publish scene_created when ready.
 					// Only publish immediately for sync paths (sceneData provided, or StubProvider).
 					if (!details.generating) {
-						const viewUrl = `${this.viewerBaseUrl}/scene/${details.sceneId}?session=${sessionId}`;
-						bus.publish(sessionId, {
-							type: "scene_created",
-							sceneId: details.sceneId,
-							title: details.title ?? details.sceneId,
-							viewUrl,
-						});
+						if (details.sceneChanged) {
+							// Prop added or scene modified in-place (e.g. place_prop, remove_prop).
+							// Hot-update the viewer without triggering a full scene reload.
+							void this.sceneManager.getScene(details.sceneId).then((updated) => {
+								if (updated) {
+									bus.publish(sessionId, {
+										type: "scene_updated",
+										sceneId: details.sceneId as string,
+										version: updated.version,
+									});
+								}
+							});
+						} else {
+							const viewUrl = `${this.viewerBaseUrl}/scene/${details.sceneId}?session=${sessionId}`;
+							bus.publish(sessionId, {
+								type: "scene_created",
+								sceneId: details.sceneId,
+								title: details.title ?? details.sceneId,
+								viewUrl,
+							});
+						}
 					}
 				}
 			}
@@ -197,10 +219,28 @@ export class SessionManager {
 					data: { text },
 				});
 			}
-			// Prepend player position as spatial context so the agent can use it for object placement
-			const promptText = playerPosition
-				? `[玩家当前位置: x=${playerPosition.x.toFixed(1)}, y=${playerPosition.y.toFixed(1)}, z=${playerPosition.z.toFixed(1)}]\n${text}`
-				: text;
+			// Save uploaded images to disk and inject file paths into the prompt
+			// so the image_to_3d tool can read them by path.
+			let contextPrefix = "";
+			if (images && images.length > 0) {
+				const photosDir = join(this.projectRoot, "uploads", "photos");
+				await mkdir(photosDir, { recursive: true });
+				for (const img of images) {
+					const ext = img.mimeType === "image/png" ? "png" : img.mimeType === "image/webp" ? "webp" : "jpg";
+					const fileName = `${randomUUID()}.${ext}`;
+					const filePath = join(photosDir, fileName);
+					await writeFile(filePath, Buffer.from(img.base64, "base64"));
+					contextPrefix += `[上传图片: path=${filePath}]\n`;
+				}
+			}
+			// Prepend player position and click target as spatial context
+			if (playerPosition) {
+				contextPrefix += `[玩家当前位置: x=${playerPosition.x.toFixed(1)}, y=${playerPosition.y.toFixed(1)}, z=${playerPosition.z.toFixed(1)}]\n`;
+			}
+			if (clickPosition) {
+				contextPrefix += `[点击目标: x=${clickPosition.x.toFixed(2)}, y=${clickPosition.y.toFixed(2)}, z=${clickPosition.z.toFixed(2)}]\n`;
+			}
+			const promptText = contextPrefix ? `${contextPrefix}${text}` : text;
 			console.log("[SessionManager] calling agent.prompt");
 			await agent.prompt(promptText, imageContents);
 			console.log("[SessionManager] agent.prompt done");
@@ -287,6 +327,7 @@ export class SessionManager {
 			msg.sessionId,
 			null,
 			this.generationQueue,
+			this.projectRoot,
 		);
 
 		if (record?.agentMessages) {

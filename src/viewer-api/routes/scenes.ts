@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { applyEvolutionDelta, type EvolutionLogEntry } from "../../npcs/npc-evolution.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { RealtimeBus } from "../realtime.js";
 
@@ -186,6 +187,217 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
 			return c.json({ error: err instanceof Error ? err.message : "Failed to remove prop" }, status as 404 | 500);
+		}
+	});
+
+	// ── NPC endpoints ─────────────────────────────────────────────────────────
+
+	// POST /scenes/:sceneId/npcs — add an NPC directly to the scene.
+	app.post("/:sceneId/npcs", async (c) => {
+		const { sceneId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
+		const body = await c.req.json<{
+			name?: string;
+			personality?: string;
+			traits?: string;
+			modelUrl?: string;
+			scale?: number;
+			placement?: string;
+			playerPosition?: { x: number; y: number; z: number };
+		}>();
+		if (!body.name || !body.personality || !body.modelUrl) {
+			return c.json({ error: "Missing required fields: name, personality, modelUrl" }, 400);
+		}
+
+		const objectId = `npc_${randomUUID().slice(0, 8)}`;
+		const newNpc = {
+			objectId,
+			name: body.name,
+			type: "npc" as const,
+			position: { x: 0, y: 0, z: 0 },
+			description: body.personality,
+			interactable: true,
+			interactionHint: `与${body.name}对话`,
+			metadata: {
+				npcPersonality: body.personality,
+				npcTraits: body.traits ?? "",
+				modelUrl: body.modelUrl,
+				physicsShape: "box",
+				mass: 10,
+				scale: body.scale ?? 1,
+				placement: body.placement ?? "near_camera",
+				...(body.playerPosition ? { playerPosition: body.playerPosition } : {}),
+			},
+		};
+
+		const updated = await sceneManager.addPropsToScene(sceneId, [newNpc]);
+		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+		return c.json({ ok: true, objectId, version: updated.version });
+	});
+
+	// PATCH /scenes/:sceneId/npcs/:npcId — update NPC name, personality, or traits.
+	app.patch("/:sceneId/npcs/:npcId", async (c) => {
+		const { sceneId, npcId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
+		const body = await c.req.json<{ name?: string; personality?: string; traits?: string }>();
+		const metadataPatch: Record<string, unknown> = {};
+		if (body.personality !== undefined) metadataPatch.npcPersonality = body.personality;
+		if (body.traits !== undefined) metadataPatch.npcTraits = body.traits;
+
+		try {
+			const updated = await sceneManager.updateSceneObject(sceneId, npcId, {
+				...(body.name !== undefined ? { name: body.name, description: body.personality ?? undefined } : {}),
+				...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
+			});
+			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			return c.json({ ok: true, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json({ error: err instanceof Error ? err.message : "Failed to update NPC" }, status as 404 | 500);
+		}
+	});
+
+	// DELETE /scenes/:sceneId/npcs/:npcId — remove an NPC from the scene.
+	app.delete("/:sceneId/npcs/:npcId", async (c) => {
+		const { sceneId, npcId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
+		try {
+			const updated = await sceneManager.removePropFromScene(sceneId, npcId);
+			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			return c.json({ ok: true, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json({ error: err instanceof Error ? err.message : "Failed to remove NPC" }, status as 404 | 500);
+		}
+	});
+
+	// ── NPC evolution endpoints ────────────────────────────────────────────────
+
+	// GET /scenes/:sceneId/npcs/:npcId/evolution — list evolution log entries
+	app.get("/:sceneId/npcs/:npcId/evolution", async (c) => {
+		const { sceneId, npcId } = c.req.param();
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
+		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
+		const log: EvolutionLogEntry[] = (() => {
+			const raw = npcObj.metadata.npcEvolutionLog;
+			if (!Array.isArray(raw)) return [];
+			return raw as EvolutionLogEntry[];
+		})();
+		return c.json({
+			npcId,
+			interactionCount:
+				typeof npcObj.metadata.npcInteractionCount === "number" ? npcObj.metadata.npcInteractionCount : 0,
+			log,
+		});
+	});
+
+	// POST /scenes/:sceneId/npcs/:npcId/evolution/:entryId/approve — apply a pending evolution
+	app.post("/:sceneId/npcs/:npcId/evolution/:entryId/approve", async (c) => {
+		const { sceneId, npcId, entryId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (scene.ownerId !== sessionUserId) return c.json({ error: "Forbidden" }, 403);
+
+		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
+		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
+
+		const log: EvolutionLogEntry[] = (() => {
+			const raw = npcObj.metadata.npcEvolutionLog;
+			if (!Array.isArray(raw)) return [];
+			return raw as EvolutionLogEntry[];
+		})();
+		const entry = log.find((e) => e.id === entryId);
+		if (!entry) return c.json({ error: "Evolution entry not found" }, 404);
+		if (entry.status !== "pending") return c.json({ error: "Entry already resolved" }, 409);
+
+		const currentPersonality = (npcObj.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
+		const newPersonality = await applyEvolutionDelta(npcObj.name, currentPersonality, entry.suggestedDelta);
+
+		const updatedLog = log.map((e) =>
+			e.id === entryId ? { ...e, status: "approved" as const, appliedAt: Date.now() } : e,
+		);
+		try {
+			const updated = await sceneManager.updateSceneObject(sceneId, npcId, {
+				metadata: { npcPersonality: newPersonality, npcEvolutionLog: updatedLog },
+			});
+			return c.json({ ok: true, newPersonality, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json(
+				{ error: err instanceof Error ? err.message : "Failed to apply evolution" },
+				status as 404 | 500,
+			);
+		}
+	});
+
+	// POST /scenes/:sceneId/npcs/:npcId/evolution/:entryId/reject — discard a pending evolution
+	app.post("/:sceneId/npcs/:npcId/evolution/:entryId/reject", async (c) => {
+		const { sceneId, npcId, entryId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (scene.ownerId !== sessionUserId) return c.json({ error: "Forbidden" }, 403);
+
+		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
+		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
+
+		const log: EvolutionLogEntry[] = (() => {
+			const raw = npcObj.metadata.npcEvolutionLog;
+			if (!Array.isArray(raw)) return [];
+			return raw as EvolutionLogEntry[];
+		})();
+		const entry = log.find((e) => e.id === entryId);
+		if (!entry) return c.json({ error: "Evolution entry not found" }, 404);
+		if (entry.status !== "pending") return c.json({ error: "Entry already resolved" }, 409);
+
+		const updatedLog = log.map((e) => (e.id === entryId ? { ...e, status: "rejected" as const } : e));
+		try {
+			const updated = await sceneManager.updateSceneObject(sceneId, npcId, {
+				metadata: { npcEvolutionLog: updatedLog },
+			});
+			return c.json({ ok: true, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json(
+				{ error: err instanceof Error ? err.message : "Failed to reject evolution" },
+				status as 404 | 500,
+			);
 		}
 	});
 

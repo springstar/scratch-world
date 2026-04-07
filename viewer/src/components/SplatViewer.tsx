@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   WebGLRenderer,
   PerspectiveCamera,
+  Raycaster,
+  Vector2,
   Scene,
   Color,
   AmbientLight,
@@ -19,17 +21,12 @@ import { getRapier } from "../physics/init-rapier.js";
 import { buildWorldColliders } from "../physics/build-world-colliders.js";
 import { createCharacterController } from "../physics/character-controller.js";
 import {
-  shootProjectile,
-  syncProjectiles,
-  cleanupOldProjectiles,
-  type Projectile,
-} from "../physics/projectiles.js";
-import {
   loadPhysicsProps,
   loadGltf,
   buildCollider,
   syncPhysicsProps,
   disposePhysicsProps,
+  resolveModelUrl,
   type PhysicsProp,
 } from "../physics/pushable-objects.js";
 import { type PlacementHint, resolvePosition } from "../physics/prop-placement.js";
@@ -48,9 +45,13 @@ interface Props {
   splatGroundOffset?: number;
   onInteract?: (objectId: string, action: string) => void;
   onAddProp?: (entry: AssetEntry, objectId: string) => void;
+  onPlacementRequest?: (text: string) => void;
+  onNpcApproach?: (objectId: string, name: string) => void;
+  onNpcLeave?: () => void;
+  npcSpeech?: { npcId: string; npcName: string; text: string } | null;
 }
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, onInteract, onAddProp }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -61,9 +62,40 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const onAddPropRef = useRef(onAddProp);
   onAddPropRef.current = onAddProp;
   const [nearbyNpc, setNearbyNpc] = useState<NearbyNpc | null>(null);
+  const [clickIndicator, setClickIndicator] = useState<{ x: number; y: number } | null>(null);
+  const [propLoadErrors, setPropLoadErrors] = useState<string[]>([]);
+  const [placementMode, setPlacementMode] = useState(false);
+  const placementModeActiveRef = useRef(false);
+  const doPlacementRef = useRef<((text: string) => void) | null>(null);
+  const exitPlacementRef = useRef<(() => void) | null>(null);
+  const lastMousePosRef = useRef({ x: 0, y: 0 });
   const onInteractRef = useRef(onInteract);
   onInteractRef.current = onInteract;
+  const sceneObjectsRef = useRef(sceneObjects);
+  sceneObjectsRef.current = sceneObjects;
+  // NPC resolved positions — populated by loadSceneNpc when physics runs,
+  // empty when no collider mesh (proximity falls back to SceneObject.position).
+  const npcPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
+  const onPlacementRequestRef = useRef(onPlacementRequest);
+  onPlacementRequestRef.current = onPlacementRequest;
+  const onNpcApproachRef = useRef(onNpcApproach);
+  onNpcApproachRef.current = onNpcApproach;
+  const onNpcLeaveRef = useRef(onNpcLeave);
+  onNpcLeaveRef.current = onNpcLeave;
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
+
+  // Fire onNpcApproach when a new NPC enters proximity for the first time this render
+  const prevNearbyIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const newId = nearbyNpc?.objectId ?? null;
+    if (newId && newId !== prevNearbyIdRef.current) {
+      onNpcApproachRef.current?.(nearbyNpc!.objectId, nearbyNpc!.name);
+    }
+    if (!newId && prevNearbyIdRef.current) {
+      onNpcLeaveRef.current?.();
+    }
+    prevNearbyIdRef.current = newId;
+  }, [nearbyNpc]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -73,6 +105,18 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     setIsLocked(false);
     setPhysicsReady(false);
     setNearbyNpc(null);
+    setClickIndicator(null);
+    setPlacementMode(false);
+    placementModeActiveRef.current = false;
+
+    // Shared ref so the free-fly left-click handler can access the Rapier world
+    // after physics initialises, without a React re-render cycle.
+    const physicsRef: {
+      world: { castRay: (ray: unknown, maxToi: number, solid: boolean) => { timeOfImpact: number } | null } | null;
+      RAPIER: { Ray: new (o: { x: number; y: number; z: number }, d: { x: number; y: number; z: number }) => unknown } | null;
+    } = { world: null, RAPIER: null };
+
+    let clickIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
 
     const renderer = new WebGLRenderer({ canvas, antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -92,18 +136,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const splat = new SplatMesh({ url: splatUrl });
     splat.rotation.x = Math.PI;
     scene.add(splat);
-
+    let splatInitialized = false;
     splat.initialized.then(() => {
-      // Marble normalises all SPZ scenes so the floor sits at world Y = 0
-      // and the default viewpoint is (0, 1.7, 0) — no bounding-box maths needed.
-      // Using getBoundingBox() + matrixWorld arithmetic has consistently placed
-      // the camera outside the scene across many iterations; don't do it.
-      setStatus("ready");
+      splatInitialized = true;
+      // setStatus("ready") is deferred to freeFlyLoop — it samples the canvas
+      // pixel to confirm SparkRenderer has actually uploaded and drawn the scene.
     }).catch((err: unknown) => {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load splat file");
       setStatus("error");
     });
-
     // ── Resize observer ───────────────────────────────────────────────────────
     const ro = new ResizeObserver(() => {
       const w = canvas.clientWidth;
@@ -120,7 +161,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const onKeyDown = (e: KeyboardEvent) => {
       const el = document.activeElement;
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
-      keys.add(e.key.toLowerCase());
+      const k = e.key.toLowerCase();
+      keys.add(k);
     };
     const onKeyUp = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
     window.addEventListener("keydown", onKeyDown);
@@ -141,9 +183,42 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     const onMouseDown = (e: MouseEvent) => {
       if (!freeFlyActive) return;
+      if (e.button === 0) {
+        // Left-click: raycast against physics colliders to record click target
+        const pw = physicsRef.world;
+        const R = physicsRef.RAPIER;
+        if (pw && R) {
+          const rect = canvas.getBoundingClientRect();
+          const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          const raycaster = new Raycaster();
+          raycaster.setFromCamera(new Vector2(nx, ny), camera);
+          const origin = raycaster.ray.origin;
+          const dir = raycaster.ray.direction;
+          const ray = new R.Ray(
+            { x: origin.x, y: origin.y, z: origin.z },
+            { x: dir.x, y: dir.y, z: dir.z },
+          );
+          const hit = pw.castRay(ray, 200, true);
+          if (hit) {
+            const pt = {
+              x: origin.x + dir.x * hit.timeOfImpact,
+              y: origin.y + dir.y * hit.timeOfImpact,
+              z: origin.z + dir.z * hit.timeOfImpact,
+              ts: Date.now(),
+            };
+            (window as unknown as Record<string, unknown>).__clickPosition = pt;
+            // Show 2-second visual indicator dot at screen position
+            if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
+            setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+            clickIndicatorTimer = setTimeout(() => setClickIndicator(null), 2000);
+          }
+        }
+        return; // left-click does not start drag
+      }
       // Right-click or middle-click: drag to look
-      if (e.button !== 0) { ffDragging = true; e.preventDefault(); }
-      // Left-click passes through to physics onClick (do NOT lock here)
+      ffDragging = true;
+      e.preventDefault();
     };
     const onMouseUp = () => { ffDragging = false; };
     const onMouseMove = (e: MouseEvent) => {
@@ -182,6 +257,38 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
       }
       renderer.render(scene, camera);
+      // Once the splat is parsed, sample the center pixel each frame.
+      // SparkRenderer uploads to GPU asynchronously; the scene is visible only
+      // after the first non-background draw call completes.
+      if (splatInitialized && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+        const gl = renderer.getContext();
+        const px = new Uint8Array(4);
+        gl.readPixels(
+          Math.floor(canvas.clientWidth / 2),
+          Math.floor(canvas.clientHeight / 2),
+          1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px,
+        );
+        // Background is 0x0a0a14 (10,10,20) — any meaningfully brighter pixel means the scene rendered
+        if (px[0] > 20 || px[1] > 20 || px[2] > 30) {
+          splatInitialized = false; // stop sampling
+          setStatus("ready");
+        }
+      }
+      // Free-fly NPC proximity — uses camera position since there is no character
+      // controller in free-fly mode.  Physics mode updates __nearbyNpc independently.
+      if (!document.pointerLockElement) {
+        const freeNpcs = extractNpcs(sceneObjectsRef.current ?? []);
+        if (freeNpcs.length > 0) {
+          const cp = camera.position;
+          const freeNearby = findNearbyNpc(freeNpcs, cp.x, cp.y, cp.z, npcPositionsRef.current);
+          const freeId = freeNearby?.objectId ?? null;
+          setNearbyNpc((prev) => {
+            if ((prev?.objectId ?? null) === freeId) return prev;
+            (window as unknown as Record<string, unknown>).__nearbyNpc = freeNearby;
+            return freeNearby;
+          });
+        }
+      }
     }
     freeFlyLoop();
 
@@ -230,13 +337,151 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         viewpoints ?? [],
         disposed,
         splatGroundOffset,
+        (name) => setPropLoadErrors((prev) => [...prev, name]),
       );
       if (cancelled) { disposed.value = true; disposePhysicsProps(props, world, scene); world.free(); return; }
-      const projectiles: Projectile[] = [];
-      const npcs = extractNpcs(sceneObjects ?? []);
+
+      // NPC position overrides — maps objectId → resolved world position.
+      // SceneObjects start with position {0,0,0}; after a model loads its resolved
+      // position is stored here and used by the proximity check.
+      const npcPositions = npcPositionsRef.current;
+      npcPositions.clear();
+      // Three.js groups for NPC models — cleaned up alongside props on teardown.
+      const npcGroups = new Map<string, import("three").Group>();
+
+      // Load a single NPC model and register its resolved position.
+      const loadSceneNpc = async (obj: import("../types.js").SceneObject): Promise<void> => {
+        const modelUrl = obj.metadata.modelUrl as string | undefined;
+        if (!modelUrl) {
+          // No model — still register at origin so proximity can detect the NPC.
+          npcPositions.set(obj.objectId, { x: obj.position.x, y: obj.position.y, z: obj.position.z });
+          return;
+        }
+        const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
+        const hint = obj.metadata.placement as PlacementHint | undefined;
+        const playerPos = obj.metadata.playerPosition as { x: number; y: number; z: number } | undefined;
+        const occupied = [...npcPositions.values(), ...props.map((p) => { const t = p.body.translation(); return { x: t.x, y: t.y, z: t.z }; })];
+        const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], npcGroups.size, playerPos, splatGroundOffset);
+        npcPositions.set(obj.objectId, pos);
+
+        const group = await loadGltf(resolveModelUrl(modelUrl));
+        if (disposed.value) {
+          group.traverse((c) => {
+            if (c instanceof Mesh) {
+              c.geometry.dispose();
+              const mats = Array.isArray(c.material) ? c.material : [c.material];
+              for (const m of mats) m.dispose();
+            }
+          });
+          return;
+        }
+        group.scale.setScalar(scale);
+        group.updateMatrixWorld(true);
+        const bbox = new Box3().setFromObject(group);
+        const groundOffset = -bbox.min.y * scale;
+        group.position.set(pos.x, pos.y + groundOffset, pos.z);
+        group.traverse((c) => { c.userData.objectId = obj.objectId; });
+        scene.add(group);
+        npcGroups.set(obj.objectId, group);
+      };
+
+      const removeSceneNpc = (objectId: string): void => {
+        npcPositions.delete(objectId);
+        const group = npcGroups.get(objectId);
+        if (group) {
+          scene.remove(group);
+          npcGroups.delete(objectId);
+        }
+      };
+      (window as Record<string, unknown>).__loadSceneNpc = loadSceneNpc;
+      (window as Record<string, unknown>).__removeSceneNpc = removeSceneNpc;
+
+      // Move an NPC's group to a new world position (interpolation via animateNpcMove)
+      (window as Record<string, unknown>).__moveNpc = (objectId: string, pos: { x: number; y: number; z: number }) => {
+        const group = npcGroups.get(objectId);
+        if (!group) return;
+        npcPositions.set(objectId, pos);
+        // Animate movement over ~1.5s by updating position each frame
+        const startPos = group.position.clone();
+        const endPos = { x: pos.x, y: group.position.y, z: pos.z };
+        const durationMs = 1500;
+        const startTime = performance.now();
+        const step = () => {
+          const t = Math.min((performance.now() - startTime) / durationMs, 1);
+          group.position.set(
+            startPos.x + (endPos.x - startPos.x) * t,
+            endPos.y,
+            startPos.z + (endPos.z - startPos.z) * t,
+          );
+          if (t < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      };
+
+      // Play an animation clip on the NPC's AnimationMixer (if the GLB has clips)
+      (window as Record<string, unknown>).__emoteNpc = (objectId: string, animation: string) => {
+        const group = npcGroups.get(objectId);
+        if (!group) return;
+        // Store animation name for the render loop to pick up
+        group.userData.pendingAnimation = animation;
+      };
+
+      // Load all NPCs that exist at physics init time.
+      for (const obj of extractNpcs(sceneObjectsRef.current ?? [])) {
+        loadSceneNpc(obj).catch((err) => {
+          console.warn("[SplatViewer] failed to load NPC model", obj.name, err);
+          // Still register position so proximity works even without a model.
+          npcPositions.set(obj.objectId, { x: obj.position.x, y: obj.position.y, z: obj.position.z });
+        });
+      }
 
       // Physics ready — GLBs load in background; show "Click to enter" immediately
       setPhysicsReady(true);
+
+      physicsRef.world = world as typeof physicsRef.world;
+      physicsRef.RAPIER = RAPIER as typeof physicsRef.RAPIER;
+
+      // Placement mode: track mouse position so doPlacement can raycast on submit
+      const onPlacementMouseMove = (e: MouseEvent) => {
+        const rect = cv.getBoundingClientRect();
+        lastMousePosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      };
+      window.addEventListener("mousemove", onPlacementMouseMove);
+
+      doPlacementRef.current = (text: string) => {
+        const rect = cv.getBoundingClientRect();
+        const nx = (lastMousePosRef.current.x / rect.width) * 2 - 1;
+        const ny = -(lastMousePosRef.current.y / rect.height) * 2 + 1;
+        const raycaster = new Raycaster();
+        raycaster.setFromCamera(new Vector2(nx, ny), camera);
+        const origin = raycaster.ray.origin;
+        const dir = raycaster.ray.direction;
+        const ray = new RAPIER.Ray(
+          { x: origin.x, y: origin.y, z: origin.z },
+          { x: dir.x, y: dir.y, z: dir.z },
+        );
+        const hit = world.castRay(ray, 200, true);
+        if (hit) {
+          (window as unknown as Record<string, unknown>).__clickPosition = {
+            x: origin.x + dir.x * hit.timeOfImpact,
+            y: origin.y + dir.y * hit.timeOfImpact,
+            z: origin.z + dir.z * hit.timeOfImpact,
+            ts: Date.now(),
+          };
+        }
+        placementModeActiveRef.current = false;
+        setPlacementMode(false);
+        syncEuler();
+        restartFreeFly();
+        onPlacementRequestRef.current?.(text);
+      };
+
+      exitPlacementRef.current = () => {
+        placementModeActiveRef.current = false;
+        setPlacementMode(false);
+        syncEuler();
+        restartFreeFly();
+      };
 
       const plc = new PointerLockControls(camera, cv);
       let inPhysicsMode = false;
@@ -332,11 +577,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const right = new Vector3();
       let lastNearbyId: string | null = null;
 
-      const doShoot = () => shootProjectile(world, camera, scene, projectiles);
-      const doInteract = (npc: NearbyNpc) => {
-        onInteractRef.current?.(npc.objectId, npc.interactionHint ?? "你好");
-      };
-
       function physicsLoop() {
         if (!inPhysicsMode) return;
         animId = requestAnimationFrame(physicsLoop);
@@ -362,8 +602,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         camera.position.set(pos.x, pos.y + 0.8, pos.z);
         (window as unknown as Record<string, unknown>).__playerPosition = { x: pos.x, y: pos.y, z: pos.z };
 
-        if (npcs.length > 0) {
-          const nearby = findNearbyNpc(npcs, pos.x, pos.y + 0.8, pos.z);
+        const currentNpcs = extractNpcs(sceneObjectsRef.current ?? []);
+        if (currentNpcs.length > 0) {
+          const nearby = findNearbyNpc(currentNpcs, pos.x, pos.y + 0.8, pos.z, npcPositions);
           const newId = nearby?.objectId ?? null;
           if (newId !== lastNearbyId) {
             lastNearbyId = newId;
@@ -378,9 +619,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           const r = b.body.rotation();
           b.mesh.quaternion.set(r.x, r.y, r.z, r.w);
         }
-        syncProjectiles(projectiles);
         syncPhysicsProps(props);
-        cleanupOldProjectiles(world, projectiles, scene);
 
         renderer.render(scene, camera);
       }
@@ -404,18 +643,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           inPhysicsMode = true;
           physicsLoop();
         } else if (!locked && inPhysicsMode) {
-          // Transition: physics walking → free-fly (Escape key)
+          // Transition: physics walking → free-fly (Escape key) or placement mode (F key)
           inPhysicsMode = false;
           cancelAnimationFrame(animId);
-          syncEuler(); // sync free-fly rotation from current camera state
-          restartFreeFly();
+          if (!placementModeActiveRef.current) {
+            syncEuler();
+            restartFreeFly();
+          }
+          // If placement mode is active: renderer stops; dialog is visible; free-fly restarts on submit/cancel
         }
       };
       document.addEventListener("pointerlockchange", onLockChange);
 
       const onClick = () => {
         if (document.pointerLockElement !== cv) { plc.lock(); return; }
-        doShoot();
       };
       const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
       const onKeyAction = (e: KeyboardEvent) => {
@@ -423,7 +664,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
         const k = e.key.toLowerCase();
-        if (k === "f" && document.pointerLockElement === cv) { doShoot(); return; }
+        if (k === "f") {
+          placementModeActiveRef.current = true;
+          setPlacementMode(true);
+          if (document.pointerLockElement === cv) {
+            document.exitPointerLock(); // onLockChange will stop physics loop
+          }
+          // If already in free-fly: free-fly loop continues; dialog is shown on top
+          return;
+        }
         if (k === "g" && document.pointerLockElement === cv) {
           // Spawn last-selected catalog asset (or prop_boom_box as default) ahead of camera.
           // Ephemeral — for quick physics interaction, not persisted.
@@ -442,19 +691,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             const propId = pickObject(camera, props.flatMap((p) => p.meshes), 4);
             if (propId) { onInteractRef.current?.(propId, "pick"); return; }
           }
-          const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
-          if (npc) doInteract(npc);
         }
       };
       cv.addEventListener("click", onClick);
       cv.addEventListener("contextmenu", onContextMenu);
       window.addEventListener("keydown", onKeyAction);
 
-      (window as unknown as Record<string, unknown>).__physicsShoot = doShoot;
-      (window as unknown as Record<string, unknown>).__physicsInteract = () => {
-        const npc = (window as unknown as Record<string, unknown>).__nearbyNpc as NearbyNpc | null;
-        if (npc) doInteract(npc);
-      };
       (window as unknown as Record<string, unknown>).__nearbyNpc = null;
 
       cleanupPhysics = () => {
@@ -466,19 +708,23 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         cv.removeEventListener("click", onClick);
         cv.removeEventListener("contextmenu", onContextMenu);
         window.removeEventListener("keydown", onKeyAction);
-        delete (window as unknown as Record<string, unknown>).__physicsShoot;
-        delete (window as unknown as Record<string, unknown>).__physicsInteract;
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
         delete (window as unknown as Record<string, unknown>).__playerPosition;
         delete (window as unknown as Record<string, unknown>).__spawnProp;
         delete (window as unknown as Record<string, unknown>).__loadSceneProp;
         delete (window as unknown as Record<string, unknown>).__removeSceneProp;
+        delete (window as unknown as Record<string, unknown>).__loadSceneNpc;
+        delete (window as unknown as Record<string, unknown>).__removeSceneNpc;
+        delete (window as unknown as Record<string, unknown>).__moveNpc;
+        delete (window as unknown as Record<string, unknown>).__emoteNpc;
+        physicsRef.world = null;
+        physicsRef.RAPIER = null;
+        doPlacementRef.current = null;
+        exitPlacementRef.current = null;
+        placementModeActiveRef.current = false;
+        setPlacementMode(false);
+        window.removeEventListener("mousemove", onPlacementMouseMove);
         if (document.pointerLockElement === cv) document.exitPointerLock();
-        for (const p of projectiles) {
-          world.removeRigidBody(p.body);
-          scene.remove(p.mesh);
-          p.mesh.geometry.dispose();
-        }
         for (const b of tempBoxes) {
           world.removeRigidBody(b.body);
           scene.remove(b.mesh);
@@ -486,6 +732,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         tempBoxGeo.dispose();
         tempBoxMat.dispose();
         disposePhysicsProps(props, world, scene);
+        for (const group of npcGroups.values()) { scene.remove(group); }
+        npcGroups.clear();
+        npcPositions.clear();
         world.free();
       };
     }
@@ -504,9 +753,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     return () => {
       cancelled = true;
       cancelAnimationFrame(animId);
+      if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
       ro.disconnect();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      delete (window as unknown as Record<string, unknown>).__clickPosition;
+      delete (window as unknown as Record<string, unknown>).__nearbyNpc;
+      npcPositionsRef.current.clear();
+      doPlacementRef.current = null;
+      exitPlacementRef.current = null;
       cleanupPhysics?.();
       splat.dispose();
       renderer.dispose();
@@ -518,7 +773,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: "block" }}
+        style={{ width: "100%", height: "100%", display: "block", cursor: placementMode ? "crosshair" : "default" }}
       />
 
       {/* Prop picker overlay */}
@@ -546,71 +801,150 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           pointerEvents: "none",
         }}>
           {isTouch
-            ? "Tap to enter · WASD to walk · Shoot button to fire"
-            : "Click to enter · WASD to walk · Click or F to shoot · E to talk · P for props"}
+            ? "Tap to enter · WASD to walk"
+            : "Click to enter · WASD to walk · F to place · P for props"}
         </div>
       )}
 
-      {/* NPC proximity prompt — shown when walking near an NPC */}
-      {physicsReady && status === "ready" && isLocked && nearbyNpc && (
+      {/* NPC speech bubble — shown when nearby NPC has spoken */}
+      {npcSpeech && nearbyNpc?.objectId === npcSpeech.npcId && (
         <div style={{
-          position: "absolute", bottom: 120, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(10,10,30,0.82)", backdropFilter: "blur(6px)",
+          position: "absolute", bottom: 160, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(10,10,30,0.88)", backdropFilter: "blur(8px)",
           border: "1px solid rgba(120,160,255,0.3)",
-          borderRadius: 10, padding: "10px 20px",
+          borderRadius: 12, padding: "12px 18px",
           color: "rgba(200,220,255,0.95)",
           fontFamily: "system-ui, -apple-system, sans-serif",
-          fontSize: 14, letterSpacing: 0.4,
-          display: "flex", alignItems: "center", gap: 12,
-          pointerEvents: isTouch ? "auto" : "none",
+          fontSize: 14, zIndex: 15,
+          maxWidth: 360, textAlign: "center", lineHeight: 1.6,
+          pointerEvents: "none",
         }}>
-          <span style={{
-            background: "rgba(120,160,255,0.2)", border: "1px solid rgba(120,160,255,0.5)",
-            borderRadius: 4, padding: "1px 7px", fontSize: 12, fontWeight: 700,
-          }}>
-            {isTouch ? "TAP" : "E"}
-          </span>
-          与 {nearbyNpc.name} 对话
-          {isTouch && (
-            <button
-              onPointerDown={(e) => {
-                e.preventDefault();
-                const interact = (window as unknown as Record<string, unknown>).__physicsInteract;
-                if (typeof interact === "function") interact();
-              }}
-              style={{
-                marginLeft: 8, padding: "4px 14px", borderRadius: 6,
-                background: "rgba(120,160,255,0.25)", border: "1px solid rgba(120,160,255,0.5)",
-                color: "rgba(200,220,255,0.95)", fontSize: 13, cursor: "pointer",
-              }}
-            >
-              对话
-            </button>
-          )}
+          <div style={{ fontSize: 12, color: "rgba(160,180,255,0.7)", marginBottom: 6 }}>
+            {npcSpeech.npcName}
+          </div>
+          {npcSpeech.text}
         </div>
       )}
 
-      {/* Touch shoot button */}
-      {physicsReady && status === "ready" && isTouch && isLocked && (
-        <button
-          onPointerDown={(e) => {
-            e.preventDefault();
-            const shoot = (window as unknown as Record<string, unknown>).__physicsShoot;
-            if (typeof shoot === "function") shoot();
-          }}
-          style={{
-            position: "absolute", bottom: 40, right: 32,
-            width: 72, height: 72, borderRadius: "50%",
-            background: "rgba(255,80,0,0.75)", border: "2px solid rgba(255,160,80,0.6)",
-            color: "#fff", fontSize: 13, fontWeight: 600,
-            fontFamily: "system-ui, sans-serif", letterSpacing: 0.5,
-            cursor: "pointer", touchAction: "none",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}
-        >
-          SHOOT
-        </button>
+      {/* Crosshair — shown while walking (pointer-locked) */}
+      {physicsReady && status === "ready" && isLocked && !placementMode && (
+        <div style={{
+          position: "absolute", top: "50%", left: "50%",
+          transform: "translate(-50%, -50%)",
+          pointerEvents: "none", zIndex: 5,
+        }}>
+          <div style={{ position: "absolute", width: 20, height: 1, top: 0, left: -10, background: "rgba(255,255,255,0.75)", boxShadow: "0 0 2px rgba(0,0,0,0.9)" }} />
+          <div style={{ position: "absolute", width: 1, height: 20, top: -10, left: 0, background: "rgba(255,255,255,0.75)", boxShadow: "0 0 2px rgba(0,0,0,0.9)" }} />
+        </div>
       )}
+
+      {/* Placement mode dialog */}
+      {placementMode && (
+        <div style={{
+          position: "absolute", bottom: 90, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(8,8,24,0.92)", backdropFilter: "blur(10px)",
+          border: "1px solid rgba(120,160,255,0.35)", borderRadius: 12,
+          padding: "14px 18px",
+          color: "rgba(200,220,255,0.95)",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          fontSize: 14, zIndex: 20,
+          display: "flex", flexDirection: "column", gap: 10,
+          minWidth: 300,
+        }}>
+          <div style={{ fontSize: 12, color: "rgba(160,180,255,0.65)", letterSpacing: 0.3 }}>
+            将鼠标移到目标位置，输入想放置的物件
+          </div>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const text = ((e.currentTarget.elements as HTMLFormControlsCollection).namedItem("q") as HTMLInputElement | null)?.value.trim();
+            if (text) doPlacementRef.current?.(text);
+          }}>
+            <input
+              name="q"
+              autoFocus
+              autoComplete="off"
+              placeholder="例如：一把椅子、一棵树..."
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { e.preventDefault(); exitPlacementRef.current?.(); }
+              }}
+              style={{
+                width: "100%", padding: "8px 10px",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(120,160,255,0.28)",
+                borderRadius: 7, color: "rgba(220,235,255,0.95)",
+                fontSize: 14, outline: "none", boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button type="submit" style={{
+                flex: 1, padding: "7px 0",
+                background: "rgba(100,140,255,0.22)",
+                border: "1px solid rgba(100,140,255,0.45)",
+                borderRadius: 7, color: "rgba(200,220,255,0.95)",
+                fontSize: 13, cursor: "pointer",
+              }}>确定放置</button>
+              <button type="button" onClick={() => exitPlacementRef.current?.()} style={{
+                padding: "7px 14px",
+                background: "transparent",
+                border: "1px solid rgba(150,150,180,0.25)",
+                borderRadius: 7, color: "rgba(160,170,200,0.6)",
+                fontSize: 13, cursor: "pointer",
+              }}>取消</button>
+            </div>
+          </form>
+          <div style={{ fontSize: 11, color: "rgba(110,130,170,0.45)", textAlign: "center" }}>ESC 取消</div>
+        </div>
+      )}
+
+      {/* Click target indicator — fades after 2s */}
+      {clickIndicator && (
+        <div style={{
+          position: "absolute",
+          left: clickIndicator.x - 8,
+          top: clickIndicator.y - 8,
+          width: 16, height: 16, borderRadius: "50%",
+          background: "rgba(100,200,255,0.85)",
+          border: "2px solid rgba(180,230,255,0.9)",
+          boxShadow: "0 0 8px rgba(100,200,255,0.7)",
+          pointerEvents: "none",
+          animation: "clickDot 2s ease-out forwards",
+        }} />
+      )}
+
+      {/* Prop load error notification */}
+      {propLoadErrors.length > 0 && (
+        <div style={{
+          position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(30,10,10,0.88)", backdropFilter: "blur(6px)",
+          border: "1px solid rgba(255,100,100,0.4)",
+          borderRadius: 8, padding: "10px 14px",
+          color: "rgba(255,180,180,0.95)",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          fontSize: 13, zIndex: 25,
+          display: "flex", alignItems: "center", gap: 10,
+          maxWidth: 360,
+        }}>
+          <span style={{ flex: 1 }}>
+            无法加载: {propLoadErrors.join("、")}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPropLoadErrors([])}
+            style={{
+              background: "transparent", border: "none",
+              color: "rgba(255,180,180,0.7)", cursor: "pointer",
+              fontSize: 16, lineHeight: 1, padding: "0 2px",
+            }}
+          >✕</button>
+        </div>
+      )}
+      <style>{`
+        @keyframes clickDot {
+          0%   { opacity: 1; transform: scale(1); }
+          70%  { opacity: 0.6; transform: scale(1.4); }
+          100% { opacity: 0; transform: scale(0.6); }
+        }
+      `}</style>
 
       {/* Loading overlay */}
       {status === "loading" && (

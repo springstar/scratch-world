@@ -9,9 +9,22 @@ export interface PhysicsProp {
   group: THREE.Group;
   objectId: string;
   meshes: THREE.Object3D[];
+  /** Set to true when the physics body has been removed from the world. */
+  removed?: boolean;
 }
 
 const loader = new GLTFLoader();
+
+/**
+ * Rewrite a Polyhaven .gltf URL through the local proxy so texture paths are
+ * resolved correctly. Non-Polyhaven URLs and .glb files pass through unchanged.
+ */
+export function resolveModelUrl(url: string): string {
+  if (url.includes("polyhaven.org") && url.endsWith(".gltf")) {
+    return `/gltf-proxy?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+}
 
 export function loadGltf(url: string, timeoutMs = 15000): Promise<THREE.Group> {
   return new Promise((resolve, reject) => {
@@ -114,6 +127,7 @@ export function loadPhysicsProps(
   viewpoints: Viewpoint[],
   disposed: { value: boolean },
   splatGroundOffset?: number,
+  onLoadError?: (name: string) => void,
 ): PhysicsProp[] {
   const propObjects = objects.filter(
     (o) => o.type === "prop" && typeof o.metadata.modelUrl === "string",
@@ -143,10 +157,15 @@ export function loadPhysicsProps(
     group.traverse((c) => { c.userData.objectId = obj.objectId; });
     scene.add(group);
 
-    // Physics body centred on the placeholder
+    // Physics body centred on the placeholder.
+    // Lock rotations so props stay upright when pushed or after landing — a
+    // dropped potted plant should sit on its base, not spin onto its side.
+    // Linear damping reduces bouncing and keeps the settle short.
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(pos.x, pos.y + PLACEHOLDER_HALF, pos.z)
-      .setAdditionalMass(mass);
+      .setAdditionalMass(mass)
+      .lockRotations()
+      .setLinearDamping(2.0);
     const body = world.createRigidBody(bodyDesc);
     world.createCollider(
       RAPIER.ColliderDesc.cuboid(PLACEHOLDER_HALF, PLACEHOLDER_HALF, PLACEHOLDER_HALF)
@@ -159,7 +178,7 @@ export function loadPhysicsProps(
     result.push(prop);
 
     // ── Background GLB load ──────────────────────────────────────────────────
-    loadGltf(modelUrl).then((loaded) => {
+    loadGltf(resolveModelUrl(modelUrl)).then((loaded) => {
       if (disposed.value) {
         // Physics world already cleaned up — dispose the loaded geometry and bail
         loaded.traverse((c) => {
@@ -191,7 +210,13 @@ export function loadPhysicsProps(
       prop.meshes = newMeshes;
     }).catch((err) => {
       console.warn("[loadPhysicsProps] failed to load", modelUrl, err);
-      // Placeholder remains visible as a permanent fallback
+      if (!disposed.value) {
+        // Remove the placeholder so users don't see a permanent blue box
+        scene.remove(group);
+        world.removeRigidBody(body);
+        prop.removed = true;
+        onLoadError?.(obj.name);
+      }
     });
   }
 
@@ -200,6 +225,7 @@ export function loadPhysicsProps(
 
 export function syncPhysicsProps(props: PhysicsProp[]): void {
   for (const p of props) {
+    if (p.removed) continue;
     const t = p.body.translation();
     const r = p.body.rotation();
     p.group.position.set(t.x, t.y, t.z);
@@ -213,7 +239,7 @@ export function disposePhysicsProps(
   scene: THREE.Scene,
 ): void {
   for (const p of props) {
-    world.removeRigidBody(p.body);
+    if (!p.removed) world.removeRigidBody(p.body);
     scene.remove(p.group);
     p.group.traverse((child) => {
       if (child instanceof THREE.Mesh) {

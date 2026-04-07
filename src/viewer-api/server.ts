@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import type { IncomingMessage } from "http";
 import { WebSocketServer } from "ws";
 import type { NarratorRegistry } from "../narrators/narrator-registry.js";
+import { startNpcHeartbeat } from "../npcs/npc-heartbeat.js";
 import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { SessionManager } from "../session/session-manager.js";
@@ -12,7 +13,10 @@ import { RealtimeBus } from "./realtime.js";
 import { chatRoute } from "./routes/chat.js";
 import { colliderProxyRoute } from "./routes/collider-proxy.js";
 import { generatorsRoute } from "./routes/generators.js";
+import { gltfProxyRoute } from "./routes/gltf-proxy.js";
 import { interactRoute } from "./routes/interact.js";
+import { npcGreetRoute } from "./routes/npc-greet.js";
+import { npcInteractRoute } from "./routes/npc-interact.js";
 import { scenesRoute } from "./routes/scenes.js";
 import { screenshotsRoute } from "./routes/screenshots.js";
 import { splatProxyRoute } from "./routes/splat-proxy.js";
@@ -66,9 +70,12 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus));
 	app.route("/screenshots", screenshotsRoute);
 	app.route("/interact", interactRoute(sessionManager, bus));
+	app.route("/npc-interact", npcInteractRoute(sceneManager, bus));
+	app.route("/npc-greet", npcGreetRoute(sceneManager, bus));
 	app.route("/chat", chatRoute(sessionManager, bus));
 	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));
 	app.route("/collider", colliderProxyRoute(sceneManager, marbleApiKey));
+	app.route("/gltf-proxy", gltfProxyRoute());
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));
@@ -96,10 +103,14 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 		});
 	});
 
+	// Start NPC world heartbeat — fire spontaneous NPC speech for active sessions
+	const stopHeartbeat = startNpcHeartbeat(sceneManager, bus);
+
 	return {
 		bus,
 		close: () =>
 			new Promise((resolve, reject) => {
+				stopHeartbeat();
 				wss.close((err) => {
 					if (err) reject(err);
 					else resolve();

@@ -15,6 +15,41 @@ export async function fetchScene(sceneId: string, opts?: { token?: string; sessi
   return res.json() as Promise<SceneResponse>;
 }
 
+export async function postNpcGreet(payload: {
+  sessionId: string;
+  sceneId: string;
+  npcObjectId: string;
+  playerPosition?: { x: number; y: number; z: number };
+}): Promise<void> {
+  const res = await fetch(`${BASE}/npc-greet`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+}
+
+export async function postNpcInteract(payload: {
+  sessionId: string;
+  sceneId: string;
+  npcObjectId: string;
+  userText: string;
+  playerPosition?: { x: number; y: number; z: number };
+}): Promise<void> {
+  const res = await fetch(`${BASE}/npc-interact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+}
+
 export async function postInteract(payload: {
   sessionId: string;
   sceneId: string;
@@ -38,6 +73,7 @@ export async function postChat(payload: {
   text: string;
   images?: Array<{ base64: string; mimeType: string }>;
   playerPosition?: { x: number; y: number; z: number };
+  clickPosition?: { x: number; y: number; z: number };
 }): Promise<void> {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
@@ -74,6 +110,124 @@ export async function addSceneProp(
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<{ objectId: string; version: number }>;
+}
+
+export async function addSceneNpc(
+  sceneId: string,
+  sessionId: string,
+  npc: {
+    name: string;
+    personality: string;
+    traits?: string;
+    modelUrl: string;
+    scale?: number;
+    placement?: string;
+    playerPosition?: { x: number; y: number; z: number };
+  },
+): Promise<{ objectId: string; version: number }> {
+  const res = await fetch(`${BASE}/scenes/${sceneId}/npcs?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(npc),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ objectId: string; version: number }>;
+}
+
+export async function updateSceneNpc(
+  sceneId: string,
+  sessionId: string,
+  npcId: string,
+  patch: { name?: string; personality?: string; traits?: string },
+): Promise<{ version: number }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/npcs/${encodeURIComponent(npcId)}?session=${encodeURIComponent(sessionId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ version: number }>;
+}
+
+export interface EvolutionLogEntry {
+  id: string;
+  triggeredAt: number;
+  interactionCount: number;
+  currentPersonality: string;
+  suggestedDelta: string;
+  status: "pending" | "approved" | "rejected";
+  appliedAt?: number;
+}
+
+export async function fetchNpcEvolution(
+  sceneId: string,
+  npcId: string,
+): Promise<{ npcId: string; interactionCount: number; log: EvolutionLogEntry[] }> {
+  const res = await fetch(`${BASE}/scenes/${sceneId}/npcs/${encodeURIComponent(npcId)}/evolution`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ npcId: string; interactionCount: number; log: EvolutionLogEntry[] }>;
+}
+
+export async function approveNpcEvolution(
+  sceneId: string,
+  sessionId: string,
+  npcId: string,
+  entryId: string,
+): Promise<{ newPersonality: string; version: number }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/npcs/${encodeURIComponent(npcId)}/evolution/${entryId}/approve?session=${encodeURIComponent(sessionId)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ newPersonality: string; version: number }>;
+}
+
+export async function rejectNpcEvolution(
+  sceneId: string,
+  sessionId: string,
+  npcId: string,
+  entryId: string,
+): Promise<{ version: number }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/npcs/${encodeURIComponent(npcId)}/evolution/${entryId}/reject?session=${encodeURIComponent(sessionId)}`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ version: number }>;
+}
+
+export async function removeSceneNpc(
+  sceneId: string,
+  sessionId: string,
+  npcId: string,
+): Promise<{ version: number }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/npcs/${encodeURIComponent(npcId)}?session=${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ version: number }>;
 }
 
 export async function removeSceneProp(

@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-03-31 (harness engineering: analytics, benchmark suite, regression detection, CI/CD)
+**Last Updated:** 2026-04-07 (NPC system: reactive NPCs, memory, evolution, heartbeat, agent loop, proximity chat)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -66,6 +66,15 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer; pointer lock tracking; walk mode button + crosshair overlay | UI component |
 | **Chat Drawer** | `viewer/src/components/ChatDrawer.tsx` | Bottom sheet chat UI (peek/open states, streaming) | `ChatDrawer` |
 | **Star Field** | `viewer/src/components/StarField.tsx` | Canvas 2D star particle background for empty state | `StarField` |
+| **NPC Runner** | `src/npcs/npc-runner.ts` | Core Haiku LLM calls: reactAsNpc, greetAsNpc, spontaneousNpcLine, updateMemory | NPC response functions |
+| **NPC Agent** | `src/npcs/npc-agent.ts` | Tool-use agent loop for action requests (speak / observe / move / emote) | `runNpcAgent()` |
+| **NPC Heartbeat** | `src/npcs/npc-heartbeat.ts` | World-tick: 5-min interval, 15% chance spontaneous one-liner per active NPC | `startNpcHeartbeat()` |
+| **NPC Evolution** | `src/npcs/npc-evolution.ts` | Personality drift: generate diff, apply approved delta, log entries | `generateEvolutionDiff()`, `applyEvolutionDelta()` |
+| **NPC Interact Route** | `src/viewer-api/routes/npc-interact.ts` | POST /npc-interact — fast path vs agent loop routing, PerceptionBus, memory update | `npcInteractRoute()` |
+| **NPC Greet Route** | `src/viewer-api/routes/npc-greet.ts` | POST /npc-greet — proximity-triggered auto-greeting | `npcGreetRoute()` |
+| **NPC Proximity** | `viewer/src/physics/npc-proximity.ts` | 2.5 m proximity radius, nearest-NPC search with position overrides | `findNearbyNpc()`, `extractNpcs()` |
+| **NPC Chat Overlay** | `viewer/src/components/NpcChatOverlay.tsx` | Floating in-viewer chat panel; auto-opens/closes on proximity | `NpcChatOverlay` |
+| **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, approve/reject evolution | `NpcDrawer` |
 
 ## Settlement Generation (Two-Stage Architecture)
 
@@ -640,6 +649,7 @@ type RealtimeEvent =
 
 - **doc/architecture.md** — Detailed system design with diagrams
 - **doc/renderer.md** — Three.js 渲染器设计与实现（完整渲染管线、材质系统、动画、后期处理）
+- **doc/npc-system.md** — NPC 系统设计与实现（数据模型、LLM 调用、记忆、进化、心跳、Agent loop、前端组件）
 - **doc/interactions.md** — Interaction system design and future enhancements
 - **doc/debug-log.md** — Startup issues and troubleshooting
 - **CLAUDE.md** — Project conventions for Claude Code

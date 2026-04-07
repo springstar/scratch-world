@@ -1,7 +1,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { Viewpoint } from "../types.js";
 
-export type PlacementHint = "near_camera" | "near_entrance" | "scene_center";
+export type PlacementHint = "near_camera" | "near_entrance" | "scene_center" | "exact";
 
 export interface ResolvedPosition {
   x: number;
@@ -42,7 +42,9 @@ function groundY(
   fallbackY = 0,
 ): number {
   const ray = new RAPIER.Ray({ x, y: startY, z }, { x: 0, y: -1, z: 0 });
-  const hit = world.castRay(ray, 30, true);
+  // solid=false: if the ray origin is at or just inside the surface (floating-point
+  // edge case), don't return TOI=0 — find the next surface below instead.
+  const hit = world.castRay(ray, 30, false);
   return hit ? startY - hit.timeOfImpact : fallbackY;
 }
 
@@ -82,12 +84,23 @@ export function resolvePosition(
   // Determine anchor from hint
   let ax = 0;
   let az = 0;
-  // Ray origin: start just above the player so the ray begins inside the room,
-  // not above the ceiling. Fall back to 2m if no player position available.
-  const rayStartY = playerPosition ? playerPosition.y + 2 : 2;
   // fallbackY when raycast misses entirely: use -ground_plane_offset (Marble coordinate
   // flip gives floor at -offset in Three.js space) or 0 for non-Marble scenes.
   const fallbackY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+  // Ray origin: start 2 m above the known splat floor level so the ray is always
+  // inside the room, not above the ceiling. Using playerPosition.y + 2 is unsafe
+  // for indoor scenes with low ceilings because the body centre already sits ~1.6 m
+  // above the floor, putting the origin above a 3 m ceiling.
+  const rayStartY = fallbackY + 2;
+
+  // "exact": place at the provided x/z directly — used when the user clicked a
+  // specific point in the scene. The click position is already a Rapier surface hit,
+  // so use its Y directly without re-raycasting (a second raycast risks hitting a
+  // ceiling if the start height overshoots).
+  if (hint === "exact" && playerPosition) {
+    return { x: playerPosition.x, y: playerPosition.y, z: playerPosition.z };
+  }
+
   if (hint === "near_entrance" && viewpoints.length > 0) {
     const vp = viewpoints[0];
     ax = vp.position.x;

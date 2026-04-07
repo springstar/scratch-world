@@ -14,9 +14,18 @@ const PropMetadataSchema = Type.Object({
 	mass: Type.Optional(Type.Number({ description: "Mass in kg (default 10)" })),
 	scale: Type.Optional(Type.Number({ description: "World scale multiplier (default 1)" })),
 	placement: Type.Optional(
-		Type.Union([Type.Literal("near_camera"), Type.Literal("near_entrance"), Type.Literal("scene_center")], {
-			description: "Where to place the prop in the scene (default: near_camera)",
-		}),
+		Type.Union(
+			[
+				Type.Literal("near_camera"),
+				Type.Literal("near_entrance"),
+				Type.Literal("scene_center"),
+				Type.Literal("exact"),
+			],
+			{
+				description:
+					"Where to place the prop. Use 'exact' when a [点击目标] coordinate is provided — the prop lands at the exact clicked position. Use 'near_camera' when only player position is known.",
+			},
+		),
 	),
 	playerPosition: Type.Optional(
 		Type.Object(
@@ -27,9 +36,10 @@ const PropMetadataSchema = Type.Object({
 			},
 			{
 				description:
-					"Player's world position at the time of the request. " +
-					"Copy from the [玩家当前位置] prefix in the message when available. " +
-					"Used to place the prop near where the player is standing.",
+					"World-space anchor position for placement. " +
+					"If a [点击目标] prefix appears in the message, copy those coordinates here — they are the click-raycast hit point and give the most accurate placement. " +
+					"Otherwise copy from the [玩家当前位置] prefix when available. " +
+					"Used by the viewer to place the prop near the specified point.",
 			},
 		),
 	),

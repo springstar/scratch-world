@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ViewerCanvas } from "./components/ViewerCanvas.js";
+import { NpcDrawer } from "./components/NpcDrawer.js";
+import { NpcChatOverlay } from "./components/NpcChatOverlay.js";
+import type { NpcChatMessage } from "./components/NpcChatOverlay.js";
 import { SplatViewer } from "./components/SplatViewer.js";
 import { NarrativeOverlay } from "./components/NarrativeOverlay.js";
 import { uploadScreenshot } from "./api.js";
@@ -8,7 +11,7 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postChat, connectRealtime, addSceneProp, fetchSceneList, deleteScene } from "./api.js";
+import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, fetchSceneList, deleteScene } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
@@ -70,6 +73,16 @@ export function App() {
   const [selected, setSelected] = useState<SelectedObject | null>(null);
   const [activeViewpoint, setActiveViewpoint] = useState<Viewpoint | null>(null);
   const streamingBuffer = useRef("");
+  const [npcSpeech, setNpcSpeech] = useState<{ npcId: string; npcName: string; text: string } | null>(null);
+  const npcSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showNpcDrawer, setShowNpcDrawer] = useState(false);
+
+  // NPC chat session
+  const [npcChatTarget, setNpcChatTarget] = useState<{ objectId: string; name: string } | null>(null);
+  const [npcChatHistory, setNpcChatHistory] = useState<NpcChatMessage[]>([]);
+  const [npcChatPending, setNpcChatPending] = useState(false);
+  // Track which NPCs have already greeted this session (key: sceneId:npcId)
+  const greetedNpcsRef = useRef<Set<string>>(new Set());
 
   // Load a scene and jump to its first viewpoint
   const loadSceneById = useCallback(
@@ -79,6 +92,7 @@ export function App() {
           setScene(s);
           sceneRef.current = s;
           setActiveViewpoint(s.sceneData.viewpoints[0] ?? null);
+          greetedNpcsRef.current.clear();
           history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
         })
         .catch((err) => {
@@ -155,11 +169,25 @@ export function App() {
           const removeFn = (window as Record<string, unknown>).__removeSceneProp as
             | ((objectId: string) => void)
             | undefined;
+          const loadNpcFn = (window as Record<string, unknown>).__loadSceneNpc as
+            | ((obj: SceneObject) => Promise<void>)
+            | undefined;
+          const removeNpcFn = (window as Record<string, unknown>).__removeSceneNpc as
+            | ((objectId: string) => void)
+            | undefined;
           // Remove props that no longer exist
           if (removeFn) {
             for (const obj of prevObjects) {
               if (obj.type === "prop" && !newIds.has(obj.objectId)) {
                 removeFn(obj.objectId);
+              }
+            }
+          }
+          // Remove NPCs that no longer exist
+          if (removeNpcFn) {
+            for (const obj of prevObjects) {
+              if (obj.type === "npc" && !newIds.has(obj.objectId)) {
+                removeNpcFn(obj.objectId);
               }
             }
           }
@@ -171,7 +199,40 @@ export function App() {
               }
             }
           }
+          // Load newly added NPCs
+          if (loadNpcFn) {
+            for (const obj of s.sceneData.objects) {
+              if (obj.type === "npc" && obj.interactable && !prevIds.has(obj.objectId)) {
+                loadNpcFn(obj).catch(console.warn);
+              }
+            }
+          }
         }).catch(console.error);
+
+      } else if (event.type === "npc_speech") {
+        // Ignore events from a different scene (e.g. heartbeat for a non-active scene)
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        // Feed into the chat overlay if open, otherwise show the legacy speech bubble
+        setNpcChatPending(false);
+        setNpcChatHistory((prev) => [...prev, { role: "npc", text: event.text }]);
+        // Also keep the speech bubble for non-overlay contexts (ViewerCanvas scenes)
+        if (npcSpeechTimerRef.current) clearTimeout(npcSpeechTimerRef.current);
+        setNpcSpeech({ npcId: event.npcId, npcName: event.npcName, text: event.text });
+        npcSpeechTimerRef.current = setTimeout(() => setNpcSpeech(null), 8000);
+
+      } else if (event.type === "npc_move") {
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        const moveNpc = (window as unknown as Record<string, unknown>).__moveNpc as
+          | ((id: string, pos: { x: number; y: number; z: number }) => void)
+          | undefined;
+        moveNpc?.(event.npcId, event.position);
+
+      } else if (event.type === "npc_emote") {
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        const emoteNpc = (window as unknown as Record<string, unknown>).__emoteNpc as
+          | ((id: string, animation: string) => void)
+          | undefined;
+        emoteNpc?.(event.npcId, event.animation);
 
       } else if (event.type === "error") {
         setNarrativeLines([`Error: ${event.message}`]);
@@ -200,8 +261,14 @@ export function App() {
       const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
         | { x: number; y: number; z: number }
         | undefined;
+      const rawClick = (window as unknown as Record<string, unknown>).__clickPosition as
+        | { x: number; y: number; z: number; ts: number }
+        | undefined;
+      const clickPosition = rawClick && Date.now() - rawClick.ts < 30_000
+        ? { x: rawClick.x, y: rawClick.y, z: rawClick.z }
+        : undefined;
       try {
-        await postChat({ sessionId, userId: userId.current, text, images: apiImages, playerPosition });
+        await postChat({ sessionId, userId: userId.current, text, images: apiImages, playerPosition, clickPosition });
       } catch (err) {
         setIsTyping(false);
         const msg = err instanceof Error ? err.message : "Failed to send";
@@ -301,6 +368,19 @@ export function App() {
   const handleSplatInteract = useCallback(
     async (objectId: string, action: string) => {
       if (!scene) return;
+      // Route NPC interactions to the dedicated NPC chat overlay
+      const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+      if (obj?.type === "npc") {
+        // Release pointer lock so the user can type in the chat overlay
+        if (document.pointerLockElement) document.exitPointerLock();
+        const npcName = obj.name;
+        // Open overlay fresh; clear any previous history for this NPC
+        setNpcChatTarget({ objectId, name: npcName });
+        setNpcChatHistory([]);
+        setNpcChatPending(false);
+        // action is the interactionHint or "你好" — skip auto-send so the user types first
+        return;
+      }
       setNarrativeLines([]);
       setIsStreaming(true);
       streamingBuffer.current = "";
@@ -313,6 +393,54 @@ export function App() {
     },
     [scene, sessionId],
   );
+
+  const sendNpcMessage = useCallback(
+    (text: string) => {
+      if (!scene || !npcChatTarget) return;
+      setNpcChatHistory((prev) => [...prev, { role: "user", text }]);
+      setNpcChatPending(true);
+      const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+        | { x: number; y: number; z: number }
+        | undefined;
+      postNpcInteract({
+        sessionId,
+        sceneId: scene.sceneId,
+        npcObjectId: npcChatTarget.objectId,
+        userText: text,
+        playerPosition,
+      }).catch((err) => {
+        setNpcChatPending(false);
+        setNpcChatHistory((prev) => [...prev, { role: "npc", text: `(出错了: ${err instanceof Error ? err.message : "未知错误"})` }]);
+      });
+    },
+    [scene, sessionId, npcChatTarget],
+  );
+
+  const handleNpcApproach = useCallback(
+    (objectId: string, name: string) => {
+      if (!scene) return;
+      const key = `${scene.sceneId}:${objectId}`;
+      // Open chat overlay for any new NPC (even re-approaches after leaving)
+      if (document.pointerLockElement) document.exitPointerLock();
+      setNpcChatTarget({ objectId, name });
+      setNpcChatHistory([]);
+      setNpcChatPending(false);
+      // Trigger greeting only once per session
+      if (greetedNpcsRef.current.has(key)) return;
+      greetedNpcsRef.current.add(key);
+      const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+        | { x: number; y: number; z: number }
+        | undefined;
+      postNpcGreet({ sessionId, sceneId: scene.sceneId, npcObjectId: objectId, playerPosition }).catch(
+        (err: unknown) => { console.error("[npc-greet]", err); },
+      );
+    },
+    [scene, sessionId],
+  );
+
+  const handleNpcLeave = useCallback(() => {
+    setNpcChatTarget(null);
+  }, []);
 
   // Bottom padding to keep 3D canvas above the chat drawer (peek = 72px)
   const PEEK_HEIGHT = 72;
@@ -334,6 +462,10 @@ export function App() {
               viewpoints={scene.sceneData.viewpoints}
               splatGroundOffset={scene.sceneData.splatGroundOffset}
               onInteract={handleSplatInteract}
+              onNpcApproach={handleNpcApproach}
+              onNpcLeave={handleNpcLeave}
+              npcSpeech={npcSpeech}
+              onPlacementRequest={(text) => { void handleSend(text); }}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
                 const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
@@ -427,6 +559,57 @@ export function App() {
           </>
         )}
       </div>
+
+      {/* NPC button — top-right, shown when a scene is loaded */}
+      {scene && (
+        <button
+          onClick={() => setShowNpcDrawer((v) => !v)}
+          style={{
+            position: "fixed", top: 16, right: 16,
+            background: showNpcDrawer ? "rgba(120,80,255,0.4)" : "rgba(20,15,40,0.75)",
+            border: "1px solid rgba(140,100,255,0.35)",
+            borderRadius: 8, padding: "7px 14px",
+            color: "rgba(200,220,255,0.9)", fontSize: 13,
+            cursor: "pointer", zIndex: 105,
+            backdropFilter: "blur(8px)",
+            fontFamily: "system-ui, -apple-system, sans-serif",
+          }}
+        >
+          NPC
+        </button>
+      )}
+
+      {/* NPC management drawer */}
+      <NpcDrawer
+        open={showNpcDrawer}
+        onClose={() => setShowNpcDrawer(false)}
+        scene={scene}
+        sessionId={sessionId}
+        onNpcAdded={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
+        onNpcUpdated={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
+        onNpcDeleted={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
+      />
+
+      {/* NPC chat overlay — shown when interacting with an NPC */}
+      {npcChatTarget && (
+        <div style={{ position: "absolute", inset: 0, bottom: PEEK_HEIGHT, pointerEvents: "none", zIndex: 115 }}>
+          <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
+            <div style={{ pointerEvents: "auto" }}>
+              <NpcChatOverlay
+                npcName={npcChatTarget.name}
+                history={npcChatHistory}
+                pending={npcChatPending}
+                onSend={sendNpcMessage}
+                onClose={() => {
+                  setNpcChatTarget(null);
+                  setNpcChatHistory([]);
+                  setNpcChatPending(false);
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chat drawer — always visible */}
       <ChatDrawer

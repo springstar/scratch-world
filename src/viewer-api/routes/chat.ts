@@ -8,6 +8,7 @@ interface ChatBody {
 	text: string;
 	images?: Array<{ base64: string; mimeType: string }>;
 	playerPosition?: { x: number; y: number; z: number };
+	clickPosition?: { x: number; y: number; z: number };
 }
 
 export function chatRoute(sessionManager: SessionManager, bus: RealtimeBus): Hono {
@@ -23,14 +24,14 @@ export function chatRoute(sessionManager: SessionManager, bus: RealtimeBus): Hon
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const { sessionId, userId, text, images, playerPosition } = body;
+		const { sessionId, userId, text, images, playerPosition, clickPosition } = body;
 		if (!sessionId || !userId || (!text?.trim() && !images?.length)) {
 			return c.json({ error: "Missing required fields: sessionId, userId, and text or images" }, 400);
 		}
 
 		// Fire-and-forget — response streams over WebSocket
 		sessionManager
-			.dispatchWebChat(sessionId, userId, text ?? "", bus, images, playerPosition)
+			.dispatchWebChat(sessionId, userId, text ?? "", bus, images, playerPosition, clickPosition)
 			.catch((err: unknown) => {
 				// err.message is empty for AggregateError (e.g. ECONNREFUSED); fall back to toString()
 				const message = err instanceof Error ? err.message || String(err) : String(err);
