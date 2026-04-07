@@ -25,7 +25,7 @@ import { pipeline } from "stream/promises";
 
 const HUNYUAN_BASE_URL = "https://api.ai3d.cloud.tencent.com";
 const POLL_INTERVAL_MS = 5_000;
-const GENERATION_TIMEOUT_MS = 180_000; // 3 minutes
+const GENERATION_TIMEOUT_MS = 600_000; // 10 minutes — jobs can take 5–8 min under load
 
 const parameters = Type.Object({
 	imagePath: Type.String({
@@ -110,7 +110,7 @@ async function pollJob(jobId: string): Promise<QueryResult> {
 			method: "POST",
 			headers: apiHeaders(),
 			body: JSON.stringify({ JobId: jobId }),
-			signal: AbortSignal.timeout(15_000),
+			signal: AbortSignal.timeout(30_000),
 		});
 		if (!res.ok) throw new Error(`Hunyuan query failed: ${res.status} ${await res.text()}`);
 
