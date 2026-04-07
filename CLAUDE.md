@@ -122,6 +122,9 @@ ANTHROPIC_API_KEY=
 # Web search (required — enables real-time research for named real-world places)
 TAVILY_API_KEY=      # Tavily Search API key — free tier (1000/month) at https://tavily.com
                      # Returns full page content, not just snippets
+
+# Image-to-3D (Tencent Hunyuan 3D)
+HUNYUAN_API_KEY=     # API key from https://console.cloud.tencent.com (Hunyuan 3D product)
 ```
 
 Never commit `.env` or any file containing secrets.
