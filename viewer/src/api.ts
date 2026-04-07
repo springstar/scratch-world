@@ -119,6 +119,7 @@ export async function addSceneNpc(
     name: string;
     personality: string;
     traits?: string;
+    skills?: string[];
     modelUrl: string;
     scale?: number;
     placement?: string;
@@ -141,7 +142,7 @@ export async function updateSceneNpc(
   sceneId: string,
   sessionId: string,
   npcId: string,
-  patch: { name?: string; personality?: string; traits?: string },
+  patch: { name?: string; personality?: string; traits?: string; skills?: string[] },
 ): Promise<{ version: number }> {
   const res = await fetch(
     `${BASE}/scenes/${sceneId}/npcs/${encodeURIComponent(npcId)}?session=${encodeURIComponent(sessionId)}`,
@@ -228,6 +229,26 @@ export async function removeSceneNpc(
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<{ version: number }>;
+}
+
+export async function patchSceneObjectPosition(
+  sceneId: string,
+  sessionId: string,
+  objectId: string,
+  position: { x: number; y: number; z: number },
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/objects/${encodeURIComponent(objectId)}?session=${encodeURIComponent(sessionId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ placement: "exact", playerPosition: position }),
+    },
+  );
+  if (!res.ok) {
+    // Non-fatal — log but don't throw
+    console.warn(`patchSceneObjectPosition failed for ${objectId}: HTTP ${res.status}`);
+  }
 }
 
 export async function removeSceneProp(

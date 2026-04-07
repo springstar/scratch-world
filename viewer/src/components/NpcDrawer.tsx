@@ -3,6 +3,18 @@ import { ASSET_CATALOG, type AssetEntry } from "../renderer/asset-catalog.js";
 import { addSceneNpc, removeSceneNpc, updateSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution, type EvolutionLogEntry } from "../api.js";
 import type { SceneObject, SceneResponse } from "../types.js";
 
+// ── Skill catalog (UI-only metadata; tool logic stays server-side) ────────────
+const NPC_SKILLS: { id: string; name: string; description: string }[] = [
+  { id: "heal",       name: "医疗",     description: "诊断症状、推荐药方" },
+  { id: "trade",      name: "交易",     description: "报价、讨价还价" },
+  { id: "guide",      name: "向导",     description: "带路、标记导航点" },
+  { id: "quest",      name: "任务",     description: "发布任务和奖励" },
+  { id: "teach",      name: "授课",     description: "传授知识和技艺" },
+  { id: "storytell",  name: "说书",     description: "讲传说和历史故事" },
+  { id: "guard",      name: "守卫",     description: "守护安全、识别威胁" },
+  { id: "cook",       name: "烹饪",     description: "分享食谱和厨艺知识" },
+];
+
 interface NpcDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -65,6 +77,44 @@ const BTN_DANGER: React.CSSProperties = {
   color: "rgba(255,130,130,0.8)",
 };
 
+function SkillToggle({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const toggle = (id: string) => {
+    onChange(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+  };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {NPC_SKILLS.map((skill) => {
+        const active = selected.includes(skill.id);
+        return (
+          <button
+            key={skill.id}
+            title={skill.description}
+            onClick={() => toggle(skill.id)}
+            style={{
+              padding: "4px 10px",
+              borderRadius: 20,
+              fontSize: 12,
+              cursor: "pointer",
+              border: `1px solid ${active ? "rgba(100,200,140,0.6)" : "rgba(140,100,255,0.25)"}`,
+              background: active ? "rgba(60,180,100,0.18)" : "rgba(255,255,255,0.04)",
+              color: active ? "rgba(140,220,160,0.95)" : "rgba(160,170,200,0.65)",
+              transition: "all 0.15s",
+            }}
+          >
+            {skill.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function NpcDrawer({
   open,
   onClose,
@@ -82,6 +132,7 @@ export function NpcDrawer({
   const [addName, setAddName] = useState("");
   const [addPersonality, setAddPersonality] = useState("");
   const [addTraits, setAddTraits] = useState("");
+  const [addSkills, setAddSkills] = useState<string[]>([]);
   const [modelTab, setModelTab] = useState<ModelTab>("catalog");
   const [selectedModel, setSelectedModel] = useState<AssetEntry | null>(null);
   const [cdnUrl, setCdnUrl] = useState("");
@@ -93,6 +144,7 @@ export function NpcDrawer({
   const [editName, setEditName] = useState("");
   const [editPersonality, setEditPersonality] = useState("");
   const [editTraits, setEditTraits] = useState("");
+  const [editSkills, setEditSkills] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
 
@@ -120,6 +172,7 @@ export function NpcDrawer({
     setAddName("");
     setAddPersonality("");
     setAddTraits("");
+    setAddSkills([]);
     setSelectedModel(null);
     setCdnUrl("");
     setModelSearch("");
@@ -133,6 +186,11 @@ export function NpcDrawer({
     setEditName(npc.name);
     setEditPersonality((npc.metadata.npcPersonality as string | undefined) ?? "");
     setEditTraits((npc.metadata.npcTraits as string | undefined) ?? "");
+    setEditSkills((() => {
+      const raw = npc.metadata.npcSkills;
+      if (!Array.isArray(raw)) return [];
+      return raw.filter((x): x is string => typeof x === "string");
+    })());
     setEditError("");
     setView("edit");
   };
@@ -162,6 +220,7 @@ export function NpcDrawer({
         name: addName.trim(),
         personality: addPersonality.trim(),
         traits: addTraits.trim() || undefined,
+        skills: addSkills.length > 0 ? addSkills : undefined,
         modelUrl,
         scale: modelTab === "catalog" ? (selectedModel?.scale ?? 1) : 1,
         placement: clickPos ? "exact" : "near_camera",
@@ -187,6 +246,7 @@ export function NpcDrawer({
         name: editName.trim(),
         personality: editPersonality.trim(),
         traits: editTraits.trim() || undefined,
+        skills: editSkills,
       });
       backToList();
       onNpcUpdated();
@@ -291,10 +351,31 @@ export function NpcDrawer({
                   borderRadius: 9, padding: "10px 12px", marginBottom: 8,
                 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{npc.name}</div>
-                  <div style={{ fontSize: 12, color: "rgba(160,180,255,0.6)", marginBottom: 8, lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 12, color: "rgba(160,180,255,0.6)", marginBottom: 6, lineHeight: 1.4 }}>
                     {((npc.metadata.npcPersonality as string | undefined) ?? "").slice(0, 60)}
                     {((npc.metadata.npcPersonality as string | undefined) ?? "").length > 60 ? "…" : ""}
                   </div>
+                  {/* Skill badges */}
+                  {(() => {
+                    const raw = npc.metadata.npcSkills;
+                    const ids: string[] = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+                    if (ids.length === 0) return null;
+                    return (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                        {ids.map((id) => {
+                          const skill = NPC_SKILLS.find((s) => s.id === id);
+                          return skill ? (
+                            <span key={id} style={{
+                              padding: "2px 8px", borderRadius: 20, fontSize: 11,
+                              background: "rgba(60,180,100,0.12)",
+                              border: "1px solid rgba(100,200,140,0.35)",
+                              color: "rgba(120,220,150,0.85)",
+                            }}>{skill.name}</span>
+                          ) : null;
+                        })}
+                      </div>
+                    );
+                  })()}
                   {deleteConfirm === npc.objectId ? (
                     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       <span style={{ fontSize: 12, color: "rgba(255,130,130,0.8)", flex: 1 }}>确认删除？</span>
@@ -345,9 +426,15 @@ export function NpcDrawer({
 
             {/* Traits */}
             <div>
-              <label style={LABEL_STYLE}>特点 / 技能</label>
+              <label style={LABEL_STYLE}>特点 / 备注</label>
               <input value={addTraits} onChange={(e) => setAddTraits(e.target.value)}
                 placeholder="例如：擅长烹饪、记忆力强、武艺高强" style={INPUT_STYLE} />
+            </div>
+
+            {/* Skills */}
+            <div>
+              <label style={LABEL_STYLE}>技能</label>
+              <SkillToggle selected={addSkills} onChange={setAddSkills} />
             </div>
 
             {/* Model source tabs */}
@@ -448,9 +535,13 @@ export function NpcDrawer({
                 rows={4} style={{ ...INPUT_STYLE, resize: "vertical" }} />
             </div>
             <div>
-              <label style={LABEL_STYLE}>特点 / 技能</label>
+              <label style={LABEL_STYLE}>特点 / 备注</label>
               <input value={editTraits} onChange={(e) => setEditTraits(e.target.value)}
                 placeholder="擅长烹饪、记忆力强..." style={INPUT_STYLE} />
+            </div>
+            <div>
+              <label style={LABEL_STYLE}>技能</label>
+              <SkillToggle selected={editSkills} onChange={setEditSkills} />
             </div>
 
             {editError && (

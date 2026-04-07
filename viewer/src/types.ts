@@ -69,4 +69,7 @@ export type RealtimeEvent =
   | { type: "npc_speech"; npcId: string; npcName: string; text: string; sceneId?: string }
   | { type: "npc_move"; npcId: string; position: { x: number; y: number; z: number }; sceneId?: string }
   | { type: "npc_emote"; npcId: string; animation: string; sceneId?: string }
+  | { type: "npc_trade_offer"; npcId: string; npcName: string; item: string; price: string; sceneId?: string }
+  | { type: "npc_waypoint"; npcId: string; npcName: string; position: { x: number; z: number }; label: string; sceneId?: string }
+  | { type: "npc_quest"; npcId: string; npcName: string; title: string; objective: string; reward: string; sceneId?: string }
   | { type: "error"; message: string };

@@ -209,6 +209,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			name?: string;
 			personality?: string;
 			traits?: string;
+			skills?: string[];
 			modelUrl?: string;
 			scale?: number;
 			placement?: string;
@@ -230,6 +231,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			metadata: {
 				npcPersonality: body.personality,
 				npcTraits: body.traits ?? "",
+				npcSkills: body.skills ?? [],
 				modelUrl: body.modelUrl,
 				physicsShape: "box",
 				mass: 10,
@@ -257,10 +259,11 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			return c.json({ error: "Forbidden" }, 403);
 		}
 
-		const body = await c.req.json<{ name?: string; personality?: string; traits?: string }>();
+		const body = await c.req.json<{ name?: string; personality?: string; traits?: string; skills?: string[] }>();
 		const metadataPatch: Record<string, unknown> = {};
 		if (body.personality !== undefined) metadataPatch.npcPersonality = body.personality;
 		if (body.traits !== undefined) metadataPatch.npcTraits = body.traits;
+		if (body.skills !== undefined) metadataPatch.npcSkills = body.skills;
 
 		try {
 			const updated = await sceneManager.updateSceneObject(sceneId, npcId, {
@@ -295,6 +298,39 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
 			return c.json({ error: err instanceof Error ? err.message : "Failed to remove NPC" }, status as 404 | 500);
+		}
+	});
+
+	// PATCH /scenes/:sceneId/objects/:objectId — lock a resolved position back to the object.
+	// Called fire-and-forget by the viewer after resolvePosition() to prevent position drift.
+	// Auth: session required, must be owner (or public scene).
+	// Body: { placement: "exact"; playerPosition: { x: number; y: number; z: number } }
+	app.patch("/:sceneId/objects/:objectId", async (c) => {
+		const { sceneId, objectId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
+		const body = await c.req.json<{ placement?: string; playerPosition?: { x: number; y: number; z: number } }>();
+		if (!body.placement || !body.playerPosition) {
+			return c.json({ error: "Missing required fields: placement, playerPosition" }, 400);
+		}
+
+		try {
+			const updated = await sceneManager.updateSceneObject(sceneId, objectId, {
+				position: body.playerPosition,
+				metadata: { placement: body.placement, playerPosition: body.playerPosition },
+			});
+			return c.json({ ok: true, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json({ error: err instanceof Error ? err.message : "Failed to update object" }, status as 404 | 500);
 		}
 	});
 

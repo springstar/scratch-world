@@ -35,6 +35,7 @@ import { extractNpcs, findNearbyNpc, type NearbyNpc } from "../physics/npc-proxi
 import type { SceneObject, Viewpoint } from "../types.js";
 import type { AssetEntry } from "../renderer/asset-catalog.js";
 import { ASSET_CATALOG } from "../renderer/asset-catalog.js";
+import { patchSceneObjectPosition } from "../api.js";
 import { PropPicker } from "./PropPicker.js";
 
 interface Props {
@@ -43,6 +44,8 @@ interface Props {
   sceneObjects?: SceneObject[];
   viewpoints?: Viewpoint[];
   splatGroundOffset?: number;
+  sceneId?: string;
+  sessionId?: string;
   onInteract?: (objectId: string, action: string) => void;
   onAddProp?: (entry: AssetEntry, objectId: string) => void;
   onPlacementRequest?: (text: string) => void;
@@ -51,7 +54,7 @@ interface Props {
   npcSpeech?: { npcId: string; npcName: string; text: string } | null;
 }
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -364,6 +367,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], npcGroups.size, playerPos, splatGroundOffset);
         npcPositions.set(obj.objectId, pos);
 
+        // Lock position back to server so it is stable on next reload.
+        if (hint !== "exact" && sceneId && sessionId) {
+          patchSceneObjectPosition(sceneId, sessionId, obj.objectId, pos).catch(() => { /* non-fatal */ });
+        }
+
         const group = await loadGltf(resolveModelUrl(modelUrl));
         if (disposed.value) {
           group.traverse((c) => {
@@ -540,6 +548,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           return { x: t.x, y: t.y, z: t.z };
         });
         const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], props.length, playerPos, splatGroundOffset);
+
+        // Lock position back to server so it is stable on next reload.
+        if (hint !== "exact" && sceneId && sessionId) {
+          patchSceneObjectPosition(sceneId, sessionId, obj.objectId, pos).catch(() => { /* non-fatal */ });
+        }
+
         const group = await loadGltf(modelUrl);
         group.scale.setScalar(scale);
         group.updateMatrixWorld(true);

@@ -56,6 +56,36 @@ export async function reactAsNpc(
 	return reply;
 }
 
+/**
+ * Cooldown-free variant of reactAsNpc used for NPC-to-NPC interactions.
+ * Should not be called for player-initiated exchanges (use reactAsNpc instead).
+ */
+export async function reactAsNpcNoCD(
+	npcId: string,
+	npcName: string,
+	personality: string,
+	userText: string,
+	memory: string[] = [],
+	perceptionContext?: string,
+): Promise<string | null> {
+	const log = createLogger({ tool: "npc_react", npc: npcId });
+	const t = log.timer("react_nocd");
+
+	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
+	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
+
+	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n用1-2句话回应，保持角色，不讨论角色无关话题。`;
+
+	const response = await completeSimple(haiku(), {
+		systemPrompt,
+		messages: [{ role: "user", content: userText, timestamp: Date.now() }],
+	});
+
+	const reply = extractText(response) || null;
+	t.end({ npcName, tokens: response.usage?.output });
+	return reply;
+}
+
 // Heartbeat cooldown: one spontaneous line per NPC per 4 minutes minimum
 const heartbeatCooldowns = new Map<string, number>();
 const HEARTBEAT_COOLDOWN_MS = 4 * 60 * 1000;

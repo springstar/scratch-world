@@ -108,6 +108,12 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 			if (!Array.isArray(raw)) return [];
 			return raw.filter((x): x is string => typeof x === "string");
 		})();
+		// Read assigned skill IDs
+		const skillIds: string[] = (() => {
+			const raw = npcObj.metadata.npcSkills;
+			if (!Array.isArray(raw)) return [];
+			return raw.filter((x): x is string => typeof x === "string");
+		})();
 
 		const perceptionContext = buildPerceptionContext(
 			npcObj,
@@ -172,6 +178,7 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 				npcName: npcObj.name,
 				personality,
 				memory,
+				skillIds,
 				perceptionContext,
 				userText,
 				sceneObjects: scene.sceneData.objects,

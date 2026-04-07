@@ -461,6 +461,8 @@ export function App() {
               sceneObjects={scene.sceneData.objects}
               viewpoints={scene.sceneData.viewpoints}
               splatGroundOffset={scene.sceneData.splatGroundOffset}
+              sceneId={scene.sceneId}
+              sessionId={sessionId}
               onInteract={handleSplatInteract}
               onNpcApproach={handleNpcApproach}
               onNpcLeave={handleNpcLeave}

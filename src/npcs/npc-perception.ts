@@ -166,7 +166,12 @@ export function buildPerceptionContext(
 			const dir = compassBearing(p, o.position);
 			const blocker = firstObstacle(p, o.position, allObjects);
 			const blockNote = blocker ? `[${blocker}阻挡]` : "";
-			return `${o.name}（${dir} ${d.toFixed(1)}米${blockNote}）`;
+			// Include short personality snippet so NPCs understand each other's roles
+			const personality = typeof o.metadata?.npcPersonality === "string" ? o.metadata.npcPersonality : "";
+			const roleNote = personality ? `，${personality.slice(0, 20)}` : "";
+			// Include exact coords so the agent can call move_to() without an observe_scene() round-trip
+			const coordNote = `，x=${o.position.x.toFixed(1)} z=${o.position.z.toFixed(1)}`;
+			return `${o.name}（${dir} ${d.toFixed(1)}米${blockNote}${coordNote}${roleNote}，objectId=${o.objectId}）`;
 		});
 		lines.push(`附近NPC：${parts.join("、")}`);
 	}

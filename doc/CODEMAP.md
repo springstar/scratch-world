@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-04-07 (NPC spatial perception; image-to-3D via Hunyuan; structured logger)
+**Last Updated:** 2026-04-07 (NPC skills system; NPC-to-NPC interaction; position persistence; spatial perception enrichment)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -66,16 +66,17 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Viewer Canvas** | `viewer/src/components/ViewerCanvas.tsx` | React wrapper around Three.js renderer; pointer lock tracking; walk mode button + crosshair overlay | UI component |
 | **Chat Drawer** | `viewer/src/components/ChatDrawer.tsx` | Bottom sheet chat UI (peek/open states, streaming) | `ChatDrawer` |
 | **Star Field** | `viewer/src/components/StarField.tsx` | Canvas 2D star particle background for empty state | `StarField` |
-| **NPC Runner** | `src/npcs/npc-runner.ts` | Core Haiku LLM calls: reactAsNpc, greetAsNpc, spontaneousNpcLine, updateMemory | NPC response functions |
-| **NPC Agent** | `src/npcs/npc-agent.ts` | Tool-use agent loop for action requests (speak / observe / move / emote) | `runNpcAgent()` |
+| **NPC Runner** | `src/npcs/npc-runner.ts` | Core Haiku LLM calls: reactAsNpc, reactAsNpcNoCD (no-cooldown for NPC-to-NPC), greetAsNpc, spontaneousNpcLine, updateMemory | NPC response functions |
+| **NPC Agent** | `src/npcs/npc-agent.ts` | Tool-use agent loop for action requests; tools: speak / observe / move / emote / speak_to_npc; loads skills via `loadNpcSkills()` | `runNpcAgent()` |
+| **NPC Skills** | `src/npcs/npc-skills.ts` | Skill catalog (heal / trade / guide / quest / teach / storytell / guard / cook); each skill injects a prompt hint and optional AgentTool; `loadNpcSkills()` merges them at interaction time | `loadNpcSkills()`, `NPC_SKILL_CATALOG` |
 | **NPC Heartbeat** | `src/npcs/npc-heartbeat.ts` | World-tick: 5-min interval, 15% chance spontaneous one-liner per active NPC | `startNpcHeartbeat()` |
 | **NPC Evolution** | `src/npcs/npc-evolution.ts` | Personality drift: generate diff, apply approved delta, log entries | `generateEvolutionDiff()`, `applyEvolutionDelta()` |
-| **NPC Interact Route** | `src/viewer-api/routes/npc-interact.ts` | POST /npc-interact — fast path vs agent loop routing, PerceptionBus, memory update | `npcInteractRoute()` |
+| **NPC Interact Route** | `src/viewer-api/routes/npc-interact.ts` | POST /npc-interact — fast path vs agent loop routing, PerceptionBus, memory update; reads `npcSkills` metadata and passes to agent | `npcInteractRoute()` |
 | **NPC Greet Route** | `src/viewer-api/routes/npc-greet.ts` | POST /npc-greet — proximity-triggered auto-greeting | `npcGreetRoute()` |
 | **NPC Proximity** | `viewer/src/physics/npc-proximity.ts` | 2.5 m proximity radius, nearest-NPC search with position overrides | `findNearbyNpc()`, `extractNpcs()` |
 | **NPC Chat Overlay** | `viewer/src/components/NpcChatOverlay.tsx` | Floating in-viewer chat panel; auto-opens/closes on proximity | `NpcChatOverlay` |
-| **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, approve/reject evolution | `NpcDrawer` |
-| **NPC Perception** | `src/npcs/npc-perception.ts` | Builds spatial context string: self-position, compass bearings, 2D obstacle detection, scene caption injection | `buildPerceptionContext()`, `extractSceneCaption()` |
+| **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, skill picker (toggle chips), skill badges on list cards, approve/reject evolution | `NpcDrawer` |
+| **NPC Perception** | `src/npcs/npc-perception.ts` | Builds spatial context string: self-position, compass bearings, 2D obstacle detection, scene caption; nearby NPC entries include personality snippet, exact coords, and objectId for navigation | `buildPerceptionContext()`, `extractSceneCaption()` |
 | **Image-to-3D Tool** | `src/agent/tools/image-to-3d.ts` | Converts user-uploaded photo to GLB via Tencent Hunyuan 3D API (submit → poll → download); 10-min timeout | `imageToSdTool()` |
 | **Logger** | `src/logger.ts` | Structured session/tool-scoped logger with timer helpers and 500-entry in-memory ring buffer; powers /debug/logs | `createLogger()`, `getRecentLogs()` |
 
@@ -583,6 +584,12 @@ type RealtimeEvent =
   | { type: "text_done"; text: string }             // Agent response complete
   | { type: "scene_created"; sceneId: string; title: string; viewUrl: string }  // New scene from web chat
   | { type: "scene_updated"; sceneId: string; version: number }  // Existing scene modified (async or sync)
+  | { type: "npc_speech"; npcId: string; npcName: string; text: string; sceneId?: string }  // NPC dialogue
+  | { type: "npc_move"; npcId: string; position: { x, y, z }; sceneId?: string }  // NPC movement
+  | { type: "npc_emote"; npcId: string; animation: string; sceneId?: string }  // NPC animation
+  | { type: "npc_trade_offer"; npcId: string; npcName: string; item: string; price: string; sceneId?: string }  // trade skill
+  | { type: "npc_waypoint"; npcId: string; npcName: string; position: { x, z }; label: string; sceneId?: string }  // guide skill
+  | { type: "npc_quest"; npcId: string; npcName: string; title: string; objective: string; reward: string; sceneId?: string }  // quest skill
   | { type: "error"; message: string }              // Error during processing
 ```
 

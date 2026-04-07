@@ -4,6 +4,9 @@ import { getModel, Type } from "@mariozechner/pi-ai";
 import { createLogger } from "../logger.js";
 import type { SceneObject } from "../scene/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
+import { buildPerceptionContext, extractSceneCaption } from "./npc-perception.js";
+import { reactAsNpcNoCD } from "./npc-runner.js";
+import { loadNpcSkills } from "./npc-skills.js";
 
 const AGENT_TIMEOUT_MS = 15_000;
 
@@ -23,6 +26,7 @@ export async function runNpcAgent(opts: {
 	npcName: string;
 	personality: string;
 	memory: string[];
+	skillIds: string[];
 	perceptionContext: string;
 	userText: string;
 	sceneObjects: SceneObject[];
@@ -30,23 +34,46 @@ export async function runNpcAgent(opts: {
 	sceneId: string;
 	bus: RealtimeBus;
 }): Promise<void> {
-	const { npcId, npcName, personality, memory, perceptionContext, userText, sceneObjects, sessionId, sceneId, bus } =
-		opts;
+	const {
+		npcId,
+		npcName,
+		personality,
+		memory,
+		skillIds,
+		perceptionContext,
+		userText,
+		sceneObjects,
+		sessionId,
+		sceneId,
+		bus,
+	} = opts;
 
 	const log = createLogger({ tool: "npc_agent", npc: npcId });
 	const t = log.timer("agent_run", { npcName, userText: userText.slice(0, 60) });
 
+	// Load skill prompt hints and tools
+	const { promptAdditions, tools: skillTools } = loadNpcSkills(skillIds, { npcId, npcName, sessionId, sceneId, bus });
+	const skillSection = promptAdditions.length > 0 ? `\n\n[已装备技能]\n${promptAdditions.join("\n")}` : "";
+
 	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
+	// Build skill tool list for system prompt description
+	const skillToolNames = skillTools.map((t) => `- ${t.name}(...): ${t.description ?? t.label}`).join("\n");
+
 	const systemPrompt =
-		`你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n` +
+		`你是${npcName}。${personality}${skillSection}${memorySection}${perceptionSection}\n\n` +
 		`你可以使用以下工具来响应玩家：\n` +
 		`- speak(text)：说出一句话\n` +
-		`- observe_scene()：查看周围的场景对象\n` +
-		`- move_to(x, z)：移动到场景中某个位置\n` +
-		`- emote(animation)：播放一个动作（idle/walk/talk/wave/bow）\n\n` +
-		`始终以符合角色的方式行动。至少调用一次 speak()。完成后停止。`;
+		`- observe_scene()：查看周围的场景对象（包含准确坐标）\n` +
+		`- move_to(x, z)：移动到场景中某个位置（使用感知中的坐标）\n` +
+		`- speak_to_npc(targetObjectId, text)：向附近的NPC说一句话并等待其回应\n` +
+		`- emote(animation)：播放一个动作（idle/walk/talk/wave/bow）\n` +
+		(skillToolNames ? `${skillToolNames}\n` : "") +
+		`\n行为准则：\n` +
+		`- 你了解场景中其他NPC的角色，可以主动和他们互动\n` +
+		`- 如果玩家让你去找某人，先用move_to移动过去，再用speak_to_npc开口\n` +
+		`- 至少调用一次 speak()。完成后停止。`;
 
 	const tools: AgentTool[] = [
 		{
@@ -107,7 +134,69 @@ export async function runNpcAgent(opts: {
 				return { content: [{ type: "text", text: `播放动作: ${animation}` }], details: null };
 			},
 		},
+		{
+			name: "speak_to_npc",
+			description: "向场景中另一个NPC说一句话，对方会自然回应",
+			parameters: Type.Object({
+				targetObjectId: Type.String({ description: "目标NPC的objectId（来自感知列表）" }),
+				text: Type.String({ description: "你要对目标NPC说的话（1-2句）" }),
+			}),
+			label: "对话NPC",
+			execute: async (_id, params) => {
+				const { targetObjectId, text } = params as { targetObjectId: string; text: string };
+				const targetNpc = sceneObjects.find((o) => o.objectId === targetObjectId && o.type === "npc");
+				if (!targetNpc) return { content: [{ type: "text", text: "找不到该NPC" }], details: null };
+
+				// Publish the initiating NPC's speech first
+				bus.publish(sessionId, { type: "npc_speech", npcId, npcName, text, sceneId });
+
+				// Build fresh perception context for the target NPC
+				const env = sceneObjects.find((o) => o.type === "terrain")?.metadata ?? {};
+				const targetPerception = buildPerceptionContext(
+					targetNpc,
+					sceneObjects,
+					undefined,
+					env as { timeOfDay?: string; weather?: string },
+					extractSceneCaption(sceneObjects),
+				);
+				const targetPersonality = (targetNpc.metadata?.npcPersonality as string | undefined) ?? "一个普通的村民";
+				const targetMemory: string[] = (() => {
+					const raw = targetNpc.metadata?.npcMemory;
+					if (!Array.isArray(raw)) return [];
+					return raw.filter((x): x is string => typeof x === "string");
+				})();
+
+				// Generate the target NPC's reaction (bypasses cooldown — NPC-to-NPC)
+				const context = `${npcName}对你说："${text}"`;
+				const reply = await reactAsNpcNoCD(
+					targetNpc.objectId,
+					targetNpc.name,
+					targetPersonality,
+					context,
+					targetMemory,
+					targetPerception,
+				);
+				if (reply) {
+					bus.publish(sessionId, {
+						type: "npc_speech",
+						npcId: targetNpc.objectId,
+						npcName: targetNpc.name,
+						text: reply,
+						sceneId,
+					});
+				}
+				return {
+					content: [
+						{ type: "text", text: reply ? `${targetNpc.name} 回应："${reply}"` : `${targetNpc.name} 没有回应` },
+					],
+					details: null,
+				};
+			},
+		},
 	];
+
+	// Merge skill tools
+	const allTools = [...tools, ...skillTools];
 
 	const agent = new Agent({
 		convertToLlm: (messages) =>
@@ -119,7 +208,7 @@ export async function runNpcAgent(opts: {
 
 	agent.setModel(haiku());
 	agent.setSystemPrompt(systemPrompt);
-	agent.setTools(tools);
+	agent.setTools(allTools);
 
 	const abort = new AbortController();
 	const timer = setTimeout(() => abort.abort(), AGENT_TIMEOUT_MS);

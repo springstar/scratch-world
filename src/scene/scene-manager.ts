@@ -218,6 +218,7 @@ export class SceneManager {
 			name?: string;
 			description?: string;
 			interactionHint?: string;
+			position?: { x: number; y: number; z: number };
 			metadata?: Record<string, unknown>;
 		},
 	): Promise<Scene> {
@@ -231,6 +232,7 @@ export class SceneManager {
 				...(patch.name !== undefined ? { name: patch.name } : {}),
 				...(patch.description !== undefined ? { description: patch.description } : {}),
 				...(patch.interactionHint !== undefined ? { interactionHint: patch.interactionHint } : {}),
+				...(patch.position !== undefined ? { position: patch.position } : {}),
 				...(patch.metadata ? { metadata: { ...o.metadata, ...patch.metadata } } : {}),
 			};
 		});
