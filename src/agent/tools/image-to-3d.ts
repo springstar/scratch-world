@@ -50,15 +50,17 @@ interface SubmitResult {
 	JobId: string;
 }
 
+interface ResultFile3D {
+	Type: string; // "GLB" | "OBJ" | ...
+	Url: string;
+	PreviewImageUrl?: string;
+}
+
 interface QueryResult {
-	JobId: string;
-	Status: string; // "Processing" | "Success" | "Failed"
-	Progress?: number;
-	// Model download URL — field name varies by API version
-	ModelUrl?: string;
-	GlbUrl?: string;
-	OutputUrl?: string;
-	Url?: string;
+	Status: string; // "RUN" | "DONE" | "FAILED"
+	ErrorCode: string;
+	ErrorMessage: string;
+	ResultFile3Ds: ResultFile3D[];
 }
 
 function apiHeaders(): Record<string, string> {
@@ -74,9 +76,9 @@ function apiHeaders(): Record<string, string> {
  * Submit an image-to-3D generation job.
  * Returns the JobId for subsequent polling.
  */
-async function submitJob(imageBase64: string, mimeType: string): Promise<string> {
+async function submitJob(imageBase64: string): Promise<string> {
 	const body = JSON.stringify({
-		image_url: `data:${mimeType};base64,${imageBase64}`,
+		ImageBase64: imageBase64,
 		Model: "3.0",
 	});
 
@@ -120,15 +122,15 @@ async function pollJob(jobId: string): Promise<QueryResult> {
 		const result = data.Response;
 		const status = result.Status ?? "";
 
-		if (status === "Failed") {
-			throw new Error(`Hunyuan 3D generation failed for job ${jobId}`);
+		if (status === "FAILED") {
+			const msg = result.ErrorMessage || result.ErrorCode || "unknown error";
+			throw new Error(`Hunyuan 3D generation failed for job ${jobId}: ${msg}`);
 		}
 
-		if (status === "Success" || status === "Completed") {
-			// Extract GLB URL from whichever field the API uses
-			const glbUrl = result.ModelUrl ?? result.GlbUrl ?? result.OutputUrl ?? result.Url;
-			if (!glbUrl) throw new Error(`Hunyuan job ${jobId} succeeded but no model URL in response`);
-			return { ...result, ModelUrl: glbUrl };
+		if (status === "DONE") {
+			const glbFile = result.ResultFile3Ds.find((f) => f.Type === "GLB");
+			if (!glbFile) throw new Error(`Hunyuan job ${jobId} completed but no GLB file in ResultFile3Ds`);
+			return result;
 		}
 
 		// Still processing — wait and retry
@@ -177,9 +179,6 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 			await mkdir(generatedDir, { recursive: true });
 
 			// ── 1. Read and encode image ──────────────────────────────────────
-			const ext = params.imagePath.split(".").pop()?.toLowerCase() ?? "jpg";
-			const mimeType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-
 			let imageBase64: string;
 			try {
 				const buf = await readFile(params.imagePath);
@@ -196,7 +195,7 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 			// ── 2. Submit generation job ──────────────────────────────────────
 			let jobId: string;
 			try {
-				jobId = await submitJob(imageBase64, mimeType);
+				jobId = await submitJob(imageBase64);
 			} catch (err) {
 				return {
 					content: [
@@ -227,13 +226,14 @@ export function imageToSdTool(uploadsDir: string, viewerBaseUrl: string): AgentT
 			}
 
 			// ── 4. Download GLB to local uploads/generated/ ───────────────────
+			const glbFile = result.ResultFile3Ds.find((f) => f.Type === "GLB")!;
 			const assetId = randomUUID().slice(0, 8);
 			const safeName = params.assetName.replace(/[^a-z0-9_-]/gi, "_").slice(0, 40);
 			const fileName = `${safeName}_${assetId}.glb`;
 			const destPath = join(generatedDir, fileName);
 
 			try {
-				await downloadFile(result.ModelUrl!, destPath);
+				await downloadFile(glbFile.Url, destPath);
 			} catch (err) {
 				return {
 					content: [
