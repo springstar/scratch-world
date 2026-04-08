@@ -11,7 +11,7 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene } from "./api.js";
+import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
 import type { PendingNpc } from "./components/NpcDrawer.js";
 
@@ -479,17 +479,26 @@ export function App() {
               npcPlacementPending={pendingNpc !== null}
               onNpcPlace={(pos) => {
                 if (!pendingNpc || !scene) return;
-                const fwd = (window as unknown as Record<string, unknown>).__cameraForward as
-                  | { x: number; z: number } | undefined;
-                addSceneNpc(scene.sceneId, sessionId, {
-                  ...pendingNpc,
-                  placement: "exact",
-                  playerPosition: pos,
-                  cameraForward: fwd,
-                })
-                  .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
-                  .catch(console.warn);
+                const npcSnapshot = pendingNpc;
                 setPendingNpc(null);
+                if (npcSnapshot.objectId) {
+                  // Re-placing an existing NPC — just update its position
+                  patchSceneObjectPosition(scene.sceneId, sessionId, npcSnapshot.objectId, pos)
+                    .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                    .catch(console.warn);
+                } else {
+                  // Creating a new NPC
+                  const fwd = (window as unknown as Record<string, unknown>).__cameraForward as
+                    | { x: number; z: number } | undefined;
+                  addSceneNpc(scene.sceneId, sessionId, {
+                    ...npcSnapshot,
+                    placement: "exact",
+                    playerPosition: pos,
+                    cameraForward: fwd,
+                  })
+                    .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                    .catch(console.warn);
+                }
               }}
               onNpcPlaceCancel={() => setPendingNpc(null)}
               onPlacementRequest={(text) => { void handleSend(text); }}
@@ -616,7 +625,12 @@ export function App() {
       {/* NPC button — top-right, shown when a scene is loaded */}
       {scene && (
         <button
-          onClick={() => setShowNpcDrawer((v) => !v)}
+          onClick={() => {
+              setShowNpcDrawer((v) => {
+                if (!v) setNpcChatTarget(null); // close NPC chat when opening drawer
+                return !v;
+              });
+            }}
           style={{
             position: "fixed", top: 16, right: 16,
             background: showNpcDrawer ? "rgba(120,80,255,0.4)" : "rgba(20,15,40,0.75)",

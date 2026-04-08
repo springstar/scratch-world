@@ -22,6 +22,8 @@ export interface PendingNpc {
   skills?: string[];
   modelUrl: string;
   scale: number;
+  /** Set when re-placing an existing NPC (updates position only, no new NPC created) */
+  objectId?: string;
 }
 
 interface NpcDrawerProps {
@@ -293,15 +295,15 @@ export function NpcDrawer({
     width: 340,
     transform: open ? "translateX(0)" : "translateX(100%)",
     transition: "transform 0.3s cubic-bezier(0.4,0,0.2,1)",
-    zIndex: 110,
+    zIndex: 130,
     background: "rgba(10,8,28,0.97)",
     backdropFilter: "blur(16px)",
     borderLeft: "1px solid rgba(140,100,255,0.22)",
     display: "flex",
     flexDirection: "column",
+    overflow: "hidden",
     fontFamily: "system-ui, -apple-system, sans-serif",
     color: "rgba(200,220,255,0.9)",
-    overflowY: "auto",
   };
 
   const headerStyle: React.CSSProperties = {
@@ -323,7 +325,7 @@ export function NpcDrawer({
             <button onClick={onClose} style={{ ...BTN_GHOST, fontSize: 16, padding: "2px 8px" }}>×</button>
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px" }}>
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "12px 14px" }}>
             {npcs.length === 0 ? (
               <div style={{ textAlign: "center", color: "rgba(140,150,180,0.5)", fontSize: 13, marginTop: 32 }}>
                 暂无 NPC
@@ -369,6 +371,26 @@ export function NpcDrawer({
                     </div>
                   ) : (
                     <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        onClick={() => {
+                          const modelUrl = npc.metadata.modelUrl as string | undefined;
+                          onBeginPlacement({
+                            objectId: npc.objectId,
+                            name: npc.name,
+                            personality: (npc.metadata.npcPersonality as string | undefined) ?? "",
+                            traits: npc.metadata.npcTraits as string | undefined,
+                            skills: (() => {
+                              const raw = npc.metadata.npcSkills;
+                              return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : undefined;
+                            })(),
+                            modelUrl: modelUrl ?? "",
+                            scale: typeof npc.metadata.scale === "number" ? npc.metadata.scale : 1,
+                          });
+                        }}
+                        style={{ ...BTN_GHOST, flex: 1, borderColor: "rgba(80,180,120,0.4)", color: "rgba(120,220,150,0.85)" }}
+                      >
+                        放置
+                      </button>
                       <button onClick={() => openEdit(npc)} style={{ ...BTN_GHOST, flex: 1 }}>编辑</button>
                       <button onClick={() => setDeleteConfirm(npc.objectId)} style={BTN_DANGER}>删除</button>
                     </div>
@@ -393,7 +415,7 @@ export function NpcDrawer({
             <div style={{ width: 32 }} />
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
             {/* Name */}
             <div>
               <label style={LABEL_STYLE}>名字 *</label>
@@ -444,23 +466,34 @@ export function NpcDrawer({
                   <input value={modelSearch} onChange={(e) => setModelSearch(e.target.value)}
                     placeholder="搜索模型..." style={{ ...INPUT_STYLE, marginBottom: 8 }} />
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                    {filteredModels.map((m) => (
-                      <button key={m.id} onClick={() => setSelectedModel(m)} style={{
-                        padding: "8px 4px",
-                        background: selectedModel?.id === m.id ? "rgba(100,140,255,0.25)" : "rgba(255,255,255,0.04)",
-                        border: `1px solid ${selectedModel?.id === m.id ? "rgba(100,140,255,0.6)" : "rgba(140,100,255,0.15)"}`,
-                        borderRadius: 7, cursor: "pointer",
-                        color: "rgba(200,220,255,0.85)", fontSize: 11,
-                        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-                      }}>
-                        <span style={{ fontSize: 18 }}>
-                          {m.tags.includes("soldier") ? "💂" : m.tags.includes("robot") ? "🤖" : "🧍"}
-                        </span>
-                        <span style={{ lineHeight: 1.2, wordBreak: "break-word" }}>
-                          {m.id.replace("character_", "")}
-                        </span>
-                      </button>
-                    ))}
+                    {filteredModels.map((m) => {
+                      const isSelected = selectedModel?.id === m.id;
+                      return (
+                        <button key={m.id} onClick={() => setSelectedModel(m)} style={{
+                          padding: "8px 4px",
+                          background: isSelected ? "rgba(80,180,120,0.25)" : "rgba(255,255,255,0.04)",
+                          border: `2px solid ${isSelected ? "rgba(80,200,130,0.8)" : "rgba(140,100,255,0.15)"}`,
+                          borderRadius: 7, cursor: "pointer",
+                          color: isSelected ? "rgba(140,230,170,0.95)" : "rgba(200,220,255,0.85)", fontSize: 11,
+                          display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                          position: "relative",
+                        }}>
+                          {isSelected && (
+                            <span style={{
+                              position: "absolute", top: 3, right: 4,
+                              fontSize: 9, color: "rgba(80,220,130,0.9)",
+                              fontWeight: 700, lineHeight: 1,
+                            }}>✓</span>
+                          )}
+                          <span style={{ fontSize: 18 }}>
+                            {m.tags.includes("soldier") ? "💂" : m.tags.includes("robot") ? "🤖" : "🧍"}
+                          </span>
+                          <span style={{ lineHeight: 1.2, wordBreak: "break-word" }}>
+                            {m.id.replace("character_", "")}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                   {filteredModels.length === 0 && (
                     <div style={{ fontSize: 12, color: "rgba(140,150,180,0.5)", textAlign: "center", marginTop: 8 }}>
@@ -500,7 +533,7 @@ export function NpcDrawer({
             <div style={{ width: 32 }} />
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
               <label style={LABEL_STYLE}>名字 *</label>
               <input value={editName} onChange={(e) => setEditName(e.target.value)} style={INPUT_STYLE} />
