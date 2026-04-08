@@ -214,6 +214,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			scale?: number;
 			placement?: string;
 			playerPosition?: { x: number; y: number; z: number };
+			cameraForward?: { x: number; z: number };
 		}>();
 		if (!body.name || !body.personality || !body.modelUrl) {
 			return c.json({ error: "Missing required fields: name, personality, modelUrl" }, 400);
@@ -238,6 +239,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 				scale: body.scale ?? 1,
 				placement: body.placement ?? "near_camera",
 				...(body.playerPosition ? { playerPosition: body.playerPosition } : {}),
+				...(body.cameraForward ? { cameraForward: body.cameraForward } : {}),
 			},
 		};
 

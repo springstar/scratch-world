@@ -139,7 +139,6 @@ export function loadPhysicsProps(
   for (let i = 0; i < propObjects.length; i++) {
     const obj = propObjects[i];
     const modelUrl = obj.metadata.modelUrl as string;
-    const physicsShape = (obj.metadata.physicsShape as string | undefined) ?? "box";
     const mass = typeof obj.metadata.mass === "number" ? obj.metadata.mass : 10;
     const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
     const hint = (obj.metadata.placement as PlacementHint | undefined);

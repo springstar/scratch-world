@@ -71,6 +71,8 @@ function tooClose(
  * @param viewpoints    - viewpoints from SceneData (used for near_entrance)
  * @param index         - prop index (fallback spiral offset when slots exhausted)
  * @param playerPosition - player's world position when the request was made (used as near_camera anchor)
+ * @param splatGroundOffset - Marble ground plane offset for fallback Y
+ * @param cameraForward - normalised XZ forward vector of the camera at placement time
  */
 export function resolvePosition(
   hint: PlacementHint | undefined,
@@ -80,6 +82,7 @@ export function resolvePosition(
   index: number,
   playerPosition?: { x: number; y: number; z: number },
   splatGroundOffset?: number,
+  cameraForward?: { x: number; z: number },
 ): ResolvedPosition {
   // Determine anchor from hint
   let ax = 0;
@@ -115,10 +118,30 @@ export function resolvePosition(
   }
   // fallback if no playerPosition: anchor stays at (0, 0)
 
-  // Try pre-computed arc slots
+  // Compute camera yaw rotation matrix components so SLOTS arc in front of the player.
+  // SLOTS are defined relative to a camera facing -Z (Three.js default forward).
+  // If cameraForward is provided, rotate each slot by the camera's yaw angle.
+  // cos/sin for rotation: fwd = (fx, fz), right = (fz, -fx)
+  let cosY = 1;
+  let sinY = 0;
+  if (cameraForward) {
+    // cameraForward is already normalised; fwd.z is the -Z component in world space.
+    // We want the rotation that maps (0, -1) → (fx, fz).
+    // That rotation has: cosY = -fz, sinY = -fx (rotate from -Z to fwd).
+    cosY = -cameraForward.z;
+    sinY = -cameraForward.x;
+  }
+
+  const rotateSlot = (dx: number, dz: number): [number, number] => [
+    dx * cosY - dz * sinY,
+    dx * sinY + dz * cosY,
+  ];
+
+  // Try pre-computed arc slots (rotated to face the camera's forward direction)
   for (const [dx, dz] of SLOTS) {
-    const cx = ax + dx;
-    const cz = az + dz;
+    const [rdx, rdz] = rotateSlot(dx, dz);
+    const cx = ax + rdx;
+    const cz = az + rdz;
     if (!tooClose(cx, cz, occupied)) {
       const y = groundY(world, cx, cz, rayStartY, fallbackY);
       return { x: cx, y, z: cz };

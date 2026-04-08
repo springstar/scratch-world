@@ -263,12 +263,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       // Once the splat is parsed, sample the center pixel each frame.
       // SparkRenderer uploads to GPU asynchronously; the scene is visible only
       // after the first non-background draw call completes.
-      if (splatInitialized && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+      if (splatInitialized && canvas!.clientWidth > 0 && canvas!.clientHeight > 0) {
         const gl = renderer.getContext();
         const px = new Uint8Array(4);
         gl.readPixels(
-          Math.floor(canvas.clientWidth / 2),
-          Math.floor(canvas.clientHeight / 2),
+          Math.floor(canvas!.clientWidth / 2),
+          Math.floor(canvas!.clientHeight / 2),
           1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px,
         );
         // Background is 0x0a0a14 (10,10,20) — any meaningfully brighter pixel means the scene rendered
@@ -299,9 +299,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       freeFlyActive = false;
       ffDragging = false;
       cancelAnimationFrame(animId);
-      canvas.removeEventListener("mousedown", onMouseDown);
-      canvas.removeEventListener("mouseup",   onMouseUp);
-      canvas.removeEventListener("mousemove", onMouseMove);
+      canvas!.removeEventListener("mousedown", onMouseDown);
+      canvas!.removeEventListener("mouseup",   onMouseUp);
+      canvas!.removeEventListener("mousemove", onMouseMove);
     }
 
     function restartFreeFly() {
@@ -363,8 +363,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
         const hint = obj.metadata.placement as PlacementHint | undefined;
         const playerPos = obj.metadata.playerPosition as { x: number; y: number; z: number } | undefined;
+        const cameraFwd = obj.metadata.cameraForward as { x: number; z: number } | undefined;
         const occupied = [...npcPositions.values(), ...props.map((p) => { const t = p.body.translation(); return { x: t.x, y: t.y, z: t.z }; })];
-        const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], npcGroups.size, playerPos, splatGroundOffset);
+        const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], npcGroups.size, playerPos, splatGroundOffset, cameraFwd);
         npcPositions.set(obj.objectId, pos);
 
         // Lock position back to server so it is stable on next reload.
@@ -401,11 +402,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           npcGroups.delete(objectId);
         }
       };
-      (window as Record<string, unknown>).__loadSceneNpc = loadSceneNpc;
-      (window as Record<string, unknown>).__removeSceneNpc = removeSceneNpc;
+      (window as unknown as Record<string, unknown>).__loadSceneNpc = loadSceneNpc;
+      (window as unknown as Record<string, unknown>).__removeSceneNpc = removeSceneNpc;
 
       // Move an NPC's group to a new world position (interpolation via animateNpcMove)
-      (window as Record<string, unknown>).__moveNpc = (objectId: string, pos: { x: number; y: number; z: number }) => {
+      (window as unknown as Record<string, unknown>).__moveNpc = (objectId: string, pos: { x: number; y: number; z: number }) => {
         const group = npcGroups.get(objectId);
         if (!group) return;
         npcPositions.set(objectId, pos);
@@ -427,7 +428,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       };
 
       // Play an animation clip on the NPC's AnimationMixer (if the GLB has clips)
-      (window as Record<string, unknown>).__emoteNpc = (objectId: string, animation: string) => {
+      (window as unknown as Record<string, unknown>).__emoteNpc = (objectId: string, animation: string) => {
         const group = npcGroups.get(objectId);
         if (!group) return;
         // Store animation name for the render loop to pick up
@@ -531,7 +532,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         });
         props.push({ body, group, objectId: oid, meshes });
       };
-      (window as Record<string, unknown>).__spawnProp = spawnGlbProp;
+      (window as unknown as Record<string, unknown>).__spawnProp = spawnGlbProp;
 
       // Load a persisted SceneObject prop into the live physics world.
       // Called by App.tsx when scene_updated brings in new props so they appear
@@ -543,11 +544,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const mass = typeof obj.metadata.mass === "number" ? obj.metadata.mass : 10;
         const hint = obj.metadata.placement as PlacementHint | undefined;
         const playerPos = obj.metadata.playerPosition as { x: number; y: number; z: number } | undefined;
+        const cameraFwd = obj.metadata.cameraForward as { x: number; z: number } | undefined;
         const occupied = props.map((p) => {
           const t = p.body.translation();
           return { x: t.x, y: t.y, z: t.z };
         });
-        const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], props.length, playerPos, splatGroundOffset);
+        const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], props.length, playerPos, splatGroundOffset, cameraFwd);
 
         // Lock position back to server so it is stable on next reload.
         if (hint !== "exact" && sceneId && sessionId) {
@@ -576,7 +578,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         });
         props.push({ body, group, objectId: obj.objectId, meshes });
       };
-      (window as Record<string, unknown>).__loadSceneProp = loadSceneProp;
+      (window as unknown as Record<string, unknown>).__loadSceneProp = loadSceneProp;
 
       const removeSceneProp = (objectId: string): void => {
         const idx = props.findIndex((p) => p.objectId === objectId);
@@ -585,7 +587,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         scene.remove(removed.group);
         world.removeRigidBody(removed.body);
       };
-      (window as Record<string, unknown>).__removeSceneProp = removeSceneProp;
+      (window as unknown as Record<string, unknown>).__removeSceneProp = removeSceneProp;
 
       const fwd = new Vector3();
       const right = new Vector3();
@@ -615,6 +617,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         // Eye is 0.8m above body center (standard Y-up: eye = body.y + 0.8)
         camera.position.set(pos.x, pos.y + 0.8, pos.z);
         (window as unknown as Record<string, unknown>).__playerPosition = { x: pos.x, y: pos.y, z: pos.z };
+        // Expose normalised camera forward (XZ only) for placement direction calculations
+        if (fwd.lengthSq() > 0.0001) {
+          (window as unknown as Record<string, unknown>).__cameraForward = { x: fwd.x, z: fwd.z };
+        }
 
         const currentNpcs = extractNpcs(sceneObjectsRef.current ?? []);
         if (currentNpcs.length > 0) {
@@ -724,6 +730,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         window.removeEventListener("keydown", onKeyAction);
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
         delete (window as unknown as Record<string, unknown>).__playerPosition;
+        delete (window as unknown as Record<string, unknown>).__cameraForward;
         delete (window as unknown as Record<string, unknown>).__spawnProp;
         delete (window as unknown as Record<string, unknown>).__loadSceneProp;
         delete (window as unknown as Record<string, unknown>).__removeSceneProp;

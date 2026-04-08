@@ -166,16 +166,16 @@ export function App() {
           sceneRef.current = s;
           const prevIds = new Set(prevObjects.map((o) => o.objectId));
           const newIds = new Set(s.sceneData.objects.map((o) => o.objectId));
-          const loadFn = (window as Record<string, unknown>).__loadSceneProp as
+          const loadFn = (window as unknown as Record<string, unknown>).__loadSceneProp as
             | ((obj: SceneObject) => Promise<void>)
             | undefined;
-          const removeFn = (window as Record<string, unknown>).__removeSceneProp as
+          const removeFn = (window as unknown as Record<string, unknown>).__removeSceneProp as
             | ((objectId: string) => void)
             | undefined;
-          const loadNpcFn = (window as Record<string, unknown>).__loadSceneNpc as
+          const loadNpcFn = (window as unknown as Record<string, unknown>).__loadSceneNpc as
             | ((obj: SceneObject) => Promise<void>)
             | undefined;
-          const removeNpcFn = (window as Record<string, unknown>).__removeSceneNpc as
+          const removeNpcFn = (window as unknown as Record<string, unknown>).__removeSceneNpc as
             | ((objectId: string) => void)
             | undefined;
           // Remove props that no longer exist

@@ -246,6 +246,11 @@ export function NpcDrawer({
       playerPosition = { x: selectedSpawn.x, y: 0, z: selectedSpawn.z };
     }
 
+    // Include camera forward so near_camera placement spawns in front of the player
+    const cameraForward = (window as unknown as Record<string, unknown>).__cameraForward as
+      | { x: number; z: number }
+      | undefined;
+
     setAdding(true);
     setAddError("");
     try {
@@ -258,6 +263,7 @@ export function NpcDrawer({
         scale: modelTab === "catalog" ? (selectedModel?.scale ?? 1) : 1,
         placement,
         playerPosition,
+        cameraForward,
       });
       backToList();
       onNpcAdded();
@@ -529,7 +535,7 @@ export function NpcDrawer({
               <span style={LABEL_STYLE}>放置位置</span>
 
               {/* Spawn point chips (if the scene has LLM-generated spawn points) */}
-              {spawnPoints.length > 0 && (
+              {spawnPoints.length > 0 ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {spawnPoints.map((sp) => {
                     const active = !aimTarget && selectedSpawn?.id === sp.id;
@@ -550,6 +556,10 @@ export function NpcDrawer({
                       </button>
                     );
                   })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "rgba(120,130,160,0.5)", fontStyle: "italic" }}>
+                  暂无推荐位置，在场景中点击地面选择放置点
                 </div>
               )}
 

@@ -124,6 +124,7 @@ export async function addSceneNpc(
     scale?: number;
     placement?: string;
     playerPosition?: { x: number; y: number; z: number };
+    cameraForward?: { x: number; z: number };
   },
 ): Promise<{ objectId: string; version: number }> {
   const res = await fetch(`${BASE}/scenes/${sceneId}/npcs?session=${encodeURIComponent(sessionId)}`, {
