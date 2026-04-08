@@ -45,6 +45,13 @@ export const ViewpointSchema = Type.Object({
 	lookAt: Vec3Schema,
 });
 
+export const SpawnPointSchema = Type.Object({
+	id: Type.String(),
+	label: Type.String({ description: "Semantic name shown in the UI, e.g. 铁匠铺门口" }),
+	x: Type.Number(),
+	z: Type.Number(),
+});
+
 export const SceneDataSchema = Type.Object({
 	objects: Type.Array(SceneObjectSchema),
 	environment: EnvironmentConfigSchema,
@@ -58,6 +65,11 @@ export const SceneDataSchema = Type.Object({
 	colliderMeshUrl: Type.Optional(
 		Type.String({
 			description: "URL to physics collision mesh (.glb) — public CDN, no auth required",
+		}),
+	),
+	spawnPoints: Type.Optional(
+		Type.Array(SpawnPointSchema, {
+			description: "LLM-suggested NPC placement positions, quick-selected in the NPC drawer",
 		}),
 	),
 });

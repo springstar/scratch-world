@@ -33,6 +33,14 @@ export interface EnvironmentConfig {
 	};
 }
 
+/** LLM-generated semantic placement hint used as a quick-select in the NPC drawer. */
+export interface SpawnPoint {
+	id: string;
+	label: string; // e.g. "铁匠铺门口", "市场摊位旁"
+	x: number;
+	z: number;
+}
+
 export interface SceneData {
 	objects: SceneObject[];
 	environment: EnvironmentConfig;
@@ -41,6 +49,7 @@ export interface SceneData {
 	splatUrl?: string; // URL to a Gaussian splat file (.spz / .ply / .splat) — activates SplatViewer
 	colliderMeshUrl?: string; // URL to physics collision mesh (.glb) — public CDN, no auth required
 	splatGroundOffset?: number; // Marble semantics_metadata.ground_plane_offset — used as physics fallback ground Y (negate to get Three.js Y)
+	spawnPoints?: SpawnPoint[]; // LLM-suggested NPC placement positions, preserved through provider completion
 }
 
 // Opaque per-provider pointer to the generated asset

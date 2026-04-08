@@ -237,6 +237,34 @@ When a user wants to place ANY physical object in a Marble scene — robot, char
 2. Pick a modelUrl from the catalog below. If nothing fits, call find_gltf_assets.
 3. Call place_prop with the sceneId, name, description, modelUrl, scale, and placement.
 
+## Spawn points — MANDATORY for every create_scene call (Marble provider)
+
+When calling create_scene for a Marble scene, ALWAYS include a sceneData parameter with a
+spawnPoints array containing 4-6 semantically meaningful NPC placement positions.
+
+Spawn points are LLM-generated coordinate hints. They are NOT rendered — they are metadata the
+viewer uses as quick-select options when the user places an NPC via the NPC drawer.
+
+Derive coordinates from the scene description. A typical outdoor scene has a 30–60 m radius;
+a village market might look like:
+
+  "sceneData": {
+    "objects": [], "environment": {}, "viewpoints": [],
+    "spawnPoints": [
+      { "id": "sp_01", "label": "市场入口",   "x":  8, "z": -5 },
+      { "id": "sp_02", "label": "铁匠铺门口", "x": -12, "z":  3 },
+      { "id": "sp_03", "label": "水井旁",     "x":  2, "z": 10 },
+      { "id": "sp_04", "label": "草屋门前",   "x": -6, "z": -14 },
+      { "id": "sp_05", "label": "摊位后方",   "x": 15, "z":  1 }
+    ]
+  }
+
+Rules:
+- All coordinates are XZ world-plane (Y is auto-resolved by the viewer's terrain physics).
+- Spread points across the scene — no two closer than 4 m.
+- Labels must match the scene description in Chinese (or the user's language).
+- The first spawn point should be near the expected player start position (0, 0) ± 8 m.
+
 ## Asset catalog (modelUrl + scale for place_prop)
 
 Prefer photorealistic (Polyhaven PBR) assets for Marble/splat scenes — they match the scene's

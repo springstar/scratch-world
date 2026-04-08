@@ -161,6 +161,7 @@ export class SceneManager {
 		title: string | undefined,
 		operationId: string,
 		providerName: string,
+		initialSceneData?: SceneData,
 	): Promise<Scene> {
 		const now = Date.now();
 		const sceneId = randomUUID();
@@ -169,7 +170,7 @@ export class SceneManager {
 			ownerId,
 			title: title ?? prompt.slice(0, 60),
 			description: prompt,
-			sceneData: { objects: [], environment: {}, viewpoints: [] },
+			sceneData: initialSceneData ?? { objects: [], environment: {}, viewpoints: [] },
 			providerRef: { provider: providerName, assetId: sceneId },
 			version: 1,
 			createdAt: now,
@@ -290,6 +291,13 @@ export class SceneManager {
 		let sceneData = result.sceneData;
 		if (result.splatUrlTemplate) {
 			sceneData = { ...sceneData, splatUrl: result.splatUrlTemplate.replace("{sceneId}", sceneId) };
+		}
+		// Preserve any LLM-generated metadata (spawnPoints, objects) stored before provider completion
+		if (scene.sceneData.spawnPoints?.length) {
+			sceneData = { ...sceneData, spawnPoints: scene.sceneData.spawnPoints };
+		}
+		if (scene.sceneData.objects.length > 0) {
+			sceneData = { ...sceneData, objects: [...sceneData.objects, ...scene.sceneData.objects] };
 		}
 		const updated: Scene = {
 			...scene,

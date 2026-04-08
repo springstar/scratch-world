@@ -36,6 +36,13 @@ export interface EnvironmentConfig {
   };
 }
 
+export interface SpawnPoint {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+}
+
 export interface SceneData {
   objects: SceneObject[];
   environment: EnvironmentConfig;
@@ -44,6 +51,7 @@ export interface SceneData {
   splatUrl?: string;
   colliderMeshUrl?: string;
   splatGroundOffset?: number; // Marble ground_plane_offset — negate for Three.js fallback Y
+  spawnPoints?: SpawnPoint[];
 }
 
 export interface SceneResponse {

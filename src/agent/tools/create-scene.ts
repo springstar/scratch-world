@@ -124,6 +124,7 @@ export function createSceneTool(
 					title,
 					operationId,
 					provider.name,
+					params.sceneData,
 				);
 				const url = viewerUrl(scene.sceneId);
 				generationQueue.enqueue({
