@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ASSET_CATALOG, type AssetEntry } from "../renderer/asset-catalog.js";
-import { addSceneNpc, removeSceneNpc, updateSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution, type EvolutionLogEntry } from "../api.js";
-import type { SceneObject, SceneResponse, SpawnPoint } from "../types.js";
+import { removeSceneNpc, updateSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution, type EvolutionLogEntry } from "../api.js";
+import type { SceneObject, SceneResponse } from "../types.js";
 
 // ── Skill catalog (UI-only metadata; tool logic stays server-side) ────────────
 const NPC_SKILLS: { id: string; name: string; description: string }[] = [
@@ -15,14 +15,23 @@ const NPC_SKILLS: { id: string; name: string; description: string }[] = [
   { id: "cook",       name: "烹饪",     description: "分享食谱和厨艺知识" },
 ];
 
+export interface PendingNpc {
+  name: string;
+  personality: string;
+  traits?: string;
+  skills?: string[];
+  modelUrl: string;
+  scale: number;
+}
+
 interface NpcDrawerProps {
   open: boolean;
   onClose: () => void;
   scene: SceneResponse | null;
   sessionId: string;
-  onNpcAdded: () => void;
   onNpcUpdated: () => void;
   onNpcDeleted: () => void;
+  onBeginPlacement: (npc: PendingNpc) => void;
 }
 
 type View = "list" | "add" | "edit";
@@ -120,20 +129,13 @@ export function NpcDrawer({
   onClose,
   scene,
   sessionId,
-  onNpcAdded,
   onNpcUpdated,
   onNpcDeleted,
+  onBeginPlacement,
 }: NpcDrawerProps) {
   const [view, setView] = useState<View>("list");
   const [editTarget, setEditTarget] = useState<SceneObject | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-
-  // Placement state — mirrors the prop placement flow
-  // selectedSpawn: a spawn point chip the user clicked (overrides near_camera)
-  // aimTarget: refreshed from __clickPosition on interval while add view is open
-  const [selectedSpawn, setSelectedSpawn] = useState<SpawnPoint | null>(null);
-  const [aimTarget, setAimTarget] = useState<{ x: number; y: number; z: number; ts: number } | null>(null);
-  const aimPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Add form state
   const [addName, setAddName] = useState("");
@@ -144,7 +146,6 @@ export function NpcDrawer({
   const [selectedModel, setSelectedModel] = useState<AssetEntry | null>(null);
   const [cdnUrl, setCdnUrl] = useState("");
   const [modelSearch, setModelSearch] = useState("");
-  const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
 
   // Edit form state
@@ -161,22 +162,6 @@ export function NpcDrawer({
   const [evolutionLoading, setEvolutionLoading] = useState(false);
   const [evolutionActionId, setEvolutionActionId] = useState<string | null>(null);
 
-  // Poll __clickPosition while the add view is open so the aim target badge stays current
-  useEffect(() => {
-    if (view !== "add") {
-      if (aimPollRef.current) { clearInterval(aimPollRef.current); aimPollRef.current = null; }
-      return;
-    }
-    const poll = () => {
-      const raw = (window as unknown as Record<string, unknown>).__clickPosition as
-        | { x: number; y: number; z: number; ts: number } | undefined;
-      setAimTarget(raw && Date.now() - raw.ts < 30_000 ? raw : null);
-    };
-    poll();
-    aimPollRef.current = setInterval(poll, 500);
-    return () => { if (aimPollRef.current) clearInterval(aimPollRef.current); };
-  }, [view]);
-
   useEffect(() => {
     if (view !== "edit" || !editTarget || !scene) return;
     setEvolutionLoading(true);
@@ -190,7 +175,6 @@ export function NpcDrawer({
   }, [view, editTarget, scene]);
 
   const npcs = scene?.sceneData.objects.filter((o) => o.type === "npc") ?? [];
-  const spawnPoints = scene?.sceneData.spawnPoints ?? [];
 
   const resetAdd = () => {
     setAddName("");
@@ -202,7 +186,6 @@ export function NpcDrawer({
     setModelSearch("");
     setModelTab("catalog");
     setAddError("");
-    setSelectedSpawn(null);
   };
 
   const openAdd = () => { resetAdd(); setView("add"); };
@@ -221,57 +204,20 @@ export function NpcDrawer({
   };
   const backToList = () => { setView("list"); setEditTarget(null); setDeleteConfirm(null); };
 
-  const handleAdd = async () => {
-    if (!scene) return;
+  const handleAdd = () => {
     const modelUrl = modelTab === "catalog" ? selectedModel?.url : cdnUrl.trim();
     if (!addName.trim()) { setAddError("请填写名字"); return; }
     if (!addPersonality.trim()) { setAddError("请填写性格"); return; }
     if (!modelUrl) { setAddError("请选择或输入 3D 模型"); return; }
-
-    // Placement priority (same as prop placement):
-    // 1. Fresh F-key aim click (<30 s) — most precise
-    // 2. Selected spawn point chip — semantic pre-set
-    // 3. near_camera fallback
-    const playerPos = (window as unknown as Record<string, unknown>).__playerPosition as
-      | { x: number; y: number; z: number }
-      | undefined;
-    let placement: "exact" | "near_camera" = "near_camera";
-    let playerPosition: { x: number; y: number; z: number } | undefined = playerPos;
-
-    if (aimTarget) {
-      placement = "exact";
-      playerPosition = { x: aimTarget.x, y: aimTarget.y, z: aimTarget.z };
-    } else if (selectedSpawn) {
-      placement = "exact";
-      playerPosition = { x: selectedSpawn.x, y: 0, z: selectedSpawn.z };
-    }
-
-    // Include camera forward so near_camera placement spawns in front of the player
-    const cameraForward = (window as unknown as Record<string, unknown>).__cameraForward as
-      | { x: number; z: number }
-      | undefined;
-
-    setAdding(true);
-    setAddError("");
-    try {
-      await addSceneNpc(scene.sceneId, sessionId, {
-        name: addName.trim(),
-        personality: addPersonality.trim(),
-        traits: addTraits.trim() || undefined,
-        skills: addSkills.length > 0 ? addSkills : undefined,
-        modelUrl,
-        scale: modelTab === "catalog" ? (selectedModel?.scale ?? 1) : 1,
-        placement,
-        playerPosition,
-        cameraForward,
-      });
-      backToList();
-      onNpcAdded();
-    } catch (err) {
-      setAddError(err instanceof Error ? err.message : "添加失败");
-    } finally {
-      setAdding(false);
-    }
+    onBeginPlacement({
+      name: addName.trim(),
+      personality: addPersonality.trim(),
+      traits: addTraits.trim() || undefined,
+      skills: addSkills.length > 0 ? addSkills : undefined,
+      modelUrl,
+      scale: modelTab === "catalog" ? (selectedModel?.scale ?? 1) : 1,
+    });
+    backToList();
   };
 
   const handleSaveEdit = async () => {
@@ -530,68 +476,6 @@ export function NpcDrawer({
               )}
             </div>
 
-            {/* Placement section — identical flow to prop placement */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <span style={LABEL_STYLE}>放置位置</span>
-
-              {/* Spawn point chips (if the scene has LLM-generated spawn points) */}
-              {spawnPoints.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {spawnPoints.map((sp) => {
-                    const active = !aimTarget && selectedSpawn?.id === sp.id;
-                    return (
-                      <button
-                        key={sp.id}
-                        title={`x=${sp.x.toFixed(1)}, z=${sp.z.toFixed(1)}`}
-                        onClick={() => setSelectedSpawn(active ? null : sp)}
-                        style={{
-                          padding: "4px 10px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-                          border: `1px solid ${active ? "rgba(100,180,255,0.6)" : "rgba(100,140,255,0.25)"}`,
-                          background: active ? "rgba(60,120,255,0.2)" : "rgba(255,255,255,0.04)",
-                          color: active ? "rgba(160,210,255,0.95)" : "rgba(160,170,200,0.65)",
-                          transition: "all 0.15s",
-                        }}
-                      >
-                        {sp.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: 11, color: "rgba(120,130,160,0.5)", fontStyle: "italic" }}>
-                  暂无推荐位置，在场景中点击地面选择放置点
-                </div>
-              )}
-
-              {/* Aim target status badge */}
-              <div style={{
-                display: "flex", alignItems: "center", gap: 8,
-                background: aimTarget ? "rgba(40,160,100,0.1)" : "rgba(255,255,255,0.04)",
-                border: `1px solid ${aimTarget ? "rgba(60,200,120,0.3)" : "rgba(140,100,255,0.18)"}`,
-                borderRadius: 7, padding: "7px 10px", fontSize: 12,
-              }}>
-                <span style={{
-                  width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                  background: aimTarget ? "rgba(80,220,140,0.9)" : "rgba(140,140,160,0.4)",
-                }} />
-                {aimTarget
-                  ? <span style={{ color: "rgba(140,220,160,0.9)" }}>
-                      已瞄准 ({aimTarget.x.toFixed(1)}, {aimTarget.z.toFixed(1)})
-                    </span>
-                  : selectedSpawn
-                    ? <span style={{ color: "rgba(160,210,255,0.8)" }}>
-                        已选：{selectedSpawn.label} ({selectedSpawn.x.toFixed(1)}, {selectedSpawn.z.toFixed(1)})
-                      </span>
-                    : <span style={{ color: "rgba(140,140,180,0.6)" }}>
-                        未选择位置 — 将生成在镜头前方
-                      </span>
-                }
-              </div>
-              <div style={{ fontSize: 11, color: "rgba(120,130,160,0.6)", lineHeight: 1.4 }}>
-                在场景中点击地面设置精确坐标，或从上方选择预设位置
-              </div>
-            </div>
-
             {addError && (
               <div style={{ fontSize: 12, color: "rgba(255,130,130,0.9)", background: "rgba(255,60,60,0.08)", borderRadius: 6, padding: "6px 10px" }}>
                 {addError}
@@ -600,8 +484,8 @@ export function NpcDrawer({
           </div>
 
           <div style={{ padding: "12px 16px", borderTop: "1px solid rgba(140,100,255,0.15)", flexShrink: 0 }}>
-            <button onClick={handleAdd} disabled={adding} style={{ ...BTN_PRIMARY, opacity: adding ? 0.6 : 1 }}>
-              {adding ? "添加中..." : "确定放置"}
+            <button onClick={handleAdd} style={BTN_PRIMARY}>
+              确定放置
             </button>
           </div>
         </>

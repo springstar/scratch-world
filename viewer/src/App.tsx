@@ -11,8 +11,9 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, fetchSceneList, deleteScene } from "./api.js";
+import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
+import type { PendingNpc } from "./components/NpcDrawer.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -79,6 +80,7 @@ export function App() {
   const [npcSpeech, setNpcSpeech] = useState<{ npcId: string; npcName: string; text: string } | null>(null);
   const npcSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showNpcDrawer, setShowNpcDrawer] = useState(false);
+  const [pendingNpc, setPendingNpc] = useState<PendingNpc | null>(null);
 
   // NPC chat session
   const [npcChatTarget, setNpcChatTarget] = useState<{ objectId: string; name: string } | null>(null);
@@ -474,6 +476,22 @@ export function App() {
               onNpcApproach={handleNpcApproach}
               onNpcLeave={handleNpcLeave}
               npcSpeech={npcSpeech}
+              npcPlacementPending={pendingNpc !== null}
+              onNpcPlace={(pos) => {
+                if (!pendingNpc || !scene) return;
+                const fwd = (window as unknown as Record<string, unknown>).__cameraForward as
+                  | { x: number; z: number } | undefined;
+                addSceneNpc(scene.sceneId, sessionId, {
+                  ...pendingNpc,
+                  placement: "exact",
+                  playerPosition: pos,
+                  cameraForward: fwd,
+                })
+                  .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                  .catch(console.warn);
+                setPendingNpc(null);
+              }}
+              onNpcPlaceCancel={() => setPendingNpc(null)}
               onPlacementRequest={(text) => { void handleSend(text); }}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
@@ -620,9 +638,12 @@ export function App() {
         onClose={() => setShowNpcDrawer(false)}
         scene={scene}
         sessionId={sessionId}
-        onNpcAdded={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
         onNpcUpdated={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
         onNpcDeleted={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
+        onBeginPlacement={(npc) => {
+          setPendingNpc(npc);
+          setShowNpcDrawer(false);
+        }}
       />
 
       {/* NPC chat overlay — shown when interacting with an NPC */}

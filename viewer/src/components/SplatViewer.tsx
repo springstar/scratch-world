@@ -52,9 +52,12 @@ interface Props {
   onNpcApproach?: (objectId: string, name: string) => void;
   onNpcLeave?: () => void;
   npcSpeech?: { npcId: string; npcName: string; text: string } | null;
+  npcPlacementPending?: boolean;
+  onNpcPlace?: (pos: { x: number; y: number; z: number }) => void;
+  onNpcPlaceCancel?: () => void;
 }
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -81,6 +84,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const npcPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
   const onPlacementRequestRef = useRef(onPlacementRequest);
   onPlacementRequestRef.current = onPlacementRequest;
+  const onNpcPlaceRef = useRef(onNpcPlace);
+  onNpcPlaceRef.current = onNpcPlace;
+  const onNpcPlaceCancelRef = useRef(onNpcPlaceCancel);
+  onNpcPlaceCancelRef.current = onNpcPlaceCancel;
+  const npcPlacementPendingRef = useRef(npcPlacementPending);
+  npcPlacementPendingRef.current = npcPlacementPending;
   const onNpcApproachRef = useRef(onNpcApproach);
   onNpcApproachRef.current = onNpcApproach;
   const onNpcLeaveRef = useRef(onNpcLeave);
@@ -211,6 +220,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               ts: Date.now(),
             };
             (window as unknown as Record<string, unknown>).__clickPosition = pt;
+            // If NPC placement is pending, deliver the hit position and consume the click
+            if (npcPlacementPendingRef.current) {
+              onNpcPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
+              return;
+            }
             // Show 2-second visual indicator dot at screen position
             if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
             setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top });
@@ -693,6 +707,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           // If already in free-fly: free-fly loop continues; dialog is shown on top
           return;
         }
+        // ESC key: cancel pending NPC placement if active
+        if (e.key === "Escape" && npcPlacementPendingRef.current) {
+          onNpcPlaceCancelRef.current?.();
+          return;
+        }
         if (k === "g" && document.pointerLockElement === cv) {
           // Spawn last-selected catalog asset (or prop_boom_box as default) ahead of camera.
           // Ephemeral — for quick physics interaction, not persisted.
@@ -794,7 +813,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: "block", cursor: placementMode ? "crosshair" : "default" }}
+        style={{ width: "100%", height: "100%", display: "block", cursor: (placementMode || npcPlacementPending) ? "crosshair" : "default" }}
       />
 
       {/* Prop picker overlay */}
@@ -914,6 +933,25 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             </div>
           </form>
           <div style={{ fontSize: 11, color: "rgba(110,130,170,0.45)", textAlign: "center" }}>ESC 取消</div>
+        </div>
+      )}
+
+      {/* NPC placement hint — shown when App.tsx has a pending NPC waiting to be placed */}
+      {npcPlacementPending && (
+        <div style={{
+          position: "absolute", bottom: 90, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(8,8,24,0.92)", backdropFilter: "blur(10px)",
+          border: "1px solid rgba(120,160,255,0.35)", borderRadius: 12,
+          padding: "12px 20px",
+          color: "rgba(200,220,255,0.95)",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          fontSize: 14, zIndex: 20,
+          display: "flex", alignItems: "center", gap: 10,
+          whiteSpace: "nowrap",
+        }}>
+          <span style={{ fontSize: 18 }}>🧍</span>
+          <span>点击地面放置 NPC</span>
+          <span style={{ fontSize: 11, color: "rgba(140,150,180,0.5)", marginLeft: 4 }}>· ESC 取消</span>
         </div>
       )}
 
