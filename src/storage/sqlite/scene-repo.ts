@@ -173,6 +173,20 @@ export class SqliteSceneRepo implements SceneRepository {
 		return rows.map(rowToScene);
 	}
 
+	async findAll(): Promise<Scene[]> {
+		const rows = this.db.prepare<[], SceneRow>("SELECT * FROM scenes ORDER BY updated_at DESC").all();
+		return rows.map(rowToScene);
+	}
+
+	async findByProvider(provider: string): Promise<Scene[]> {
+		const rows = this.db
+			.prepare<[string], SceneRow>(
+				"SELECT * FROM scenes WHERE json_extract(provider_ref, '$.provider') = ? ORDER BY updated_at DESC",
+			)
+			.all(provider);
+		return rows.map(rowToScene);
+	}
+
 	async delete(sceneId: string): Promise<void> {
 		this.db.prepare<[string]>("DELETE FROM scenes WHERE scene_id = ?").run(sceneId);
 	}

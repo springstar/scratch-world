@@ -114,8 +114,9 @@ export class SceneManager {
 		return this.repo.findById(sceneId);
 	}
 
-	async listScenes(ownerId: string): Promise<Scene[]> {
-		return this.repo.findByOwner(ownerId);
+	async listScenes(): Promise<Scene[]> {
+		const provider = this.providerRegistryRef.current.getActiveProvider().name;
+		return this.repo.findByProvider(provider);
 	}
 
 	async deleteScene(sceneId: string, ownerId: string): Promise<void> {

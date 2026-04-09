@@ -13,7 +13,9 @@ import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
-import type { PendingNpc } from "./components/NpcDrawer.js";
+import type { PendingNpc, GeneratedNpcModel } from "./components/NpcDrawer.js";
+import { PropDrawer } from "./components/PropDrawer.js";
+import type { PendingProp, GeneratedProp } from "./components/PropDrawer.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -81,6 +83,44 @@ export function App() {
   const npcSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showNpcDrawer, setShowNpcDrawer] = useState(false);
   const [pendingNpc, setPendingNpc] = useState<PendingNpc | null>(null);
+  const [showPropDrawer, setShowPropDrawer] = useState(false);
+  const [pendingProp, setPendingProp] = useState<PendingProp | null>(null);
+
+  // Prop library — persisted to localStorage so it survives page reloads
+  const [generatedProps, setGeneratedProps] = useState<GeneratedProp[]>(() => {
+    try {
+      const raw = localStorage.getItem("scratch_world_prop_library");
+      return raw ? (JSON.parse(raw) as GeneratedProp[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const addGeneratedProp = useCallback((prop: GeneratedProp) => {
+    setGeneratedProps((prev) => {
+      const next = [prop, ...prev];
+      try { localStorage.setItem("scratch_world_prop_library", JSON.stringify(next)); } catch { /* non-fatal */ }
+      return next;
+    });
+  }, []);
+
+  // Generated NPC model library — persisted to localStorage
+  const [generatedNpcModels, setGeneratedNpcModels] = useState<GeneratedNpcModel[]>(() => {
+    try {
+      const raw = localStorage.getItem("scratch_world_npc_model_library");
+      return raw ? (JSON.parse(raw) as GeneratedNpcModel[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const addGeneratedNpcModel = useCallback((m: GeneratedNpcModel) => {
+    setGeneratedNpcModels((prev) => {
+      const next = [m, ...prev];
+      try { localStorage.setItem("scratch_world_npc_model_library", JSON.stringify(next)); } catch { /* non-fatal */ }
+      return next;
+    });
+  }, []);
 
   // NPC chat session
   const [npcChatTarget, setNpcChatTarget] = useState<{ objectId: string; name: string } | null>(null);
@@ -92,6 +132,7 @@ export function App() {
   // Load a scene and jump to its first viewpoint
   const loadSceneById = useCallback(
     (sceneId: string, opts?: { token?: string; session?: string }) => {
+      const prevObjects = sceneRef.current?.sceneData.objects ?? [];
       fetchScene(sceneId, opts)
         .then((s) => {
           setScene(s);
@@ -99,6 +140,22 @@ export function App() {
           setActiveViewpoint(s.sceneData.viewpoints[0] ?? null);
           greetedNpcsRef.current.clear();
           history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
+
+          // Inject newly added objects into the live physics world so a full
+          // page reload is not required after placement.
+          const prevIds = new Set(prevObjects.map((o) => o.objectId));
+          const loadPropFn = (window as unknown as Record<string, unknown>).__loadSceneProp as
+            | ((obj: SceneObject) => Promise<void>) | undefined;
+          const loadNpcFn = (window as unknown as Record<string, unknown>).__loadSceneNpc as
+            | ((obj: SceneObject) => Promise<void>) | undefined;
+          for (const obj of s.sceneData.objects) {
+            if (prevIds.has(obj.objectId)) continue;
+            if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string") {
+              loadPropFn?.(obj).catch(console.warn);
+            } else if (obj.type === "npc" && obj.interactable) {
+              loadNpcFn?.(obj).catch(console.warn);
+            }
+          }
         })
         .catch((err) => {
           setSceneError(err instanceof Error ? err.message : "Failed to load scene");
@@ -300,12 +357,12 @@ export function App() {
 
     if (verb === "/list" || verb === "/find") {
       try {
-        const all = await fetchSceneList(sessionId);
-        const marble = all
-          .filter((s) => s.provider === "marble" && s.status === "ready")
+        const all = await fetchSceneList();
+        const ready = all
+          .filter((s) => s.status === "ready")
           .sort((a, b) => b.updatedAt - a.updatedAt);
         const q = arg.toLowerCase();
-        const scenes = verb === "/find" && q ? marble.filter((s) => fuzzyMatch(s.title.toLowerCase(), q)) : marble;
+        const scenes = verb === "/find" && q ? ready.filter((s) => fuzzyMatch(s.title.toLowerCase(), q)) : ready;
         const text = verb === "/find" && q
           ? (scenes.length > 0 ? `找到 ${scenes.length} 个场景` : `未找到匹配 "${arg}" 的场景`)
           : `${scenes.length} 个场景`;
@@ -417,6 +474,7 @@ export function App() {
         npcObjectId: npcChatTarget.objectId,
         userText: text,
         playerPosition,
+        chatHistory: npcChatHistory,
       }).catch((err) => {
         setNpcChatPending(false);
         setNpcChatHistory((prev) => [...prev, { role: "npc", text: `(出错了: ${err instanceof Error ? err.message : "未知错误"})` }]);
@@ -428,6 +486,8 @@ export function App() {
   const handleNpcApproach = useCallback(
     (objectId: string, name: string) => {
       if (!scene) return;
+      // Mutual exclusion: suppress NPC approach while any placement is in progress
+      if (pendingProp !== null || pendingNpc !== null) return;
       const key = `${scene.sceneId}:${objectId}`;
       // Open chat overlay for any new NPC (even re-approaches after leaving)
       if (document.pointerLockElement) document.exitPointerLock();
@@ -444,7 +504,7 @@ export function App() {
         (err: unknown) => { console.error("[npc-greet]", err); },
       );
     },
-    [scene, sessionId],
+    [scene, sessionId, pendingProp, pendingNpc],
   );
 
   const handleNpcLeave = useCallback(() => {
@@ -501,6 +561,31 @@ export function App() {
                 }
               }}
               onNpcPlaceCancel={() => setPendingNpc(null)}
+              propPlacementPending={pendingProp !== null}
+              onPropPlace={(pos) => {
+                if (!pendingProp || !scene) return;
+                const propSnapshot = pendingProp;
+                setPendingProp(null);
+                if (propSnapshot.objectId) {
+                  // Re-placing an existing prop — just update its position
+                  patchSceneObjectPosition(scene.sceneId, sessionId, propSnapshot.objectId, pos)
+                    .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                    .catch(console.warn);
+                } else {
+                  // Placing a newly generated prop
+                  addSceneProp(scene.sceneId, sessionId, {
+                    name: propSnapshot.name,
+                    description: propSnapshot.description,
+                    modelUrl: propSnapshot.modelUrl,
+                    scale: propSnapshot.scale,
+                    placement: "exact",
+                    playerPosition: pos,
+                  })
+                    .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                    .catch(console.warn);
+                }
+              }}
+              onPropPlaceCancel={() => setPendingProp(null)}
               onPlacementRequest={(text) => { void handleSend(text); }}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
@@ -622,28 +707,48 @@ export function App() {
         )}
       </div>
 
-      {/* NPC button — top-right, shown when a scene is loaded */}
+      {/* Toolbar buttons — top-right, shown when a scene is loaded */}
       {scene && (
-        <button
-          onClick={() => {
-              setShowNpcDrawer((v) => {
-                if (!v) setNpcChatTarget(null); // close NPC chat when opening drawer
+        <div style={{ position: "fixed", top: 16, right: 16, display: "flex", gap: 8, zIndex: 105 }}>
+          <button
+            onClick={() => {
+              setShowPropDrawer((v) => {
+                if (!v) { setShowNpcDrawer(false); }
                 return !v;
               });
             }}
-          style={{
-            position: "fixed", top: 16, right: 16,
-            background: showNpcDrawer ? "rgba(120,80,255,0.4)" : "rgba(20,15,40,0.75)",
-            border: "1px solid rgba(140,100,255,0.35)",
-            borderRadius: 8, padding: "7px 14px",
-            color: "rgba(200,220,255,0.9)", fontSize: 13,
-            cursor: "pointer", zIndex: 105,
-            backdropFilter: "blur(8px)",
-            fontFamily: "system-ui, -apple-system, sans-serif",
-          }}
-        >
-          NPC
-        </button>
+            style={{
+              background: showPropDrawer ? "rgba(80,200,140,0.35)" : "rgba(20,15,40,0.75)",
+              border: "1px solid rgba(80,200,140,0.35)",
+              borderRadius: 8, padding: "7px 14px",
+              color: "rgba(200,255,220,0.9)", fontSize: 13,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              fontFamily: "system-ui, -apple-system, sans-serif",
+            }}
+          >
+            物件
+          </button>
+          <button
+            onClick={() => {
+                setShowNpcDrawer((v) => {
+                  if (!v) { setNpcChatTarget(null); setShowPropDrawer(false); }
+                  return !v;
+                });
+              }}
+            style={{
+              background: showNpcDrawer ? "rgba(120,80,255,0.4)" : "rgba(20,15,40,0.75)",
+              border: "1px solid rgba(140,100,255,0.35)",
+              borderRadius: 8, padding: "7px 14px",
+              color: "rgba(200,220,255,0.9)", fontSize: 13,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              fontFamily: "system-ui, -apple-system, sans-serif",
+            }}
+          >
+            NPC
+          </button>
+        </div>
       )}
 
       {/* NPC management drawer */}
@@ -656,7 +761,25 @@ export function App() {
         onNpcDeleted={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
         onBeginPlacement={(npc) => {
           setPendingNpc(npc);
+          setNpcChatTarget(null);
           setShowNpcDrawer(false);
+        }}
+        generatedNpcModels={generatedNpcModels}
+        onNpcModelGenerated={addGeneratedNpcModel}
+      />
+
+      {/* Prop generation drawer */}
+      <PropDrawer
+        open={showPropDrawer}
+        onClose={() => setShowPropDrawer(false)}
+        scene={scene}
+        sessionId={sessionId}
+        generatedProps={generatedProps}
+        onPropGenerated={addGeneratedProp}
+        onBeginPlacement={(prop) => {
+          setPendingProp(prop);
+          setNpcChatTarget(null);
+          setShowPropDrawer(false);
         }}
       />
 

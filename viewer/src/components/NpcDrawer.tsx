@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ASSET_CATALOG, type AssetEntry } from "../renderer/asset-catalog.js";
-import { removeSceneNpc, updateSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution, type EvolutionLogEntry } from "../api.js";
+import { removeSceneNpc, updateSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution, type EvolutionLogEntry, generateProp, pollGenerateProp, type GeneratePropJobStatus } from "../api.js";
 import type { SceneObject, SceneResponse } from "../types.js";
 
 // ── Skill catalog (UI-only metadata; tool logic stays server-side) ────────────
@@ -26,6 +26,13 @@ export interface PendingNpc {
   objectId?: string;
 }
 
+export interface GeneratedNpcModel {
+  url: string;
+  scale: number;
+  thumbnailUrl: string | null;
+  generatedAt: number;
+}
+
 interface NpcDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -34,10 +41,12 @@ interface NpcDrawerProps {
   onNpcUpdated: () => void;
   onNpcDeleted: () => void;
   onBeginPlacement: (npc: PendingNpc) => void;
+  generatedNpcModels: GeneratedNpcModel[];
+  onNpcModelGenerated: (m: GeneratedNpcModel) => void;
 }
 
 type View = "list" | "add" | "edit";
-type ModelTab = "catalog" | "url";
+type ModelTab = "catalog" | "url" | "generate";
 
 const CHARACTER_MODELS: AssetEntry[] = ASSET_CATALOG.filter((a) => a.type === "character");
 
@@ -134,6 +143,8 @@ export function NpcDrawer({
   onNpcUpdated,
   onNpcDeleted,
   onBeginPlacement,
+  generatedNpcModels,
+  onNpcModelGenerated,
 }: NpcDrawerProps) {
   const [view, setView] = useState<View>("list");
   const [editTarget, setEditTarget] = useState<SceneObject | null>(null);
@@ -149,6 +160,19 @@ export function NpcDrawer({
   const [cdnUrl, setCdnUrl] = useState("");
   const [modelSearch, setModelSearch] = useState("");
   const [addError, setAddError] = useState("");
+
+  // Generation state (used when modelTab === "generate")
+  const [genInputTab, setGenInputTab] = useState<"text" | "image">("text");
+  const [genDescription, setGenDescription] = useState("");
+  const [genImageFile, setGenImageFile] = useState<File | null>(null);
+  const [genImagePreview, setGenImagePreview] = useState<string | null>(null);
+  const [genQuality, setGenQuality] = useState<"fast" | "balanced" | "quality">("balanced");
+  const [genStatus, setGenStatus] = useState<"idle" | "generating" | "error">("idle");
+  const [genError, setGenError] = useState("");
+  const [generatedModelUrl, setGeneratedModelUrl] = useState<string | null>(null);
+  const [generatedModelScale, setGeneratedModelScale] = useState(1);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Edit form state
   const [editName, setEditName] = useState("");
@@ -188,6 +212,15 @@ export function NpcDrawer({
     setModelSearch("");
     setModelTab("catalog");
     setAddError("");
+    setGenInputTab("text");
+    setGenDescription("");
+    setGenImageFile(null);
+    setGenImagePreview(null);
+    setGenStatus("idle");
+    setGenError("");
+    setGeneratedModelUrl(null);
+    setGeneratedModelScale(1);
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
   };
 
   const openAdd = () => { resetAdd(); setView("add"); };
@@ -206,18 +239,72 @@ export function NpcDrawer({
   };
   const backToList = () => { setView("list"); setEditTarget(null); setDeleteConfirm(null); };
 
+  const handleGenerate = async () => {
+    if (!scene) return;
+    if (genInputTab === "text" && !genDescription.trim()) return;
+    if (genInputTab === "image" && !genImageFile) return;
+    setGenStatus("generating");
+    setGenError("");
+    setGeneratedModelUrl(null);
+    try {
+      let payload: Parameters<typeof generateProp>[2];
+      if (genInputTab === "text") {
+        payload = { description: genDescription.trim(), quality: genQuality };
+      } else {
+        const base64 = await readFileAsBase64(genImageFile!);
+        payload = { imageBase64: base64, imageMimeType: genImageFile!.type, quality: genQuality };
+      }
+      const { jobId } = await generateProp(scene.sceneId, sessionId, payload);
+      const check = async () => {
+        try {
+          const result: GeneratePropJobStatus = await pollGenerateProp(scene.sceneId, jobId);
+          if (result.status === "pending") {
+            pollTimerRef.current = setTimeout(check, 1500);
+            return;
+          }
+          if (result.status === "done") {
+            setGeneratedModelUrl(result.modelUrl);
+            setGeneratedModelScale(result.scale);
+            setGenStatus("idle");
+            onNpcModelGenerated({ url: result.modelUrl, scale: result.scale, thumbnailUrl: result.thumbnailUrl ?? null, generatedAt: Date.now() });
+          } else {
+            setGenStatus("error");
+            setGenError(result.error ?? "生成失败");
+          }
+        } catch (err) {
+          setGenStatus("error");
+          setGenError(err instanceof Error ? err.message : "轮询失败");
+        }
+      };
+      pollTimerRef.current = setTimeout(check, 1500);
+    } catch (err) {
+      setGenStatus("error");
+      setGenError(err instanceof Error ? err.message : "生成失败");
+    }
+  };
+
   const handleAdd = () => {
-    const modelUrl = modelTab === "catalog" ? selectedModel?.url : cdnUrl.trim();
+    const modelUrl =
+      modelTab === "catalog" ? selectedModel?.url :
+      modelTab === "generate" ? (generatedModelUrl ?? undefined) :
+      cdnUrl.trim();
+    const modelScale =
+      modelTab === "catalog" ? (selectedModel?.scale ?? 1) :
+      modelTab === "generate" ? generatedModelScale :
+      1;
     if (!addName.trim()) { setAddError("请填写名字"); return; }
     if (!addPersonality.trim()) { setAddError("请填写性格"); return; }
-    if (!modelUrl) { setAddError("请选择或输入 3D 模型"); return; }
+    if (!modelUrl) {
+      setAddError(modelTab === "generate" ? "请先生成模型" : "请选择或输入 3D 模型");
+      return;
+    }
     onBeginPlacement({
       name: addName.trim(),
       personality: addPersonality.trim(),
       traits: addTraits.trim() || undefined,
       skills: addSkills.length > 0 ? addSkills : undefined,
       modelUrl,
-      scale: modelTab === "catalog" ? (selectedModel?.scale ?? 1) : 1,
+      scale: modelScale,
     });
     backToList();
   };
@@ -448,15 +535,15 @@ export function NpcDrawer({
             <div>
               <label style={LABEL_STYLE}>3D 模型</label>
               <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                {(["catalog", "url"] as ModelTab[]).map((tab) => (
-                  <button key={tab} onClick={() => setModelTab(tab)} style={{
+                {(["catalog", "url", "generate"] as ModelTab[]).map((t) => (
+                  <button key={t} onClick={() => setModelTab(t)} style={{
                     ...BTN_GHOST,
                     flex: 1,
-                    borderColor: modelTab === tab ? "rgba(100,140,255,0.6)" : undefined,
-                    color: modelTab === tab ? "rgba(200,220,255,0.95)" : undefined,
-                    background: modelTab === tab ? "rgba(100,140,255,0.15)" : undefined,
+                    borderColor: modelTab === t ? "rgba(100,140,255,0.6)" : undefined,
+                    color: modelTab === t ? "rgba(200,220,255,0.95)" : undefined,
+                    background: modelTab === t ? "rgba(100,140,255,0.15)" : undefined,
                   }}>
-                    {tab === "catalog" ? "资源库" : "URL"}
+                    {{ catalog: "资源库", url: "URL", generate: "生成" }[t]}
                   </button>
                 ))}
               </div>
@@ -506,6 +593,152 @@ export function NpcDrawer({
               {modelTab === "url" && (
                 <input value={cdnUrl} onChange={(e) => setCdnUrl(e.target.value)}
                   placeholder="https://example.com/character.glb" style={INPUT_STYLE} />
+              )}
+
+              {modelTab === "generate" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {/* Sub-tabs: text / image */}
+                  <div style={{ display: "flex", gap: 5 }}>
+                    {(["text", "image"] as const).map((it) => (
+                      <button key={it} onClick={() => setGenInputTab(it)} style={{
+                        flex: 1,
+                        padding: "5px 0",
+                        background: genInputTab === it ? "rgba(100,140,255,0.18)" : "transparent",
+                        border: `1px solid ${genInputTab === it ? "rgba(100,140,255,0.45)" : "rgba(100,80,200,0.2)"}`,
+                        borderRadius: 6,
+                        color: genInputTab === it ? "rgba(200,220,255,0.95)" : "rgba(140,150,200,0.6)",
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}>
+                        {it === "text" ? "文字描述" : "上传图片"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {genInputTab === "text" ? (
+                    <textarea
+                      style={{ ...INPUT_STYLE, minHeight: 60, resize: "vertical" }}
+                      placeholder="例：一位留着长须的老铁匠，面色古铜"
+                      value={genDescription}
+                      onChange={(e) => setGenDescription(e.target.value)}
+                      disabled={genStatus === "generating"}
+                    />
+                  ) : (
+                    <div>
+                      <div
+                        style={{
+                          border: "1px dashed rgba(140,100,255,0.35)",
+                          borderRadius: 7,
+                          padding: "12px",
+                          textAlign: "center",
+                          cursor: genStatus === "generating" ? "default" : "pointer",
+                          color: "rgba(140,150,200,0.6)",
+                          fontSize: 12,
+                          background: "rgba(255,255,255,0.03)",
+                        }}
+                        onClick={() => genStatus !== "generating" && fileInputRef.current?.click()}
+                      >
+                        {genImagePreview ? (
+                          <img src={genImagePreview} alt="preview" style={{ maxWidth: "100%", maxHeight: 100, borderRadius: 4, objectFit: "contain" }} />
+                        ) : (
+                          <span>点击选择图片</span>
+                        )}
+                      </div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          setGenImageFile(file);
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onload = (ev) => setGenImagePreview(ev.target?.result as string);
+                            reader.readAsDataURL(file);
+                          } else {
+                            setGenImagePreview(null);
+                          }
+                        }}
+                        disabled={genStatus === "generating"}
+                      />
+                    </div>
+                  )}
+
+                  {/* Quality selector */}
+                  <div style={{ display: "flex", gap: 5 }}>
+                    {(["fast", "balanced", "quality"] as const).map((q) => (
+                      <button key={q} onClick={() => setGenQuality(q)} disabled={genStatus === "generating"} style={{
+                        flex: 1,
+                        padding: "4px 0",
+                        background: genQuality === q ? "rgba(80,120,255,0.2)" : "transparent",
+                        border: `1px solid ${genQuality === q ? "rgba(100,140,255,0.5)" : "rgba(100,80,200,0.2)"}`,
+                        borderRadius: 5,
+                        color: genQuality === q ? "rgba(200,220,255,0.95)" : "rgba(140,150,200,0.55)",
+                        fontSize: 11,
+                        cursor: genStatus === "generating" ? "default" : "pointer",
+                      }}>
+                        {{ fast: "快速", balanced: "均衡", quality: "精细" }[q]}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Generate button */}
+                  <button
+                    onClick={handleGenerate}
+                    disabled={genStatus === "generating" || (genInputTab === "text" ? !genDescription.trim() : !genImageFile)}
+                    style={{
+                      ...BTN_PRIMARY,
+                      opacity: (genStatus === "generating" || (genInputTab === "text" ? !genDescription.trim() : !genImageFile)) ? 0.45 : 1,
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    }}
+                  >
+                    {genStatus === "generating" ? (
+                      <>
+                        <span style={{ display: "inline-block", width: 11, height: 11, border: "2px solid rgba(200,220,255,0.3)", borderTopColor: "rgba(200,220,255,0.9)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                        生成中...
+                      </>
+                    ) : "生成模型"}
+                  </button>
+
+                  {genStatus === "error" && (
+                    <div style={{ fontSize: 12, color: "rgba(255,120,120,0.85)", padding: "5px 8px", background: "rgba(255,60,60,0.08)", borderRadius: 5, border: "1px solid rgba(255,80,80,0.2)", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ flex: 1 }}>{genError}</span>
+                      <button onClick={handleGenerate} style={{ flexShrink: 0, padding: "2px 8px", background: "rgba(100,140,255,0.2)", border: "1px solid rgba(100,140,255,0.4)", borderRadius: 4, color: "rgba(180,200,255,0.9)", fontSize: 11, cursor: "pointer" }}>重试</button>
+                    </div>
+                  )}
+
+                  {generatedModelUrl && genStatus !== "generating" && (
+                    <div style={{ fontSize: 12, color: "rgba(100,220,140,0.9)", padding: "5px 8px", background: "rgba(40,160,80,0.1)", borderRadius: 5, border: "1px solid rgba(80,200,120,0.3)" }}>
+                      模型已生成，填写上方信息后点击确定放置
+                    </div>
+                  )}
+
+                  {/* Previously generated model library */}
+                  {generatedNpcModels.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, color: "rgba(120,130,180,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>已生成模型</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {generatedNpcModels.map((m) => {
+                          const isSelected = generatedModelUrl === m.url;
+                          return (
+                            <div
+                              key={m.generatedAt}
+                              onClick={() => { setGeneratedModelUrl(m.url); setGeneratedModelScale(m.scale); }}
+                              style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", borderRadius: 6, border: `1px solid ${isSelected ? "rgba(100,140,255,0.6)" : "rgba(100,100,160,0.2)"}`, background: isSelected ? "rgba(80,110,255,0.12)" : "rgba(255,255,255,0.03)", cursor: "pointer" }}
+                            >
+                              <div style={{ width: 32, height: 32, borderRadius: 4, background: "rgba(60,70,120,0.3)", flexShrink: 0, overflow: "hidden" }}>
+                                {m.thumbnailUrl ? <img src={m.thumbnailUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 16, opacity: 0.3 }}>&#9723;</span>}
+                              </div>
+                              <span style={{ fontSize: 11, color: "rgba(180,190,220,0.8)", flex: 1 }}>{new Date(m.generatedAt).toLocaleTimeString()}</span>
+                              {isSelected && <span style={{ fontSize: 10, color: "rgba(100,180,255,0.9)" }}>已选</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -619,6 +852,16 @@ export function NpcDrawer({
           </div>
         </>
       )}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => res((ev.target?.result as string).split(",")[1]);
+    reader.onerror = rej;
+    reader.readAsDataURL(file);
+  });
 }

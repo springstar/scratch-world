@@ -38,6 +38,7 @@ export async function postNpcInteract(payload: {
   npcObjectId: string;
   userText: string;
   playerPosition?: { x: number; y: number; z: number };
+  chatHistory?: { role: "user" | "npc"; text: string }[];
 }): Promise<void> {
   const res = await fetch(`${BASE}/npc-interact`, {
     method: "POST",
@@ -252,6 +253,49 @@ export async function patchSceneObjectPosition(
   }
 }
 
+export async function generateProp(
+  sceneId: string,
+  sessionId: string,
+  payload: {
+    description?: string;
+    imageBase64?: string;
+    imageMimeType?: string;
+    quality: "fast" | "balanced" | "quality";
+  },
+): Promise<{ jobId: string }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/generate-prop?session=${encodeURIComponent(sessionId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ jobId: string }>;
+}
+
+export type GeneratePropJobStatus =
+  | { status: "pending" }
+  | { status: "done"; modelUrl: string; thumbnailUrl: string | null; name: string; scale: number }
+  | { status: "error"; error: string };
+
+export async function pollGenerateProp(
+  sceneId: string,
+  jobId: string,
+): Promise<GeneratePropJobStatus> {
+  const res = await fetch(`${BASE}/scenes/${sceneId}/generate-prop/${encodeURIComponent(jobId)}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<GeneratePropJobStatus>;
+}
+
+
 export async function removeSceneProp(
   sceneId: string,
   sessionId: string,
@@ -290,8 +334,8 @@ export interface SceneListItem {
   provider: string;
 }
 
-export async function fetchSceneList(sessionId: string): Promise<SceneListItem[]> {
-  const res = await fetch(`${BASE}/scenes?session=${encodeURIComponent(sessionId)}`);
+export async function fetchSceneList(): Promise<SceneListItem[]> {
+  const res = await fetch(`${BASE}/scenes`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as { scenes: SceneListItem[] };
   return body.scenes;

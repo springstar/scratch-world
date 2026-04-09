@@ -364,7 +364,7 @@ export function createAgent(
 				createCityTool(),
 				updateSceneTool(sceneManager, viewerUrl, generationQueue, sessionId),
 				getSceneTool(sceneManager, viewerUrl),
-				listScenesTool(sceneManager, ownerId),
+				listScenesTool(sceneManager),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 				placePropTool(sceneManager, viewerUrl),
 				removePropTool(sceneManager),

@@ -20,6 +20,7 @@ interface NpcInteractBody {
 	npcObjectId: string;
 	userText: string;
 	playerPosition?: { x: number; y: number; z: number };
+	chatHistory?: { role: "user" | "npc"; text: string }[];
 }
 
 // Radius within which other NPCs can "hear" an interaction
@@ -90,7 +91,7 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const { sessionId, sceneId, npcObjectId, userText, playerPosition } = body;
+		const { sessionId, sceneId, npcObjectId, userText, playerPosition, chatHistory } = body;
 		if (!sessionId || !sceneId || !npcObjectId || !userText?.trim()) {
 			return c.json({ error: "Missing required fields: sessionId, sceneId, npcObjectId, userText" }, 400);
 		}
@@ -193,8 +194,8 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 					console.error("[npc-interact] agent loop error:", err);
 				});
 		} else {
-			// Fast path — single Haiku call
-			reactAsNpc(npcObj.objectId, npcObj.name, personality, userText, memory, perceptionContext)
+			// Fast path — single Haiku call with full conversation context
+			reactAsNpc(npcObj.objectId, npcObj.name, personality, userText, memory, perceptionContext, chatHistory)
 				.then((text) => {
 					if (!text) return;
 					bus.publish(sessionId, {

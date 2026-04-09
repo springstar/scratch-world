@@ -5,16 +5,14 @@ import { Hono } from "hono";
 import { applyEvolutionDelta, type EvolutionLogEntry } from "../../npcs/npc-evolution.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { RealtimeBus } from "../realtime.js";
+import { generatePropRoute } from "./generate-prop.js";
 
 export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus: RealtimeBus): Hono {
 	const app = new Hono();
 
-	// GET /scenes?session=web:<userId> — list all scenes for this user
+	// GET /scenes — list all scenes for the active provider
 	app.get("/", async (c) => {
-		const session = c.req.query("session");
-		const userId = session?.startsWith("web:") ? session.slice(4) : null;
-		if (!userId) return c.json({ error: "session required" }, 401);
-		const scenes = await sceneManager.listScenes(userId);
+		const scenes = await sceneManager.listScenes();
 		return c.json({
 			scenes: scenes.map((s) => {
 				// thumbnailUrl may be stored at top level (new scenes) or in the terrain
@@ -34,28 +32,18 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		});
 	});
 
-	// GET /scenes/:sceneId — viewer fetches scene data on mount
-	// Access granted if:  is_public=true  OR  ?token=<share_token>  OR  called by the owner (no auth on viewer — open by token only)
+	// GET /scenes/:sceneId — viewer fetches scene data on mount.
+	// No auth: all scenes are openly readable by sceneId.
+	// (Access control lives at the channel/agent layer, not the viewer API.)
 	app.get("/:sceneId", async (c) => {
 		const { sceneId } = c.req.param();
 		const tokenParam = c.req.query("token");
-		const sessionParam = c.req.query("session");
-
-		// Extract userId from web session format "web:<userId>"
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
 
 		let scene = tokenParam ? await sceneManager.getSceneByShareToken(tokenParam) : null;
 
 		if (!scene) {
 			const byId = await sceneManager.getScene(sceneId);
 			if (!byId) return c.json({ error: "Scene not found" }, 404);
-
-			const isOwner = sessionUserId !== null && byId.ownerId === sessionUserId;
-			const hasShareToken = !!tokenParam && byId.shareToken === tokenParam;
-
-			if (!byId.isPublic && !isOwner && !hasShareToken) {
-				return c.json({ error: "Forbidden" }, 403);
-			}
 			scene = byId;
 		}
 
@@ -114,19 +102,13 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	});
 
 	// POST /scenes/:sceneId/props — add a physical prop directly without going through the agent.
-	// Auth: same as GET (?session=web:<userId> required, must be owner).
 	// Body: { name, description, modelUrl, physicsShape?, mass?, scale?, placement? }
 	app.post("/:sceneId/props", async (c) => {
 		const { sceneId } = c.req.param();
 		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
 
 		const body = await c.req.json<{
 			name?: string;
@@ -167,18 +149,12 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	});
 
 	// DELETE /scenes/:sceneId/props/:propId — remove a physical prop.
-	// Auth: same as POST (?session=web:<userId> required, must be owner or public scene).
 	app.delete("/:sceneId/props/:propId", async (c) => {
 		const { sceneId, propId } = c.req.param();
 		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
 
 		try {
 			const updated = await sceneManager.removePropFromScene(sceneId, propId);
@@ -196,14 +172,9 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	app.post("/:sceneId/npcs", async (c) => {
 		const { sceneId } = c.req.param();
 		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
 
 		const body = await c.req.json<{
 			name?: string;
@@ -252,14 +223,9 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	app.patch("/:sceneId/npcs/:npcId", async (c) => {
 		const { sceneId, npcId } = c.req.param();
 		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
 
 		const body = await c.req.json<{ name?: string; personality?: string; traits?: string; skills?: string[] }>();
 		const metadataPatch: Record<string, unknown> = {};
@@ -284,14 +250,9 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	app.delete("/:sceneId/npcs/:npcId", async (c) => {
 		const { sceneId, npcId } = c.req.param();
 		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
 
 		try {
 			const updated = await sceneManager.removePropFromScene(sceneId, npcId);
@@ -305,19 +266,12 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 
 	// PATCH /scenes/:sceneId/objects/:objectId — lock a resolved position back to the object.
 	// Called fire-and-forget by the viewer after resolvePosition() to prevent position drift.
-	// Auth: session required, must be owner (or public scene).
 	// Body: { placement: "exact"; playerPosition: { x: number; y: number; z: number } }
 	app.patch("/:sceneId/objects/:objectId", async (c) => {
 		const { sceneId, objectId } = c.req.param();
-		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (!scene.isPublic && scene.ownerId !== sessionUserId) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
 
 		const body = await c.req.json<{ placement?: string; playerPosition?: { x: number; y: number; z: number } }>();
 		if (!body.placement || !body.playerPosition) {
@@ -361,13 +315,9 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	// POST /scenes/:sceneId/npcs/:npcId/evolution/:entryId/approve — apply a pending evolution
 	app.post("/:sceneId/npcs/:npcId/evolution/:entryId/approve", async (c) => {
 		const { sceneId, npcId, entryId } = c.req.param();
-		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (scene.ownerId !== sessionUserId) return c.json({ error: "Forbidden" }, 403);
 
 		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
 		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
@@ -404,13 +354,9 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 	// POST /scenes/:sceneId/npcs/:npcId/evolution/:entryId/reject — discard a pending evolution
 	app.post("/:sceneId/npcs/:npcId/evolution/:entryId/reject", async (c) => {
 		const { sceneId, npcId, entryId } = c.req.param();
-		const sessionParam = c.req.query("session");
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		if (!sessionUserId) return c.json({ error: "Missing ?session=web:<userId> query param" }, 401);
 
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
-		if (scene.ownerId !== sessionUserId) return c.json({ error: "Forbidden" }, 403);
 
 		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
 		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
@@ -456,6 +402,9 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			);
 		}
 	});
+
+	// Mount prop generation sub-router
+	app.route("/:sceneId/generate-prop", generatePropRoute(join(projectRoot, "uploads")));
 
 	return app;
 }

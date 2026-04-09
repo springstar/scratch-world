@@ -38,7 +38,7 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 	if (!bus.hasSubscribers(sessionId)) return;
 
 	// Get scenes for this session, most recently updated first
-	const scenes = await sceneManager.listScenes(sessionId);
+	const scenes = await sceneManager.listScenes();
 	if (scenes.length === 0) return;
 
 	scenes.sort((a, b) => b.updatedAt - a.updatedAt);

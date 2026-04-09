@@ -6,6 +6,8 @@ export interface SceneRepository {
 	save(scene: Scene): Promise<void>;
 	findById(sceneId: string): Promise<Scene | null>;
 	findByOwner(ownerId: string): Promise<Scene[]>;
+	findAll(): Promise<Scene[]>;
+	findByProvider(provider: string): Promise<Scene[]>;
 	delete(sceneId: string): Promise<void>;
 
 	// Sharing

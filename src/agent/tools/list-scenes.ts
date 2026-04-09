@@ -4,14 +4,14 @@ import type { SceneManager } from "../../scene/scene-manager.js";
 
 const parameters = Type.Object({});
 
-export function listScenesTool(sceneManager: SceneManager, ownerId: () => string): AgentTool<typeof parameters> {
+export function listScenesTool(sceneManager: SceneManager): AgentTool<typeof parameters> {
 	return {
 		name: "list_scenes",
 		label: "List scenes",
-		description: "List all scenes belonging to the current user.",
+		description: "List all scenes.",
 		parameters,
 		execute: async (_id, _params) => {
-			const scenes = await sceneManager.listScenes(ownerId());
+			const scenes = await sceneManager.listScenes();
 			return {
 				content: [
 					{

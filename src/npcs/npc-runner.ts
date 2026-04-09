@@ -20,11 +20,15 @@ function extractText(response: Awaited<ReturnType<typeof completeSimple>>): stri
 }
 
 /**
- * Call Haiku with the NPC's personality + memory as system prompt and return a short reply.
+ * Call Haiku with the NPC's personality + memory as system prompt and return a reply.
+ * Passes the full conversation history as multi-turn messages so the NPC can build
+ * on context from earlier exchanges rather than responding in isolation.
+ *
  * Returns null if the NPC is still in cooldown or if the model returns nothing.
  *
  * @param memory - array of condensed memory facts from previous interactions
  * @param perceptionContext - optional snapshot of the NPC's immediate surroundings
+ * @param conversationHistory - recent chat history from the frontend (last N turns)
  */
 export async function reactAsNpc(
 	npcId: string,
@@ -33,6 +37,7 @@ export async function reactAsNpc(
 	userText: string,
 	memory: string[] = [],
 	perceptionContext?: string,
+	conversationHistory?: { role: "user" | "npc"; text: string }[],
 ): Promise<string | null> {
 	const now = Date.now();
 	if (now - (cooldowns.get(npcId) ?? 0) < COOLDOWN_MS) return null;
@@ -44,11 +49,21 @@ export async function reactAsNpc(
 	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
-	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n用1-2句话回应，保持角色，不讨论角色无关话题。`;
+	// Inject recent conversation history into the system prompt so the NPC can
+	// build on context from earlier exchanges in this session.
+	const recentHistory = (conversationHistory ?? []).slice(-8);
+	const historySection =
+		recentHistory.length > 0
+			? `\n\n[本次对话记录]\n${recentHistory.map((h) => (h.role === "user" ? `玩家：${h.text}` : `你：${h.text}`)).join("\n")}`
+			: "";
+
+	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}${historySection}
+
+以符合角色的方式自然回应玩家。根据对话内容决定回应长短，不要重复之前说过的话，不讨论游戏机制或角色无关话题。`;
 
 	const response = await completeSimple(haiku(), {
 		systemPrompt,
-		messages: [{ role: "user", content: userText, timestamp: Date.now() }],
+		messages: [{ role: "user", content: userText, timestamp: now }],
 	});
 
 	const reply = extractText(response) || null;

@@ -1,6 +1,6 @@
 # NPC System
 
-**Last Updated:** 2026-04-07
+**Last Updated:** 2026-04-09
 
 Reactive, persistent, self-evolving NPCs for scratch-world scenes. Each NPC maintains personality, memory, an interaction counter, and an optional evolution log — all stored in `SceneObject.metadata`. No separate NPC table; NPCs are ordinary scene objects of `type="npc"`.
 
@@ -213,7 +213,11 @@ Right-side slide-in management panel (width 340 px, z-index 110).
 
 Three views:
 - **List** — all `type="npc"` objects in current scene; [编辑] [删除] buttons per card
-- **Add** — form: name, personality, traits; model source (asset catalog grid or URL input); press F to aim placement; [确定放置] reads `window.__clickPosition` (within 30 s)
+- **Add** — form: name, personality, traits; model source tabs:
+  - **资源库** — asset catalog grid
+  - **URL** — direct GLB/GLTF URL input
+  - **生成** — Hunyuan 3D generation: text description or photo upload; quality selector (快速/均衡/精细); polls `/scenes/:sceneId/generate-prop` job until `modelUrl` is ready; green success banner when done
+  - Press F to aim placement; [确定放置] reads `window.__clickPosition` (within 30 s)
 - **Edit** — prefilled form; includes evolution log section with [批准] [拒绝] buttons for pending proposals
 
 Triggered by the "NPC" button (top-right corner of viewer, z-index 105).
@@ -283,6 +287,49 @@ All in-memory cooldowns reset on server restart.
 
 ---
 
+## NPC 3D Model Placement (No-Physics Scenes)
+
+Gaussian splat scenes have no Rapier collider mesh. NPC models are placed via ray-plane intersection against a virtual ground plane derived from `splatGroundOffset`.
+
+### splatGroundOffset Convention
+
+`splatGroundOffset` is stored **positive** in `scene_data` (Marble convention), but the Three.js world Y for the ground is **negative**:
+
+```typescript
+const groundY = splatGroundOffset !== undefined ? -splatGroundOffset : (camera.position.y - 1.7);
+```
+
+Never use the raw value as world Y — it places objects 4 m above the scene.
+
+### Orientation Detection
+
+Hunyuan-generated GLBs embed a root node quaternion `[0.7071, 0, 0, 0.7071]` (Blender Z-up → glTF Y-up conversion). After load the model may still be lying flat. Detection uses a bounding-box extent ratio:
+
+```typescript
+// threshold 0.75: if Y extent < 75% of max extent, model is lying flat
+if (extY < maxExt * 0.75) {
+  extX >= extZ ? group.rotation.z = -Math.PI / 2   // X-dominant: sideways
+               : group.rotation.x = -Math.PI / 2;  // Z-dominant: Blender Z-up
+}
+```
+
+**Threshold 0.75** — safe upper bound. Values above 0.75 risk false positives for half-body (bust) models.
+
+### Auto-Scale and Ground Offset
+
+After orientation correction, models with `scale=1` are auto-scaled to 1.6 m (human height). Ground offset aligns the bottom of the bounding box to the ground plane — **do not multiply by scale** (world-space bbox already includes it):
+
+```typescript
+const groundOffset = -finalBbox.min.y;  // finalBbox is world-space after all transforms
+group.position.set(pos.x, pos.y + groundOffset, pos.z);
+```
+
+### hasEnteredScene Guard
+
+NPC proximity detection and click-to-talk are gated behind a `hasEnteredScene` flag that becomes `true` only after the player acquires pointer lock for the first time. This prevents NPC greetings from firing on page load before the user clicks to enter the scene.
+
+---
+
 ## File Reference
 
 | File | Purpose |
@@ -294,9 +341,14 @@ All in-memory cooldowns reset on server restart.
 | `src/viewer-api/routes/npc-interact.ts` | POST /npc-interact — routing, PerceptionBus, memory update |
 | `src/viewer-api/routes/npc-greet.ts` | POST /npc-greet — proximity greeting |
 | `src/viewer-api/routes/scenes.ts` | NPC CRUD + evolution approve/reject endpoints |
+| `src/viewer-api/routes/generate-prop.ts` | POST/GET `/scenes/:sceneId/generate-prop` — Hunyuan 3D job submission and polling |
+| `src/viewer-api/hunyuan-client.ts` | Tencent Hunyuan 3D v2 REST API wrapper |
+| `src/viewer-api/job-store.ts` | In-memory store for async generation jobs |
 | `src/scene/scene-manager.ts` | `updateSceneObject()` — metadata merge with versioning |
 | `viewer/src/physics/npc-proximity.ts` | Proximity radius constants and nearest-NPC search |
+| `viewer/src/renderer/gltf-object-renderer.ts` | GLTF/GLB loader with orientation detection and auto-scale |
 | `viewer/src/components/NpcChatOverlay.tsx` | Floating in-viewer chat UI |
-| `viewer/src/components/NpcDrawer.tsx` | NPC management drawer (add / edit / delete / evolution) |
+| `viewer/src/components/NpcDrawer.tsx` | NPC management drawer (add / edit / delete / evolution / Hunyuan generate) |
+| `viewer/src/components/PropDrawer.tsx` | Prop management drawer (catalog / URL / Hunyuan generate) |
 | `viewer/src/App.tsx` | Event wiring: approach/leave/message/realtime |
-| `viewer/src/api.ts` | Client API: postNpcInteract, postNpcGreet, addSceneNpc, updateSceneNpc, removeSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution |
+| `viewer/src/api.ts` | Client API: postNpcInteract, postNpcGreet, addSceneNpc, updateSceneNpc, removeSceneNpc, fetchNpcEvolution, approveNpcEvolution, rejectNpcEvolution, generateProp, pollGenerateProp |

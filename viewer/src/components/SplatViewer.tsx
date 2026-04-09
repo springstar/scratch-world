@@ -7,14 +7,19 @@ import {
   Scene,
   Color,
   AmbientLight,
+  DirectionalLight,
+  ACESFilmicToneMapping,
+  PMREMGenerator,
   Clock,
   Vector3,
   Box3,
   Euler,
   BoxGeometry,
+  SphereGeometry,
   MeshStandardMaterial,
   Mesh,
 } from "three";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { getRapier } from "../physics/init-rapier.js";
@@ -26,17 +31,18 @@ import {
   buildCollider,
   syncPhysicsProps,
   disposePhysicsProps,
-  resolveModelUrl,
   type PhysicsProp,
 } from "../physics/pushable-objects.js";
 import { type PlacementHint, resolvePosition } from "../physics/prop-placement.js";
 import { pickObject } from "../physics/raycast-pick.js";
-import { extractNpcs, findNearbyNpc, type NearbyNpc } from "../physics/npc-proximity.js";
+import { extractNpcs } from "../physics/npc-proximity.js";
 import type { SceneObject, Viewpoint } from "../types.js";
 import type { AssetEntry } from "../renderer/asset-catalog.js";
 import { ASSET_CATALOG } from "../renderer/asset-catalog.js";
 import { patchSceneObjectPosition } from "../api.js";
 import { PropPicker } from "./PropPicker.js";
+import { ObjectRendererRegistry } from "../renderer/object-renderer.js";
+import { GltfObjectRenderer } from "../renderer/gltf-object-renderer.js";
 
 interface Props {
   splatUrl: string;
@@ -55,9 +61,15 @@ interface Props {
   npcPlacementPending?: boolean;
   onNpcPlace?: (pos: { x: number; y: number; z: number }) => void;
   onNpcPlaceCancel?: () => void;
+  propPlacementPending?: boolean;
+  onPropPlace?: (pos: { x: number; y: number; z: number }) => void;
+  onPropPlaceCancel?: () => void;
 }
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel }: Props) {
+// Module-level registry so it is constructed once and shared across mounts.
+const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
+
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -67,7 +79,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const selectedPropRef = useRef<AssetEntry | null>(null);
   const onAddPropRef = useRef(onAddProp);
   onAddPropRef.current = onAddProp;
-  const [nearbyNpc, setNearbyNpc] = useState<NearbyNpc | null>(null);
   const [clickIndicator, setClickIndicator] = useState<{ x: number; y: number } | null>(null);
   const [propLoadErrors, setPropLoadErrors] = useState<string[]>([]);
   const [placementMode, setPlacementMode] = useState(false);
@@ -82,6 +93,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   // NPC resolved positions — populated by loadSceneNpc when physics runs,
   // empty when no collider mesh (proximity falls back to SceneObject.position).
   const npcPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
+  // NPC Three.js groups — populated by both the physics path and the no-physics fallback.
+  const npcGroupsRef = useRef<Map<string, import("three").Group>>(new Map());
   const onPlacementRequestRef = useRef(onPlacementRequest);
   onPlacementRequestRef.current = onPlacementRequest;
   const onNpcPlaceRef = useRef(onNpcPlace);
@@ -90,24 +103,24 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onNpcPlaceCancelRef.current = onNpcPlaceCancel;
   const npcPlacementPendingRef = useRef(npcPlacementPending);
   npcPlacementPendingRef.current = npcPlacementPending;
+  const onPropPlaceRef = useRef(onPropPlace);
+  onPropPlaceRef.current = onPropPlace;
+  const onPropPlaceCancelRef = useRef(onPropPlaceCancel);
+  onPropPlaceCancelRef.current = onPropPlaceCancel;
+  const propPlacementPendingRef = useRef(propPlacementPending);
+  propPlacementPendingRef.current = propPlacementPending;
   const onNpcApproachRef = useRef(onNpcApproach);
   onNpcApproachRef.current = onNpcApproach;
   const onNpcLeaveRef = useRef(onNpcLeave);
   onNpcLeaveRef.current = onNpcLeave;
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
 
-  // Fire onNpcApproach when a new NPC enters proximity for the first time this render
-  const prevNearbyIdRef = useRef<string | null>(null);
+  // Exit pointer lock when entering placement mode so clicks reach the free-fly handler.
   useEffect(() => {
-    const newId = nearbyNpc?.objectId ?? null;
-    if (newId && newId !== prevNearbyIdRef.current) {
-      onNpcApproachRef.current?.(nearbyNpc!.objectId, nearbyNpc!.name);
+    if ((propPlacementPending || npcPlacementPending) && document.pointerLockElement) {
+      document.exitPointerLock();
     }
-    if (!newId && prevNearbyIdRef.current) {
-      onNpcLeaveRef.current?.();
-    }
-    prevNearbyIdRef.current = newId;
-  }, [nearbyNpc]);
+  }, [propPlacementPending, npcPlacementPending]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -116,7 +129,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     setStatus("loading");
     setIsLocked(false);
     setPhysicsReady(false);
-    setNearbyNpc(null);
     setClickIndicator(null);
     setPlacementMode(false);
     placementModeActiveRef.current = false;
@@ -133,10 +145,28 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const renderer = new WebGLRenderer({ canvas, antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.85;
 
     const scene = new Scene();
     scene.background = new Color(0x0a0a14);
-    scene.add(new AmbientLight(0xffffff, 0.6));
+    scene.add(new AmbientLight(0xffffff, 0.5));
+    const sunLight = new DirectionalLight(0xfff4e0, 1.2);
+    sunLight.position.set(5, 10, 5);
+    scene.add(sunLight);
+
+    // IBL env map — loaded async from Polyhaven; applied to GLTF props once ready.
+    let sceneEnvMap: import("three").Texture | null = null;
+    const pmrem = new PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    new RGBELoader()
+      .loadAsync("https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr")
+      .then((equirect) => {
+        sceneEnvMap = pmrem.fromEquirectangular(equirect).texture;
+        pmrem.dispose();
+        equirect.dispose();
+      })
+      .catch(() => { pmrem.dispose(); }); // non-fatal — props still render without IBL
 
     const camera = new PerspectiveCamera(65, canvas.clientWidth / canvas.clientHeight, 0.01, 1000);
     camera.position.set(0, 1.7, 0);
@@ -193,6 +223,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     let freeFlyActive = true;
     let ffDragging = false;
 
+    // NPC meshes — populated by loadSceneNpc, used for click-to-talk raycasting.
+    const npcMeshList: Mesh[] = [];
+
     const onMouseDown = (e: MouseEvent) => {
       if (!freeFlyActive) return;
       if (e.button === 0) {
@@ -225,10 +258,38 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               onNpcPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
               return;
             }
+            // If prop placement is pending, deliver the hit position and consume the click
+            if (propPlacementPendingRef.current) {
+              onPropPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
+              return;
+            }
             // Show 2-second visual indicator dot at screen position
             if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
             setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top });
             clickIndicatorTimer = setTimeout(() => setClickIndicator(null), 2000);
+          }
+        } else if (npcPlacementPendingRef.current || propPlacementPendingRef.current) {
+          // No physics world available — intersect camera ray with a horizontal ground plane.
+          // splatGroundOffset is the Marble ground_plane_offset — negate for Three.js world Y.
+          const groundY = splatGroundOffset !== undefined ? -splatGroundOffset : (camera.position.y - 1.7);
+          const rect = canvas.getBoundingClientRect();
+          const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          const raycaster = new Raycaster();
+          raycaster.setFromCamera(new Vector2(nx, ny), camera);
+          const origin = raycaster.ray.origin;
+          const dir = raycaster.ray.direction;
+          // Solve ray-plane intersection: origin.y + t * dir.y = groundY
+          if (Math.abs(dir.y) > 0.001) {
+            const t = (groundY - origin.y) / dir.y;
+            if (t > 0) {
+              const pt = { x: origin.x + dir.x * t, y: groundY, z: origin.z + dir.z * t };
+              if (npcPlacementPendingRef.current) {
+                onNpcPlaceRef.current?.(pt);
+              } else {
+                onPropPlaceRef.current?.(pt);
+              }
+            }
           }
         }
         return; // left-click does not start drag
@@ -291,21 +352,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           setStatus("ready");
         }
       }
-      // Free-fly NPC proximity — uses camera position since there is no character
-      // controller in free-fly mode.  Physics mode updates __nearbyNpc independently.
-      if (!document.pointerLockElement) {
-        const freeNpcs = extractNpcs(sceneObjectsRef.current ?? []);
-        if (freeNpcs.length > 0) {
-          const cp = camera.position;
-          const freeNearby = findNearbyNpc(freeNpcs, cp.x, cp.y, cp.z, npcPositionsRef.current);
-          const freeId = freeNearby?.objectId ?? null;
-          setNearbyNpc((prev) => {
-            if ((prev?.objectId ?? null) === freeId) return prev;
-            (window as unknown as Record<string, unknown>).__nearbyNpc = freeNearby;
-            return freeNearby;
-          });
-        }
-      }
     }
     freeFlyLoop();
 
@@ -321,6 +367,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     function restartFreeFly() {
       syncEuler();
       freeFlyActive = true;
+      canvas!.addEventListener("mousedown", onMouseDown);
+      canvas!.addEventListener("mouseup",   onMouseUp);
+      canvas!.addEventListener("mousemove", onMouseMove);
       freeFlyLoop();
     }
 
@@ -368,10 +417,25 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
       // Load a single NPC model and register its resolved position.
       const loadSceneNpc = async (obj: import("../types.js").SceneObject): Promise<void> => {
+        // Skip if already registered (dedup guard for concurrent loadSceneById + scene_updated calls)
+        if (npcPositions.has(obj.objectId)) return;
         const modelUrl = obj.metadata.modelUrl as string | undefined;
         if (!modelUrl) {
-          // No model — still register at origin so proximity can detect the NPC.
-          npcPositions.set(obj.objectId, { x: obj.position.x, y: obj.position.y, z: obj.position.z });
+          // No model — register position and create an invisible sphere hitbox so
+          // the NPC is still clickable via the raycaster.
+          const pos = { x: obj.position.x, y: obj.position.y, z: obj.position.z };
+          npcPositions.set(obj.objectId, pos);
+          const hitbox = new Mesh(
+            new SphereGeometry(0.6, 8, 8),
+            new MeshStandardMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+          );
+          hitbox.position.set(pos.x, pos.y + 1.0, pos.z);
+          hitbox.userData.npcObjectId = obj.objectId;
+          hitbox.userData.npcName = obj.name;
+          hitbox.renderOrder = -1;
+          scene.add(hitbox);
+          npcMeshList.push(hitbox);
+          npcGroups.set(obj.objectId, hitbox as unknown as import("three").Group);
           return;
         }
         const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
@@ -387,29 +451,65 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           patchSceneObjectPosition(sceneId, sessionId, obj.objectId, pos).catch(() => { /* non-fatal */ });
         }
 
-        const group = await loadGltf(resolveModelUrl(modelUrl));
+        const group = (await objectRendererRegistry.render(obj, { envMap: sceneEnvMap ?? undefined })) as import("three").Group | null;
+        if (!group) return;
         if (disposed.value) {
-          group.traverse((c) => {
-            if (c instanceof Mesh) {
-              c.geometry.dispose();
-              const mats = Array.isArray(c.material) ? c.material : [c.material];
-              for (const m of mats) m.dispose();
-            }
-          });
+          objectRendererRegistry.dispose(group);
           return;
         }
-        group.scale.setScalar(scale);
+        // Detect models not in Y-up orientation (common for Hunyuan exports).
+        // Find the dominant axis; if Y is not dominant, rotate the model to stand upright.
+        group.scale.setScalar(1);
+        group.updateMatrixWorld(true);
+        const rawBboxNpc = new Box3().setFromObject(group);
+        const rawExtX = rawBboxNpc.max.x - rawBboxNpc.min.x;
+        const rawExtY = rawBboxNpc.max.y - rawBboxNpc.min.y;
+        const rawExtZ = rawBboxNpc.max.z - rawBboxNpc.min.z;
+        const rawMaxExt = Math.max(rawExtX, rawExtY, rawExtZ);
+        if (rawMaxExt > 0.01 && rawExtY < rawMaxExt * 0.75) {
+          if (rawExtX >= rawExtZ) {
+            // X-dominant: lying sideways. Hunyuan models have head at -X; rotate -90° around Z.
+            group.rotation.z = -Math.PI / 2;
+          } else {
+            // Z-dominant: Z-up export. Rotate -90° around X to map +Z to +Y.
+            group.rotation.x = -Math.PI / 2;
+          }
+        }
+        // Auto-scale to human height (~1.6 m) when no explicit scale was provided.
+        let effectiveScale = scale;
+        if (scale === 1) {
+          group.updateMatrixWorld(true);
+          const scaledBbox = new Box3().setFromObject(group);
+          const modelHeight = scaledBbox.max.y - scaledBbox.min.y;
+          if (modelHeight > 0.01) {
+            const TARGET_NPC_HEIGHT = 1.6;
+            effectiveScale = TARGET_NPC_HEIGHT / modelHeight;
+          }
+        }
+        group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
         const bbox = new Box3().setFromObject(group);
-        const groundOffset = -bbox.min.y * scale;
+        // bbox is in world space — negate min.y directly to sit model on ground.
+        const groundOffset = -bbox.min.y;
         group.position.set(pos.x, pos.y + groundOffset, pos.z);
-        group.traverse((c) => { c.userData.objectId = obj.objectId; });
+        group.traverse((c) => {
+          c.userData.objectId = obj.objectId;
+          if (c instanceof Mesh) {
+            c.userData.npcObjectId = obj.objectId;
+            c.userData.npcName = obj.name;
+            npcMeshList.push(c);
+          }
+        });
         scene.add(group);
         npcGroups.set(obj.objectId, group);
       };
 
       const removeSceneNpc = (objectId: string): void => {
         npcPositions.delete(objectId);
+        // Remove tagged meshes from click-detection list
+        for (let i = npcMeshList.length - 1; i >= 0; i--) {
+          if (npcMeshList[i].userData.npcObjectId === objectId) npcMeshList.splice(i, 1);
+        }
         const group = npcGroups.get(objectId);
         if (group) {
           scene.remove(group);
@@ -552,7 +652,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       // Called by App.tsx when scene_updated brings in new props so they appear
       // without requiring a page reload.
       const loadSceneProp = async (obj: import("../types.js").SceneObject): Promise<void> => {
-        const modelUrl = obj.metadata.modelUrl as string;
+        // Skip if already in the physics world (e.g. called by both loadSceneById and scene_updated)
+        if (props.some((p) => p.objectId === obj.objectId)) return;
         const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
         const physicsShape = (obj.metadata.physicsShape as string | undefined) ?? "box";
         const mass = typeof obj.metadata.mass === "number" ? obj.metadata.mass : 10;
@@ -570,11 +671,34 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           patchSceneObjectPosition(sceneId, sessionId, obj.objectId, pos).catch(() => { /* non-fatal */ });
         }
 
-        const group = await loadGltf(modelUrl);
-        group.scale.setScalar(scale);
+        let group: import("three").Group;
+        try {
+          group = (await objectRendererRegistry.render(obj, { envMap: sceneEnvMap ?? undefined })) as import("three").Group;
+        } catch (err) {
+          console.warn("[loadSceneProp] failed to load", obj.metadata.modelUrl, err);
+          setPropLoadErrors((prev) => [...prev, obj.name]);
+          return;
+        }
+        // Auto-normalize scale for models without an explicit scale — clamp height to 0.3–2.5m.
+        // Hunyuan GLBs are typically ~0.5m tall at scale=1 which is correct; but guard against
+        // extreme sizes that would make the prop invisible or overwhelm the scene.
+        let effectiveScale = scale;
+        if (scale === 1) {
+          group.scale.setScalar(1);
+          group.updateMatrixWorld(true);
+          const rawBbox = new Box3().setFromObject(group);
+          const rawHeight = rawBbox.max.y - rawBbox.min.y;
+          if (rawHeight > 0.01) {
+            const TARGET_MAX_HEIGHT = 2.5;
+            const TARGET_MIN_HEIGHT = 0.3;
+            if (rawHeight > TARGET_MAX_HEIGHT) effectiveScale = TARGET_MAX_HEIGHT / rawHeight;
+            else if (rawHeight < TARGET_MIN_HEIGHT) effectiveScale = TARGET_MIN_HEIGHT / rawHeight;
+          }
+        }
+        group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
         const bbox = new Box3().setFromObject(group);
-        const groundOffset = -bbox.min.y * scale;
+        const groundOffset = -bbox.min.y * effectiveScale;
         group.position.set(pos.x, pos.y + groundOffset, pos.z);
         scene.add(group);
         group.updateMatrixWorld(true);
@@ -605,7 +729,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
       const fwd = new Vector3();
       const right = new Vector3();
-      let lastNearbyId: string | null = null;
 
       function physicsLoop() {
         if (!inPhysicsMode) return;
@@ -636,17 +759,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           (window as unknown as Record<string, unknown>).__cameraForward = { x: fwd.x, z: fwd.z };
         }
 
-        const currentNpcs = extractNpcs(sceneObjectsRef.current ?? []);
-        if (currentNpcs.length > 0) {
-          const nearby = findNearbyNpc(currentNpcs, pos.x, pos.y + 0.8, pos.z, npcPositions);
-          const newId = nearby?.objectId ?? null;
-          if (newId !== lastNearbyId) {
-            lastNearbyId = newId;
-            setNearbyNpc(nearby);
-            (window as unknown as Record<string, unknown>).__nearbyNpc = nearby;
-          }
-        }
-
         for (const b of tempBoxes) {
           const t = b.body.translation();
           b.mesh.position.set(t.x, t.y, t.z);
@@ -658,10 +770,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         renderer.render(scene, camera);
       }
 
+      let hasEnteredScene = false;
       const onLockChange = () => {
         const locked = document.pointerLockElement === cv;
         setIsLocked(locked);
         if (locked && !inPhysicsMode) {
+          hasEnteredScene = true;
           stopFreeFly();
           // Marble scenes: floor at world Y=0, camera eye at Y=1.7.
           // Body centre = camera.y - 0.8 = 0.9; capsule bottom = 0 = floor.
@@ -689,8 +803,28 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       };
       document.addEventListener("pointerlockchange", onLockChange);
 
-      const onClick = () => {
-        if (document.pointerLockElement !== cv) { plc.lock(); return; }
+      const onClick = (e: MouseEvent) => {
+        if (document.pointerLockElement !== cv) {
+          // While placement is pending, clicks are handled by onMouseDown (Rapier hit).
+          // Don't request pointer lock — it would steal the placement click.
+          if (npcPlacementPendingRef.current || propPlacementPendingRef.current) return;
+          // NPC click-to-talk: only after user has entered the scene at least once
+          if (hasEnteredScene && npcMeshList.length > 0) {
+            const rect = cv.getBoundingClientRect();
+            const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            const npcRaycaster = new Raycaster();
+            npcRaycaster.setFromCamera(new Vector2(nx, ny), camera);
+            const npcHits = npcRaycaster.intersectObjects(npcMeshList, false);
+            if (npcHits.length > 0) {
+              const hitMesh = npcHits[0].object;
+              onNpcApproachRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
+              return; // don't lock pointer
+            }
+          }
+          plc.lock();
+          return;
+        }
       };
       const onContextMenu = (e: MouseEvent) => { e.preventDefault(); };
       const onKeyAction = (e: KeyboardEvent) => {
@@ -712,6 +846,16 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           onNpcPlaceCancelRef.current?.();
           return;
         }
+        // ESC key: cancel pending prop placement if active
+        if (e.key === "Escape" && propPlacementPendingRef.current) {
+          onPropPlaceCancelRef.current?.();
+          return;
+        }
+        // ESC: close NPC chat if open
+        if (e.key === "Escape") {
+          onNpcLeaveRef.current?.();
+          return;
+        }
         if (k === "g" && document.pointerLockElement === cv) {
           // Spawn last-selected catalog asset (or prop_boom_box as default) ahead of camera.
           // Ephemeral — for quick physics interaction, not persisted.
@@ -727,6 +871,18 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         if (k === "e") {
           if (document.pointerLockElement === cv) {
+            // NPC click-to-talk (E key in physics/pointer-lock mode)
+            if (npcMeshList.length > 0) {
+              const npcRaycaster = new Raycaster();
+              npcRaycaster.setFromCamera(new Vector2(0, 0), camera);
+              const npcHits = npcRaycaster.intersectObjects(npcMeshList, false);
+              if (npcHits.length > 0 && npcHits[0].distance < 8) {
+                const hitMesh = npcHits[0].object;
+                document.exitPointerLock();
+                onNpcApproachRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
+                return;
+              }
+            }
             const propId = pickObject(camera, props.flatMap((p) => p.meshes), 4);
             if (propId) { onInteractRef.current?.(propId, "pick"); return; }
           }
@@ -781,6 +937,103 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     let cancelled = false;
 
+    // When there is no physics collider, initPhysics never runs, so NPCs would
+    // never load. Load them here using obj.position (already persisted as "exact"
+    // after the first placement) so click-to-talk works in free-fly-only scenes.
+    if (!colliderMeshUrl) {
+      const noPhysicsNpcGroups = npcGroupsRef.current;
+      const noPhysicsNpcPos = npcPositionsRef.current;
+      noPhysicsNpcGroups.clear();
+      noPhysicsNpcPos.clear();
+
+      const loadNpcNoPhysics = (obj: import("../types.js").SceneObject) => {
+        if (noPhysicsNpcPos.has(obj.objectId)) return;
+        const pos = { x: obj.position.x, y: obj.position.y, z: obj.position.z };
+        noPhysicsNpcPos.set(obj.objectId, pos);
+
+        const modelUrl = obj.metadata.modelUrl as string | undefined;
+        if (!modelUrl) {
+          const hitbox = new Mesh(
+            new SphereGeometry(0.6, 8, 8),
+            new MeshStandardMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+          );
+          hitbox.position.set(pos.x, pos.y + 1.0, pos.z);
+          hitbox.userData.npcObjectId = obj.objectId;
+          hitbox.userData.npcName = obj.name;
+          hitbox.renderOrder = -1;
+          scene.add(hitbox);
+          npcMeshList.push(hitbox);
+          noPhysicsNpcGroups.set(obj.objectId, hitbox as unknown as import("three").Group);
+          return;
+        }
+
+        const scale = typeof obj.metadata.scale === "number" ? obj.metadata.scale : 1;
+        objectRendererRegistry
+          .render(obj, { envMap: sceneEnvMap ?? undefined })
+          .then((group) => {
+            if (!group || cancelled) return;
+            const g = group as import("three").Group;
+            // Detect models not in Y-up orientation; same logic as physics path.
+            g.scale.setScalar(1);
+            g.updateMatrixWorld(true);
+            const rawBboxNp = new Box3().setFromObject(g);
+            const npExtX = rawBboxNp.max.x - rawBboxNp.min.x;
+            const npExtY = rawBboxNp.max.y - rawBboxNp.min.y;
+            const npExtZ = rawBboxNp.max.z - rawBboxNp.min.z;
+            const npMaxExt = Math.max(npExtX, npExtY, npExtZ);
+            if (npMaxExt > 0.01 && npExtY < npMaxExt * 0.75) {
+              if (npExtX >= npExtZ) {
+                g.rotation.z = -Math.PI / 2;
+              } else {
+                g.rotation.x = -Math.PI / 2;
+              }
+            }
+            let effectiveScaleNp = scale;
+            if (scale === 1) {
+              g.updateMatrixWorld(true);
+              const sbbox = new Box3().setFromObject(g);
+              const mh = sbbox.max.y - sbbox.min.y;
+              if (mh > 0.01) effectiveScaleNp = 1.6 / mh;
+            }
+            g.scale.setScalar(effectiveScaleNp);
+            g.updateMatrixWorld(true);
+            const npBbox = new Box3().setFromObject(g);
+            g.position.set(pos.x, pos.y + (-npBbox.min.y), pos.z);
+            g.traverse((c) => {
+              c.userData.objectId = obj.objectId;
+              if (c instanceof Mesh) {
+                c.userData.npcObjectId = obj.objectId;
+                c.userData.npcName = obj.name;
+                npcMeshList.push(c);
+              }
+            });
+            scene.add(g);
+            noPhysicsNpcGroups.set(obj.objectId, g);
+          })
+          .catch((err: unknown) => {
+            console.warn("[SplatViewer] NPC no-physics load failed", obj.name, err);
+          });
+      };
+
+      for (const obj of extractNpcs(sceneObjectsRef.current ?? [])) {
+        loadNpcNoPhysics(obj);
+      }
+
+      // Register window hooks so App.tsx can inject NPCs added after initial load
+      (window as unknown as Record<string, unknown>).__loadSceneNpc = (obj: import("../types.js").SceneObject) => {
+        loadNpcNoPhysics(obj);
+        return Promise.resolve();
+      };
+      (window as unknown as Record<string, unknown>).__removeSceneNpc = (objectId: string) => {
+        for (let i = npcMeshList.length - 1; i >= 0; i--) {
+          if (npcMeshList[i].userData.npcObjectId === objectId) npcMeshList.splice(i, 1);
+        }
+        const group = noPhysicsNpcGroups.get(objectId);
+        if (group) { scene.remove(group); noPhysicsNpcGroups.delete(objectId); }
+        noPhysicsNpcPos.delete(objectId);
+      };
+    }
+
     if (colliderMeshUrl) {
       initPhysics().catch((err: unknown) => {
         if (!cancelled) {
@@ -799,7 +1052,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       window.removeEventListener("keyup", onKeyUp);
       delete (window as unknown as Record<string, unknown>).__clickPosition;
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
+      delete (window as unknown as Record<string, unknown>).__loadSceneNpc;
+      delete (window as unknown as Record<string, unknown>).__removeSceneNpc;
       npcPositionsRef.current.clear();
+      for (const g of npcGroupsRef.current.values()) { scene.remove(g); }
+      npcGroupsRef.current.clear();
       doPlacementRef.current = null;
       exitPlacementRef.current = null;
       cleanupPhysics?.();
@@ -813,7 +1070,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: "block", cursor: (placementMode || npcPlacementPending) ? "crosshair" : "default" }}
+        style={{ width: "100%", height: "100%", display: "block", cursor: (placementMode || npcPlacementPending || propPlacementPending) ? "crosshair" : "default" }}
       />
 
       {/* Prop picker overlay */}
@@ -846,8 +1103,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         </div>
       )}
 
-      {/* NPC speech bubble — shown when nearby NPC has spoken */}
-      {npcSpeech && nearbyNpc?.objectId === npcSpeech.npcId && (
+      {/* NPC speech bubble — shown for any NPC speech (player-triggered or NPC-to-NPC) */}
+      {npcSpeech && (
         <div style={{
           position: "absolute", bottom: 160, left: "50%", transform: "translateX(-50%)",
           background: "rgba(10,10,30,0.88)", backdropFilter: "blur(8px)",
@@ -951,6 +1208,24 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }}>
           <span style={{ fontSize: 18 }}>🧍</span>
           <span>点击地面放置 NPC</span>
+          <span style={{ fontSize: 11, color: "rgba(140,150,180,0.5)", marginLeft: 4 }}>· ESC 取消</span>
+        </div>
+      )}
+
+      {/* Prop placement hint — shown when App.tsx has a pending prop waiting to be placed */}
+      {propPlacementPending && (
+        <div style={{
+          position: "absolute", bottom: 90, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(8,8,24,0.92)", backdropFilter: "blur(10px)",
+          border: "1px solid rgba(100,200,160,0.35)", borderRadius: 12,
+          padding: "12px 20px",
+          color: "rgba(200,255,220,0.95)",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          fontSize: 14, zIndex: 20,
+          display: "flex", alignItems: "center", gap: 10,
+          whiteSpace: "nowrap",
+        }}>
+          <span>点击地面放置物件</span>
           <span style={{ fontSize: 11, color: "rgba(140,150,180,0.5)", marginLeft: 4 }}>· ESC 取消</span>
         </div>
       )}

@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-04-07 (NPC skills system; NPC-to-NPC interaction; position persistence; spatial perception enrichment)
+**Last Updated:** 2026-04-09 (NPC/prop Hunyuan 3D generation; GLTF renderer split; NPC placement orientation fix)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -75,9 +75,15 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **NPC Greet Route** | `src/viewer-api/routes/npc-greet.ts` | POST /npc-greet — proximity-triggered auto-greeting | `npcGreetRoute()` |
 | **NPC Proximity** | `viewer/src/physics/npc-proximity.ts` | 2.5 m proximity radius, nearest-NPC search with position overrides | `findNearbyNpc()`, `extractNpcs()` |
 | **NPC Chat Overlay** | `viewer/src/components/NpcChatOverlay.tsx` | Floating in-viewer chat panel; auto-opens/closes on proximity | `NpcChatOverlay` |
-| **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, skill picker (toggle chips), skill badges on list cards, approve/reject evolution | `NpcDrawer` |
+| **NPC Drawer** | `viewer/src/components/NpcDrawer.tsx` | Right-side management panel: add / edit / delete NPCs, skill picker (toggle chips), skill badges on list cards, approve/reject evolution; model source tabs: catalog / URL / Hunyuan generate | `NpcDrawer` |
 | **NPC Perception** | `src/npcs/npc-perception.ts` | Builds spatial context string: self-position, compass bearings, 2D obstacle detection, scene caption; nearby NPC entries include personality snippet, exact coords, and objectId for navigation | `buildPerceptionContext()`, `extractSceneCaption()` |
 | **Image-to-3D Tool** | `src/agent/tools/image-to-3d.ts` | Converts user-uploaded photo to GLB via Tencent Hunyuan 3D API (submit → poll → download); 10-min timeout | `imageToSdTool()` |
+| **Hunyuan Client** | `src/viewer-api/hunyuan-client.ts` | Thin wrapper around Tencent Hunyuan 3D v2 REST API; submits image-to-3D jobs and polls status; returns `modelUrl` when ready | `submitHunyuanJob()`, `pollHunyuanJob()` |
+| **Job Store** | `src/viewer-api/job-store.ts` | In-memory store for async generation jobs keyed by jobId; holds status (`pending`/`completed`/`failed`) and result `modelUrl` | `jobStore` |
+| **Generate Prop Route** | `src/viewer-api/routes/generate-prop.ts` | `POST /scenes/:sceneId/generate-prop` — accepts text description or base64 image, submits to Hunyuan, returns jobId for polling; `GET /scenes/:sceneId/generate-prop/:jobId` — polls job status | `generatePropRoute()` |
+| **Prop Drawer** | `viewer/src/components/PropDrawer.tsx` | Right-side panel for adding props/objects to a scene; supports catalog picker, URL input, and Hunyuan 3D generation (text description or photo upload); feeds result into click-to-place flow | `PropDrawer` |
+| **Object Renderer** | `viewer/src/renderer/object-renderer.ts` | Base class for Three.js object renderers with shared load/dispose lifecycle | `ObjectRenderer` |
+| **GLTF Object Renderer** | `viewer/src/renderer/gltf-object-renderer.ts` | Loads GLTF/GLB models into the scene; handles Hunyuan root-quaternion orientation detection, auto-scale to 1.6 m, foot-to-floor ground offset | `GltfObjectRenderer` |
 | **Logger** | `src/logger.ts` | Structured session/tool-scoped logger with timer helpers and 500-entry in-memory ring buffer; powers /debug/logs | `createLogger()`, `getRecentLogs()` |
 
 ## Settlement Generation (Two-Stage Architecture)
