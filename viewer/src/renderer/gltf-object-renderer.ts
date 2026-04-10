@@ -33,7 +33,7 @@ export class GltfObjectRenderer implements ObjectRenderer {
         for (const mat of mats) {
           if (mat instanceof THREE.MeshStandardMaterial) {
             mat.envMap = envMap;
-            mat.envMapIntensity = 0.6;
+            mat.envMapIntensity = 1.0;
             mat.needsUpdate = true;
           }
         }

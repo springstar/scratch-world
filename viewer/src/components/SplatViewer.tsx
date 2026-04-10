@@ -6,7 +6,7 @@ import {
   Vector2,
   Scene,
   Color,
-  AmbientLight,
+  HemisphereLight,
   DirectionalLight,
   ACESFilmicToneMapping,
   PMREMGenerator,
@@ -16,7 +16,10 @@ import {
   Euler,
   BoxGeometry,
   SphereGeometry,
+  PlaneGeometry,
   MeshStandardMaterial,
+  MeshBasicMaterial,
+  CanvasTexture,
   Mesh,
 } from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
@@ -150,10 +153,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     const scene = new Scene();
     scene.background = new Color(0x0a0a14);
-    scene.add(new AmbientLight(0xffffff, 0.5));
+    // Outdoor lighting: hemisphere (sky/ground) + warm sun + cool fill
+    const hemiLight = new HemisphereLight(0x87ceeb, 0x8b7355, 0.7);
+    scene.add(hemiLight);
     const sunLight = new DirectionalLight(0xfff4e0, 1.2);
-    sunLight.position.set(5, 10, 5);
+    sunLight.position.set(8, 15, 5);
     scene.add(sunLight);
+    const fillLight = new DirectionalLight(0xadd8e6, 0.3);
+    fillLight.position.set(-8, 5, -5);
+    scene.add(fillLight);
 
     // IBL env map — loaded async from Polyhaven; applied to GLTF props once ready.
     let sceneEnvMap: import("three").Texture | null = null;
@@ -163,6 +171,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       .loadAsync("https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr")
       .then((equirect) => {
         sceneEnvMap = pmrem.fromEquirectangular(equirect).texture;
+        scene.environment = sceneEnvMap; // IBL for all scene materials
         pmrem.dispose();
         equirect.dispose();
       })
@@ -214,6 +223,56 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     let cleanupPhysics: (() => void) | null = null;
 
     const worldUp = new Vector3(0, 1, 0);
+
+    // ── Contact shadow helpers ────────────────────────────────────────────────
+    // Creates a soft radial blob shadow under an NPC/prop group.
+    // The plane is added to the scene (NOT the group) so it stays flat on terrain.
+    function createContactShadow(group: import("three").Group, groundY: number): Mesh {
+      const shadowBbox = new Box3().setFromObject(group);
+      const xzSpan = Math.max(
+        shadowBbox.max.x - shadowBbox.min.x,
+        shadowBbox.max.z - shadowBbox.min.z,
+      );
+      const diameter = Math.max(xzSpan * 1.5, 0.4);
+
+      const SIZE = 128;
+      const canvas2d = document.createElement("canvas");
+      canvas2d.width = SIZE;
+      canvas2d.height = SIZE;
+      const ctx = canvas2d.getContext("2d")!;
+      const cx = SIZE / 2;
+      const grad = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
+      grad.addColorStop(0,    "rgba(0,0,0,0.55)");
+      grad.addColorStop(0.35, "rgba(0,0,0,0.35)");
+      grad.addColorStop(0.75, "rgba(0,0,0,0.08)");
+      grad.addColorStop(1.0,  "rgba(0,0,0,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, SIZE, SIZE);
+
+      const shadowMat = new MeshBasicMaterial({
+        map: new CanvasTexture(canvas2d),
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
+      const shadowMesh = new Mesh(new PlaneGeometry(diameter, diameter), shadowMat);
+      shadowMesh.rotation.x = -Math.PI / 2;
+      shadowMesh.position.set(group.position.x, groundY + 0.01, group.position.z);
+      shadowMesh.renderOrder = -1;
+      scene.add(shadowMesh);
+      return shadowMesh;
+    }
+
+    function disposeContactShadow(group: import("three").Group): void {
+      const shadow = group.userData.shadowPlane as Mesh | undefined;
+      if (!shadow) return;
+      scene.remove(shadow);
+      (shadow.material as MeshBasicMaterial).map?.dispose();
+      (shadow.material as MeshBasicMaterial).dispose();
+      shadow.geometry.dispose();
+    }
 
     // ── Free-fly: mouse-drag look + WASD ─────────────────────────────────────
     // No pointer lock in free-fly — mouse look only while button is held.
@@ -508,6 +567,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           }
         });
         scene.add(group);
+        group.userData.shadowPlane = createContactShadow(group, pos.y);
         npcGroups.set(obj.objectId, group);
       };
 
@@ -519,6 +579,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         const group = npcGroups.get(objectId);
         if (group) {
+          disposeContactShadow(group);
           scene.remove(group);
           npcGroups.delete(objectId);
         }
@@ -538,11 +599,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const startTime = performance.now();
         const step = () => {
           const t = Math.min((performance.now() - startTime) / durationMs, 1);
-          group.position.set(
-            startPos.x + (endPos.x - startPos.x) * t,
-            endPos.y,
-            startPos.z + (endPos.z - startPos.z) * t,
-          );
+          const newX = startPos.x + (endPos.x - startPos.x) * t;
+          const newZ = startPos.z + (endPos.z - startPos.z) * t;
+          group.position.set(newX, endPos.y, newZ);
+          // Keep contact shadow centred under the group as it moves
+          const shadow = group.userData.shadowPlane as Mesh | undefined;
+          if (shadow) { shadow.position.x = newX; shadow.position.z = newZ; }
           if (t < 1) requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
@@ -935,7 +997,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         tempBoxGeo.dispose();
         tempBoxMat.dispose();
         disposePhysicsProps(props, world, scene);
-        for (const group of npcGroups.values()) { scene.remove(group); }
+        for (const group of npcGroups.values()) {
+          disposeContactShadow(group);
+          scene.remove(group);
+        }
         npcGroups.clear();
         npcPositions.clear();
         world.free();
@@ -1024,6 +1089,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               }
             });
             scene.add(g);
+            g.userData.shadowPlane = createContactShadow(g, pos.y);
             noPhysicsNpcGroups.set(obj.objectId, g);
           })
           .catch((err: unknown) => {
@@ -1045,7 +1111,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           if (npcMeshList[i].userData.npcObjectId === objectId) npcMeshList.splice(i, 1);
         }
         const group = noPhysicsNpcGroups.get(objectId);
-        if (group) { scene.remove(group); noPhysicsNpcGroups.delete(objectId); }
+        if (group) {
+          disposeContactShadow(group);
+          scene.remove(group);
+          noPhysicsNpcGroups.delete(objectId);
+        }
         noPhysicsNpcPos.delete(objectId);
       };
     }
@@ -1071,7 +1141,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       delete (window as unknown as Record<string, unknown>).__loadSceneNpc;
       delete (window as unknown as Record<string, unknown>).__removeSceneNpc;
       npcPositionsRef.current.clear();
-      for (const g of npcGroupsRef.current.values()) { scene.remove(g); }
+      for (const g of npcGroupsRef.current.values()) {
+        disposeContactShadow(g);
+        scene.remove(g);
+      }
       npcGroupsRef.current.clear();
       doPlacementRef.current = null;
       exitPlacementRef.current = null;
