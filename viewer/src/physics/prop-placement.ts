@@ -42,8 +42,6 @@ function groundY(
   fallbackY = 0,
 ): number {
   const ray = new RAPIER.Ray({ x, y: startY, z }, { x: 0, y: -1, z: 0 });
-  // solid=false: if the ray origin is at or just inside the surface (floating-point
-  // edge case), don't return TOI=0 — find the next surface below instead.
   const hit = world.castRay(ray, 30, false);
   return hit ? startY - hit.timeOfImpact : fallbackY;
 }
@@ -90,16 +88,13 @@ export function resolvePosition(
   // fallbackY when raycast misses entirely: use -ground_plane_offset (Marble coordinate
   // flip gives floor at -offset in Three.js space) or 0 for non-Marble scenes.
   const fallbackY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
-  // Ray origin: start 2 m above the known splat floor level so the ray is always
-  // inside the room, not above the ceiling. Using playerPosition.y + 2 is unsafe
-  // for indoor scenes with low ceilings because the body centre already sits ~1.6 m
-  // above the floor, putting the origin above a 3 m ceiling.
+  // Ray origin for non-exact placement: 2 m above the nominal floor so the ray is
+  // always inside the room, not above the ceiling.
   const rayStartY = fallbackY + 2;
 
-  // "exact": place at the provided x/z directly — used when the user clicked a
-  // specific point in the scene. The click position is already a Rapier surface hit,
-  // so use its Y directly without re-raycasting (a second raycast risks hitting a
-  // ceiling if the start height overshoots).
+  // "exact": use the stored position as-is. The stored Y was set by click-to-place
+  // (which finds the actual terrain height) and is correct for this XZ position.
+  // Do not re-raycast — in vegetation-heavy scenes the downward ray hits tree branches.
   if (hint === "exact" && playerPosition) {
     return { x: playerPosition.x, y: playerPosition.y, z: playerPosition.z };
   }

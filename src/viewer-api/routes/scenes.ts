@@ -129,7 +129,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			objectId,
 			name: body.name,
 			type: "prop" as const,
-			position: { x: 0, y: 0, z: 0 },
+			position: body.playerPosition ?? { x: 0, y: 0, z: 0 },
 			description: body.description,
 			interactable: true,
 			metadata: {
@@ -196,7 +196,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			objectId,
 			name: body.name,
 			type: "npc" as const,
-			position: { x: 0, y: 0, z: 0 },
+			position: body.playerPosition ?? { x: 0, y: 0, z: 0 },
 			description: body.personality,
 			interactable: true,
 			interactionHint: `与${body.name}对话`,

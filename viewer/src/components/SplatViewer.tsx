@@ -457,8 +457,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           objectRendererRegistry.dispose(group);
           return;
         }
-        // Detect models not in Y-up orientation (common for Hunyuan exports).
-        // Find the dominant axis; if Y is not dominant, rotate the model to stand upright.
+        // Orient the model upright: if the Y extent is less than 75 % of the max extent,
+        // the model is lying flat. Threshold 0.75 is calibrated in the placement skill
+        // to catch Joyce (ratio ≈ 0.66) without triggering on upright models.
+        // Reset ALL transforms: GLTF root scene may have baked-in position/rotation that
+        // would corrupt bbox measurements if not cleared first.
+        group.position.set(0, 0, 0);
+        group.rotation.set(0, 0, 0);
         group.scale.setScalar(1);
         group.updateMatrixWorld(true);
         const rawBboxNpc = new Box3().setFromObject(group);
@@ -468,22 +473,24 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const rawMaxExt = Math.max(rawExtX, rawExtY, rawExtZ);
         if (rawMaxExt > 0.01 && rawExtY < rawMaxExt * 0.75) {
           if (rawExtX >= rawExtZ) {
-            // X-dominant: lying sideways. Hunyuan models have head at -X; rotate -90° around Z.
             group.rotation.z = -Math.PI / 2;
           } else {
-            // Z-dominant: Z-up export. Rotate -90° around X to map +Z to +Y.
             group.rotation.x = -Math.PI / 2;
           }
         }
-        // Auto-scale to human height (~1.6 m) when no explicit scale was provided.
+        // Auto-scale NPCs: clamp height to 0.3–2.5 m when no explicit scale was provided.
+        // Cap at 5× to prevent extreme multipliers if orientation detection misfires.
         let effectiveScale = scale;
         if (scale === 1) {
           group.updateMatrixWorld(true);
           const scaledBbox = new Box3().setFromObject(group);
           const modelHeight = scaledBbox.max.y - scaledBbox.min.y;
           if (modelHeight > 0.01) {
-            const TARGET_NPC_HEIGHT = 1.6;
-            effectiveScale = TARGET_NPC_HEIGHT / modelHeight;
+            const NPC_MIN = 0.3;
+            const NPC_MAX = 2.5;
+            const NPC_TARGET = 1.6;
+            if (modelHeight < NPC_MIN) effectiveScale = Math.min(NPC_TARGET / modelHeight, 5);
+            else if (modelHeight > NPC_MAX) effectiveScale = NPC_MAX / modelHeight;
           }
         }
         group.scale.setScalar(effectiveScale);
@@ -973,7 +980,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           .then((group) => {
             if (!group || cancelled) return;
             const g = group as import("three").Group;
-            // Detect models not in Y-up orientation; same logic as physics path.
+            // Reset ALL transforms before measurement (mirrors physics path)
+            g.position.set(0, 0, 0);
+            g.rotation.set(0, 0, 0);
             g.scale.setScalar(1);
             g.updateMatrixWorld(true);
             const rawBboxNp = new Box3().setFromObject(g);
@@ -993,12 +1002,19 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               g.updateMatrixWorld(true);
               const sbbox = new Box3().setFromObject(g);
               const mh = sbbox.max.y - sbbox.min.y;
-              if (mh > 0.01) effectiveScaleNp = 1.6 / mh;
+              if (mh > 0.01) {
+                const NPC_MIN = 0.3;
+                const NPC_MAX = 2.5;
+                const NPC_TARGET = 1.6;
+                if (mh < NPC_MIN) effectiveScaleNp = Math.min(NPC_TARGET / mh, 5);
+                else if (mh > NPC_MAX) effectiveScaleNp = NPC_MAX / mh;
+              }
             }
             g.scale.setScalar(effectiveScaleNp);
             g.updateMatrixWorld(true);
             const npBbox = new Box3().setFromObject(g);
-            g.position.set(pos.x, pos.y + (-npBbox.min.y), pos.z);
+            const npGroundOffset = -npBbox.min.y;
+            g.position.set(pos.x, pos.y + npGroundOffset, pos.z);
             g.traverse((c) => {
               c.userData.objectId = obj.objectId;
               if (c instanceof Mesh) {
