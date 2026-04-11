@@ -212,7 +212,7 @@ export function loadPhysicsProps(
       if (!disposed.value) {
         // Remove the placeholder so users don't see a permanent blue box
         scene.remove(group);
-        world.removeRigidBody(body);
+        try { world.removeRigidBody(body); } catch { /* world may be torn down */ }
         prop.removed = true;
         onLoadError?.(obj.name);
       }
@@ -238,7 +238,10 @@ export function disposePhysicsProps(
   scene: THREE.Scene,
 ): void {
   for (const p of props) {
-    if (!p.removed) world.removeRigidBody(p.body);
+    if (!p.removed) {
+      try { world.removeRigidBody(p.body); } catch { /* already removed or world freed */ }
+      p.removed = true;
+    }
     scene.remove(p.group);
     p.group.traverse((child) => {
       if (child instanceof THREE.Mesh) {

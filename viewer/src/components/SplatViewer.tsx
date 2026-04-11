@@ -209,8 +209,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     let splatInitialized = false;
     splat.initialized.then(() => {
       splatInitialized = true;
-      // setStatus("ready") is deferred to freeFlyLoop — it samples the canvas
-      // pixel to confirm SparkRenderer has actually uploaded and drawn the scene.
+      // Pixel sampling in freeFlyLoop confirms SparkRenderer drew the scene.
+      // If the pixel check never fires (e.g. PBO still bound, dark center pixel),
+      // fall back to marking ready after 3 s so the scene never stays stuck.
+      setTimeout(() => {
+        if (splatInitialized) {
+          splatInitialized = false;
+          setStatus("ready");
+        }
+      }, 3000);
     }).catch((err: unknown) => {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load splat file");
       setStatus("error");
@@ -306,79 +313,104 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const g = new Group();
       const SIZE = 256;
 
-      // ── Spiral vortex disc (canvas texture) ──────────────────────────────
-      const cv2d = document.createElement("canvas");
-      cv2d.width = SIZE; cv2d.height = SIZE;
-      const ctx2d = cv2d.getContext("2d")!;
-      const cx = SIZE / 2;
-      // Dark deep-space base
-      ctx2d.fillStyle = "#050010";
-      ctx2d.fillRect(0, 0, SIZE, SIZE);
-      // Radial glow: bright centre → deep violet → transparent edge
-      const rg = ctx2d.createRadialGradient(cx, cx, 0, cx, cx, cx);
-      rg.addColorStop(0,    "rgba(230,160,255,1.0)");
-      rg.addColorStop(0.15, "rgba(170,60,255,0.95)");
-      rg.addColorStop(0.42, "rgba(70,10,170,0.82)");
-      rg.addColorStop(0.72, "rgba(18,4,55,0.55)");
-      rg.addColorStop(1,    "rgba(0,0,0,0)");
-      ctx2d.fillStyle = rg;
-      ctx2d.fillRect(0, 0, SIZE, SIZE);
-      // Three spiral arms — visible when the disc rotates
-      for (let arm = 0; arm < 3; arm++) {
-        ctx2d.beginPath();
-        const base = (arm / 3) * Math.PI * 2;
-        for (let r = 8; r < cx - 4; r++) {
-          const a = base + (r / (cx - 4)) * Math.PI * 4;
-          const x = cx + r * Math.cos(a);
-          const y = cx + r * Math.sin(a);
-          if (r === 8) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
-        }
-        ctx2d.strokeStyle = "rgba(215,130,255,0.42)";
-        ctx2d.lineWidth = 2.5;
-        ctx2d.stroke();
-      }
-      const discTex = new CanvasTexture(cv2d);
-      const discMat = new MeshBasicMaterial({
-        map: discTex, transparent: true, side: DoubleSide, depthWrite: false,
+      // ── Outer neon ring — MeshStandardMaterial exploits ACES bloom ────────
+      const ringMat = new MeshStandardMaterial({
+        color: new Color(0x00ccff),
+        emissive: new Color(0x00eeff),
+        emissiveIntensity: 3.0,
+        roughness: 0.15,
+        metalness: 0.9,
       });
-      const disc = new Mesh(new PlaneGeometry(1.80, 1.80), discMat);
-      disc.renderOrder = 1;
+      const ring = new Mesh(new TorusGeometry(1.0, 0.12, 20, 80), ringMat);
+      ring.renderOrder = 3;
 
-      // ── Outer ring ────────────────────────────────────────────────────────
-      const ringMat = new MeshBasicMaterial({ color: 0xaa44ff });
-      const ring = new Mesh(new TorusGeometry(1.0, 0.11, 20, 80), ringMat);
-      ring.renderOrder = 2;
+      // ── Inner energy ring ─────────────────────────────────────────────────
+      const innerRingMat = new MeshStandardMaterial({
+        color: new Color(0x88ffff),
+        emissive: new Color(0x44ffff),
+        emissiveIntensity: 5.0,
+        roughness: 0.0,
+        metalness: 1.0,
+      });
+      const innerRing = new Mesh(new TorusGeometry(0.86, 0.045, 12, 60), innerRingMat);
+      innerRing.renderOrder = 4;
 
-      // ── Inner accent ring ─────────────────────────────────────────────────
-      const accentMat = new MeshBasicMaterial({ color: 0xeeddff });
-      const accent = new Mesh(new TorusGeometry(0.85, 0.040, 12, 60), accentMat);
-      accent.renderOrder = 2;
+      // ── Multi-layer vortex discs — depth parallax ─────────────────────────
+      function makeVortexCanvas(alpha: number): HTMLCanvasElement {
+        const cv = document.createElement("canvas");
+        cv.width = SIZE; cv.height = SIZE;
+        const ctx = cv.getContext("2d")!;
+        const cx = SIZE / 2;
+        ctx.fillStyle = `rgba(0,8,30,${alpha})`;
+        ctx.fillRect(0, 0, SIZE, SIZE);
+        const rg = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
+        rg.addColorStop(0,    `rgba(200,255,255,${alpha})`);
+        rg.addColorStop(0.12, `rgba(0,210,255,${alpha * 0.92})`);
+        rg.addColorStop(0.32, `rgba(0,80,200,${alpha * 0.72})`);
+        rg.addColorStop(0.65, `rgba(0,22,70,${alpha * 0.42})`);
+        rg.addColorStop(1,    "rgba(0,0,0,0)");
+        ctx.fillStyle = rg;
+        ctx.fillRect(0, 0, SIZE, SIZE);
+        for (let arm = 0; arm < 4; arm++) {
+          ctx.beginPath();
+          const base = (arm / 4) * Math.PI * 2;
+          for (let r = 6; r < cx - 4; r++) {
+            const a = base + (r / (cx - 4)) * Math.PI * 5;
+            const x = cx + r * Math.cos(a);
+            const y = cx + r * Math.sin(a);
+            if (r === 6) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = `rgba(80,230,255,${alpha * 0.55})`;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        return cv;
+      }
 
-      // ── Ground glow circle ────────────────────────────────────────────────
+      const zOffsets = [0.14, 0, -0.14];
+      const alphas = [0.72, 0.88, 0.60];
+      const layers: Mesh[] = [];
+      for (let i = 0; i < 3; i++) {
+        const layerMat = new MeshBasicMaterial({
+          map: new CanvasTexture(makeVortexCanvas(alphas[i])),
+          transparent: true,
+          side: DoubleSide,
+          depthWrite: false,
+        });
+        const layerDisc = new Mesh(new PlaneGeometry(1.72, 1.72), layerMat);
+        layerDisc.position.z = zOffsets[i];
+        layerDisc.renderOrder = 2;
+        layers.push(layerDisc);
+        g.add(layerDisc);
+      }
+      g.userData.layers = layers;
+
+      // ── Ground glow ───────────────────────────────────────────────────────
       const glowCv = document.createElement("canvas");
       glowCv.width = SIZE; glowCv.height = SIZE;
       const gCtx = glowCv.getContext("2d")!;
-      const gg = gCtx.createRadialGradient(cx, cx, 0, cx, cx, cx);
-      gg.addColorStop(0,   "rgba(140,50,255,0.65)");
-      gg.addColorStop(0.4, "rgba(80,20,200,0.32)");
-      gg.addColorStop(0.72,"rgba(35,7,90,0.14)");
-      gg.addColorStop(1,   "rgba(0,0,0,0)");
+      const gcx = SIZE / 2;
+      const gg = gCtx.createRadialGradient(gcx, gcx, 0, gcx, gcx, gcx);
+      gg.addColorStop(0,    "rgba(0,200,255,0.60)");
+      gg.addColorStop(0.35, "rgba(0,120,220,0.28)");
+      gg.addColorStop(0.70, "rgba(0,50,120,0.10)");
+      gg.addColorStop(1,    "rgba(0,0,0,0)");
       gCtx.fillStyle = gg;
       gCtx.fillRect(0, 0, SIZE, SIZE);
       const glowMat = new MeshBasicMaterial({
         map: new CanvasTexture(glowCv), transparent: true, depthWrite: false,
       });
-      const groundGlow = new Mesh(new PlaneGeometry(3.4, 3.4), glowMat);
+      const groundGlow = new Mesh(new PlaneGeometry(3.6, 3.6), glowMat);
       groundGlow.rotation.x = -Math.PI / 2;
-      groundGlow.position.y = -(1.0 + 0.11); // ground relative to group centre
+      groundGlow.position.y = -(1.0 + 0.12); // ground relative to group centre
       groundGlow.renderOrder = 0;
 
-      g.add(disc, ring, accent, groundGlow);
-      g.userData.disc = disc;
+      g.add(ring, innerRing, groundGlow);
       g.userData.ring = ring;
+      g.userData.innerRing = innerRing;
 
       // Bottom of ring touches ground: group.y = pos.y + radius + tube
-      g.position.set(pos.x, pos.y + 1.0 + 0.11, pos.z);
+      g.position.set(pos.x, pos.y + 1.0 + 0.12, pos.z);
       scene.add(g);
       return g;
     }
@@ -390,7 +422,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (!(child instanceof Mesh)) return;
         child.geometry.dispose();
         const mats = Array.isArray(child.material) ? child.material : [child.material];
-        for (const m of mats) (m as MeshBasicMaterial).dispose();
+        for (const m of mats) m.dispose();
       });
     }
 
@@ -399,17 +431,21 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const t = performance.now() * 0.001;
       for (const entry of portalMap.values()) {
         const g = entry.group;
-        // Rotate the vortex disc (creates the swirling illusion)
-        const disc = g.userData.disc as Mesh;
-        disc.rotation.z = t * 0.55;
-        // Pulse the outer ring colour between deep violet and bright purple
+        // Rotate vortex layers at different speeds for parallax depth
+        const layers = g.userData.layers as Mesh[] | undefined;
+        if (layers) {
+          layers[0].rotation.z = t * 0.60;
+          layers[1].rotation.z = -t * 0.35;
+          layers[2].rotation.z = t * 0.18;
+        }
+        // Pulse outer ring emissive intensity
         const ring = g.userData.ring as Mesh;
-        const pulse = 0.5 + 0.5 * Math.sin(t * 1.4);
-        (ring.material as MeshBasicMaterial).color.setRGB(
-          0.52 + 0.22 * pulse,
-          0.14 + 0.14 * pulse,
-          0.90 + 0.10 * pulse,
-        );
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.8);
+        (ring.material as MeshStandardMaterial).emissiveIntensity = 2.5 + 1.5 * pulse;
+        // Pulse inner ring faster
+        const innerRing = g.userData.innerRing as Mesh;
+        const pulse2 = 0.5 + 0.5 * Math.sin(t * 2.6 + 1.0);
+        (innerRing.material as MeshStandardMaterial).emissiveIntensity = 4.0 + 3.0 * pulse2;
       }
     }
 
@@ -593,6 +629,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const freeFlyFwd   = new Vector3();
     const freeFlyRight = new Vector3();
     const freeFlyMove  = new Vector3();
+    let freeFlyFrameCount = 0;
 
     function freeFlyLoop() {
       if (!freeFlyActive) return;
@@ -612,11 +649,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       }
       tickPortals();
       renderer.render(scene, camera);
-      // Once the splat is parsed, sample the center pixel each frame.
-      // SparkRenderer uploads to GPU asynchronously; the scene is visible only
-      // after the first non-background draw call completes.
-      if (splatInitialized && canvas!.clientWidth > 0 && canvas!.clientHeight > 0) {
-        const gl = renderer.getContext();
+      // Once the splat is parsed, sample the center pixel every ~30 frames.
+      // readPixels causes a GPU-CPU sync stall; throttling keeps it cheap.
+      // The 3-s setTimeout fallback above ensures we never get stuck.
+      if (splatInitialized && canvas!.clientWidth > 0 && canvas!.clientHeight > 0 && ++freeFlyFrameCount % 30 === 0) {
+        const gl = renderer.getContext() as WebGL2RenderingContext;
+        // SparkJS may leave a PBO bound after rendering; unbind before readPixels
+        // or the call fails with INVALID_OPERATION and returns zeros forever.
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         const px = new Uint8Array(4);
         gl.readPixels(
           Math.floor(canvas!.clientWidth / 2),
@@ -667,8 +707,28 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       if (cancelled) return;
 
       const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 }); // standard -Y gravity; after PI-bake the floor is at world Y < camera
-      await buildWorldColliders(world, colliderMeshUrl!);
-      if (cancelled) { world.free(); return; }
+
+      const groundOffset = splatGroundOffset ?? 2.0;
+      const isIndoor = groundOffset < 1.5;
+
+      if (!isIndoor) {
+        // Outdoor scenes: load the full collision mesh (terrain, slopes, etc.).
+        await buildWorldColliders(world, colliderMeshUrl!);
+        if (cancelled) { world.free(); return; }
+      } else {
+        // Indoor scenes: skip the collision mesh entirely.
+        // The Marble-generated mesh for rooms contains dense wall/furniture geometry
+        // that surrounds the spawn origin and blocks all KCC movement.
+        // A large synthetic floor plane provides the only physics surface needed;
+        // there is no risk of falling off cliffs indoors.
+        const floorBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+        world.createCollider(
+          RAPIER.ColliderDesc.cuboid(50, 0.05, 50)
+            .setTranslation(0, -groundOffset - 0.05, 0)
+            .setFriction(0.8),
+          floorBody,
+        );
+      }
 
       const cc = createCharacterController(world);
 
@@ -694,6 +754,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
       // Load a single NPC model and register its resolved position.
       const loadSceneNpc = async (obj: import("../types.js").SceneObject): Promise<void> => {
+        // Bail early if physics has been torn down (scene switch in progress).
+        if (disposed.value) return;
         // Skip if already registered (dedup guard for concurrent loadSceneById + scene_updated calls)
         if (npcPositions.has(obj.objectId)) return;
         const modelUrl = obj.metadata.modelUrl as string | undefined;
@@ -719,7 +781,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const hint = obj.metadata.placement as PlacementHint | undefined;
         const playerPos = obj.metadata.playerPosition as { x: number; y: number; z: number } | undefined;
         const cameraFwd = obj.metadata.cameraForward as { x: number; z: number } | undefined;
-        const occupied = [...npcPositions.values(), ...props.map((p) => { const t = p.body.translation(); return { x: t.x, y: t.y, z: t.z }; })];
+        const occupied = [...npcPositions.values(), ...props.filter((p) => !p.removed).map((p) => { const t = p.body.translation(); return { x: t.x, y: t.y, z: t.z }; })];
         const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], npcGroups.size, playerPos, splatGroundOffset, cameraFwd);
         npcPositions.set(obj.objectId, pos);
 
@@ -1020,6 +1082,22 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const fwd = new Vector3();
       const right = new Vector3();
 
+      // Last known body position — used to re-enter at the same spot after ESC.
+      // Y is stored so re-entry spawns at the exact last height (no raycast needed).
+      let lastBodyXZ = { x: camera.position.x, z: camera.position.z };
+      let lastBodyY: number | null = null;
+
+      // Two-path spawn: outdoor vs. indoor (same discriminator as collision setup above).
+      function findSpawnPosition(startX: number, startZ: number): { x: number; y: number; z: number } {
+        if (!isIndoor) {
+          // PATH A: outdoor — body falls to terrain, camera already at good height.
+          return { x: startX, y: camera.position.y - 0.8, z: startZ };
+        }
+        // PATH B: indoor — only the synthetic floor at Y=-groundOffset exists.
+        // Capsule bottom 0.1 m above it; KCC snaps down on frame 1.
+        return { x: startX, y: -groundOffset + 1.0, z: startZ };
+      }
+
       function physicsLoop() {
         if (!inPhysicsMode) return;
         animId = requestAnimationFrame(physicsLoop);
@@ -1041,8 +1119,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         world.step();
 
         const pos = cc.body.translation();
+        lastBodyXZ.x = pos.x;
+        lastBodyXZ.z = pos.z;
+        lastBodyY = pos.y;
         // Eye is 0.8m above body center (standard Y-up: eye = body.y + 0.8)
-        camera.position.set(pos.x, pos.y + 0.8, pos.z);
+        // Eye offset: 0.8 m for outdoor (normal standing height);
+        // 0.5 m for indoor so the camera sits lower in the room (~1.4 m above floor).
+        camera.position.set(pos.x, pos.y + (isIndoor ? 0.5 : 0.8), pos.z);
         (window as unknown as Record<string, unknown>).__playerPosition = { x: pos.x, y: pos.y, z: pos.z };
         // Expose normalised camera forward (XZ only) for placement direction calculations
         if (fwd.lengthSq() > 0.0001) {
@@ -1066,16 +1149,29 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const locked = document.pointerLockElement === cv;
         setIsLocked(locked);
         if (locked && !inPhysicsMode) {
+          const wasAlreadyIn = hasEnteredScene;
           hasEnteredScene = true;
           stopFreeFly();
-          // Marble scenes: floor at world Y=0, camera eye at Y=1.7.
-          // Body centre = camera.y - 0.8 = 0.9; capsule bottom = 0 = floor.
-          // No raycast needed — floor position is always Y=0 by Marble convention.
-          cc.body.setNextKinematicTranslation({
-            x: camera.position.x,
-            y: camera.position.y - 0.8,
-            z: camera.position.z,
-          });
+          let bodyX: number;
+          let bodyY: number;
+          let bodyZ: number;
+          if (wasAlreadyIn && lastBodyY !== null) {
+            // Re-entry: return to exact last position
+            bodyX = lastBodyXZ.x;
+            bodyY = lastBodyY;
+            bodyZ = lastBodyXZ.z;
+          } else {
+            // First entry: scan from camera XZ outward to find floor geometry.
+            // Scenes where the origin is outside the room's collision mesh (e.g.
+            // living room) would otherwise cause the body to fall indefinitely.
+            const spawn = findSpawnPosition(camera.position.x, camera.position.z);
+            bodyX = spawn.x;
+            bodyY = spawn.y;
+            bodyZ = spawn.z;
+          }
+          cc.body.setNextKinematicTranslation({ x: bodyX, y: bodyY, z: bodyZ });
+          lastBodyXZ.x = bodyX;
+          lastBodyXZ.z = bodyZ;
           cc.verticalVel = 0;
           world.step(); // commit teleport before cc.move() reads body.translation()
           clock.getDelta(); // flush accumulated delta

@@ -1,12 +1,13 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 
 // Capsule: half-height 0.6 + radius 0.3 on each end → ~1.8m tall.
-// Marble normalises scenes so the floor sits at world Y = 0 (after the PI flip baked
-// into buildWorldColliders). Standard physics: gravity -9.81 Y, setUp (0,+1,0).
-// Camera eye is 1.7 m above the floor → body centre at Y = 0.9 (capsule bottom = 0 = floor).
+// After the COLMAP→Three.js PI flip, the floor sits at Y = -splatGroundOffset.
+// onLockChange in SplatViewer overrides the SPAWN Y immediately on pointer lock,
+// deriving body centre from camera.y - 0.8 (camera already positioned above the actual floor).
+// SPAWN is only used for the initial Rapier body before pointer lock is acquired.
 const HALF_HEIGHT = 0.6;
 const RADIUS = 0.3;
-const SPAWN = { x: 0, y: 0.9, z: 0 }; // body centre when standing on floor at Y = 0
+const SPAWN = { x: 0, y: 0.9, z: 0 }; // temporary; overridden by onLockChange
 
 export interface CharacterController {
   body: InstanceType<typeof RAPIER.RigidBody>;
