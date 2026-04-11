@@ -90,7 +90,6 @@ export function App() {
   // Portal state
   const [showPortalDrawer, setShowPortalDrawer] = useState(false);
   const [pendingPortal, setPendingPortal] = useState<{ name?: string; targetSceneId?: string; targetSceneName?: string } | null>(null);
-  const [portalApproach, setPortalApproach] = useState<{ objectId: string; targetSceneId: string | null; targetSceneName: string | null } | null>(null);
   const [portalScenePicker, setPortalScenePicker] = useState(false);
 
   // Prop library — persisted to localStorage so it survives page reloads
@@ -155,12 +154,16 @@ export function App() {
             | ((obj: SceneObject) => Promise<void>) | undefined;
           const loadNpcFn = (window as unknown as Record<string, unknown>).__loadSceneNpc as
             | ((obj: SceneObject) => Promise<void>) | undefined;
+          const loadPortalFn = (window as unknown as Record<string, unknown>).__loadScenePortal as
+            | ((obj: SceneObject) => void) | undefined;
           for (const obj of s.sceneData.objects) {
             if (prevIds.has(obj.objectId)) continue;
             if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string") {
               loadPropFn?.(obj).catch(console.warn);
             } else if (obj.type === "npc" && obj.interactable) {
               loadNpcFn?.(obj).catch(console.warn);
+            } else if (obj.type === "portal") {
+              loadPortalFn?.(obj);
             }
           }
         })
@@ -519,21 +522,25 @@ export function App() {
   }, []);
 
   const handlePortalApproach = useCallback(
-    (objectId: string, targetSceneId: string | null, targetSceneName: string | null) => {
+    (_objectId: string, targetSceneId: string | null, _targetSceneName: string | null) => {
       if (pendingProp !== null || pendingNpc !== null) return;
-      setPortalApproach({ objectId, targetSceneId, targetSceneName });
+      if (targetSceneId) {
+        // Travel immediately — no confirmation needed
+        loadSceneById(targetSceneId, { session: sessionId });
+      } else {
+        // No preset target — open scene picker
+        setPortalScenePicker(true);
+      }
     },
-    [pendingProp, pendingNpc],
+    [pendingProp, pendingNpc, loadSceneById, sessionId],
   );
 
   const handlePortalLeave = useCallback(() => {
-    setPortalApproach(null);
     setPortalScenePicker(false);
   }, []);
 
   const handlePortalTravel = useCallback(
     (targetSceneId: string) => {
-      setPortalApproach(null);
       setPortalScenePicker(false);
       loadSceneById(targetSceneId, { session: sessionId });
     },
@@ -745,92 +752,6 @@ export function App() {
                 onAction={handleAction}
                 onDismiss={() => setSelected(null)}
               />
-            )}
-
-            {/* Portal approach prompt */}
-            {portalApproach && (
-              <div style={{
-                position: "absolute",
-                bottom: 90,
-                left: "50%",
-                transform: "translateX(-50%)",
-                background: "rgba(14,6,36,0.94)",
-                backdropFilter: "blur(14px)",
-                border: "1px solid rgba(140,80,255,0.45)",
-                borderRadius: 14,
-                padding: "16px 24px",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: 10,
-                zIndex: 200,
-                minWidth: 240,
-                fontFamily: "system-ui, -apple-system, sans-serif",
-              }}>
-                <div style={{ color: "rgba(200,180,255,0.95)", fontSize: 15, fontWeight: 600 }}>
-                  {scene.sceneData.objects.find((o) => o.objectId === portalApproach.objectId)?.name ?? "传送门"}
-                </div>
-                {portalApproach.targetSceneName && (
-                  <div style={{ color: "rgba(170,200,255,0.8)", fontSize: 13 }}>
-                    → {portalApproach.targetSceneName}
-                  </div>
-                )}
-                {!portalApproach.targetSceneId && (
-                  <div style={{ color: "rgba(150,160,220,0.65)", fontSize: 12 }}>
-                    通往未知世界…
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
-                  {portalApproach.targetSceneId ? (
-                    <button
-                      onClick={() => handlePortalTravel(portalApproach.targetSceneId!)}
-                      style={{
-                        background: "rgba(100,50,220,0.55)",
-                        border: "1px solid rgba(140,90,255,0.5)",
-                        borderRadius: 8,
-                        padding: "8px 20px",
-                        color: "rgba(220,210,255,0.95)",
-                        fontSize: 13,
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      进入
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => setPortalScenePicker(true)}
-                      style={{
-                        background: "rgba(100,50,220,0.55)",
-                        border: "1px solid rgba(140,90,255,0.5)",
-                        borderRadius: 8,
-                        padding: "8px 20px",
-                        color: "rgba(220,210,255,0.95)",
-                        fontSize: 13,
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      选择目标
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setPortalApproach(null)}
-                    style={{
-                      background: "rgba(255,255,255,0.05)",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 8,
-                      padding: "8px 14px",
-                      color: "rgba(180,160,220,0.7)",
-                      fontSize: 13,
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    离开
-                  </button>
-                </div>
-              </div>
             )}
           </>
         )}

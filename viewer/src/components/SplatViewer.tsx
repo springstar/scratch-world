@@ -353,21 +353,39 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     }
 
     // Load all portal objects from sceneObjects.
+    function loadSinglePortal(obj: SceneObject): void {
+      if (obj.type !== "portal") return;
+      if (portalMap.has(obj.objectId)) return;
+      const pos = {
+        x: (obj.metadata.playerPosition as { x: number } | undefined)?.x ?? obj.position.x,
+        y: (obj.metadata.playerPosition as { y: number } | undefined)?.y ?? obj.position.y,
+        z: (obj.metadata.playerPosition as { z: number } | undefined)?.z ?? obj.position.z,
+      };
+      const targetSceneId = typeof obj.metadata.targetSceneId === "string" ? obj.metadata.targetSceneId : null;
+      const targetSceneName = typeof obj.metadata.targetSceneName === "string" ? obj.metadata.targetSceneName : null;
+      const group = createPortalMesh(pos);
+      portalMap.set(obj.objectId, { position: pos, targetSceneId, targetSceneName, group });
+    }
+
     function loadPortals(): void {
       for (const obj of sceneObjectsRef.current ?? []) {
-        if (obj.type !== "portal") continue;
-        if (portalMap.has(obj.objectId)) continue;
-        const pos = {
-          x: (obj.metadata.playerPosition as { x: number } | undefined)?.x ?? obj.position.x,
-          y: (obj.metadata.playerPosition as { y: number } | undefined)?.y ?? obj.position.y,
-          z: (obj.metadata.playerPosition as { z: number } | undefined)?.z ?? obj.position.z,
-        };
-        const targetSceneId = typeof obj.metadata.targetSceneId === "string" ? obj.metadata.targetSceneId : null;
-        const targetSceneName = typeof obj.metadata.targetSceneName === "string" ? obj.metadata.targetSceneName : null;
-        const group = createPortalMesh(pos);
-        portalMap.set(obj.objectId, { position: pos, targetSceneId, targetSceneName, group });
+        loadSinglePortal(obj);
       }
     }
+
+    function removeSinglePortal(objectId: string): void {
+      const entry = portalMap.get(objectId);
+      if (!entry) return;
+      disposePortal(entry);
+      portalMap.delete(objectId);
+      if (nearPortalIdRef.current === objectId) {
+        nearPortalIdRef.current = null;
+        onPortalLeaveRef.current?.();
+      }
+    }
+
+    (window as unknown as Record<string, unknown>).__loadScenePortal = loadSinglePortal;
+    (window as unknown as Record<string, unknown>).__removeScenePortal = removeSinglePortal;
 
     // Portal proximity check — call from physicsLoop after syncPhysicsProps.
     const PORTAL_ENTER_DIST = 1.5;
@@ -1130,6 +1148,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         delete (window as unknown as Record<string, unknown>).__removeSceneNpc;
         delete (window as unknown as Record<string, unknown>).__moveNpc;
         delete (window as unknown as Record<string, unknown>).__emoteNpc;
+        delete (window as unknown as Record<string, unknown>).__loadScenePortal;
+        delete (window as unknown as Record<string, unknown>).__removeScenePortal;
         physicsRef.world = null;
         physicsRef.RAPIER = null;
         doPlacementRef.current = null;
@@ -1295,6 +1315,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
       delete (window as unknown as Record<string, unknown>).__loadSceneNpc;
       delete (window as unknown as Record<string, unknown>).__removeSceneNpc;
+      delete (window as unknown as Record<string, unknown>).__loadScenePortal;
+      delete (window as unknown as Record<string, unknown>).__removeScenePortal;
       npcPositionsRef.current.clear();
       for (const g of npcGroupsRef.current.values()) {
         disposeContactShadow(g);
