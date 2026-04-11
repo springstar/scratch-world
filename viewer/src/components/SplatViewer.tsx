@@ -15,6 +15,7 @@ import {
   Box3,
   Euler,
   BoxGeometry,
+  CylinderGeometry,
   SphereGeometry,
   TorusGeometry,
   PlaneGeometry,
@@ -22,7 +23,6 @@ import {
   MeshBasicMaterial,
   CanvasTexture,
   Mesh,
-  AdditiveBlending,
   Group,
   DoubleSide,
 } from "three";
@@ -305,28 +305,40 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     function createPortalMesh(pos: { x: number; y: number; z: number }): Group {
       const g = new Group();
-      // Outer ring
-      const ringMat = new MeshBasicMaterial({
-        color: 0x9933ff,
+
+      // Two perpendicular rings — visible from any horizontal angle
+      const ringMat = new MeshBasicMaterial({ color: 0xcc55ff });
+      const ring1 = new Mesh(new TorusGeometry(1.05, 0.13, 16, 64), ringMat);
+      const ring2 = new Mesh(new TorusGeometry(1.05, 0.13, 16, 64), ringMat.clone());
+      ring2.rotation.y = Math.PI / 2; // perpendicular
+
+      // Bright white accent ring inside
+      const accentMat = new MeshBasicMaterial({ color: 0xffffff });
+      const accent = new Mesh(new TorusGeometry(0.82, 0.055, 12, 48), accentMat);
+
+      // Translucent inner disc (visible color fill)
+      const discMat = new MeshBasicMaterial({
+        color: 0xaa44ff,
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.35,
         side: DoubleSide,
-        blending: AdditiveBlending,
         depthWrite: false,
       });
-      const ring = new Mesh(new TorusGeometry(1.0, 0.07, 16, 64), ringMat);
-      // Inner shimmer disc
-      const shimmerMat = new MeshBasicMaterial({
-        color: 0x5511cc,
-        transparent: true,
-        opacity: 0.15,
-        side: DoubleSide,
-        blending: AdditiveBlending,
-        depthWrite: false,
-      });
-      const shimmer = new Mesh(new PlaneGeometry(1.9, 1.9), shimmerMat);
-      g.add(ring, shimmer);
-      // Stand upright (ring in XY plane = vertical portal)
+      const disc = new Mesh(new PlaneGeometry(1.85, 1.85), discMat);
+      disc.renderOrder = 1;
+
+      // Vertical beacon pillar above the portal (visible from far away)
+      const pillarMat = new MeshBasicMaterial({ color: 0xdd88ff });
+      const pillar = new Mesh(new CylinderGeometry(0.06, 0.06, 5, 8), pillarMat);
+      pillar.position.y = 3.5; // 3.5m above portal center → top at ~5.5m above ground
+
+      // Floating orb at pillar top
+      const orbMat = new MeshBasicMaterial({ color: 0xffffff });
+      const orb = new Mesh(new SphereGeometry(0.18, 12, 12), orbMat);
+      orb.position.y = 6.1;
+
+      g.add(ring1, ring2, accent, disc, pillar, orb);
+      // Portal center at 1m above ground
       g.position.set(pos.x, pos.y + 1.0, pos.z);
       scene.add(g);
       return g;
@@ -338,7 +350,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       g.traverse((child) => {
         if (!(child instanceof Mesh)) return;
         child.geometry.dispose();
-        (child.material as MeshBasicMaterial).dispose();
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const m of mats) (m as MeshBasicMaterial).dispose();
       });
     }
 
@@ -346,9 +359,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     function tickPortals(): void {
       const t = performance.now() * 0.001;
       for (const entry of portalMap.values()) {
-        entry.group.rotation.y = t * 0.35;
-        const shimmer = entry.group.children[1] as Mesh;
-        (shimmer.material as MeshBasicMaterial).opacity = 0.10 + 0.06 * Math.sin(t * 1.8);
+        const g = entry.group;
+        // Slowly spin the whole group around Y
+        g.rotation.y = t * 0.3;
+        // Pulse the inner disc opacity
+        const disc = g.children[3] as Mesh;
+        (disc.material as MeshBasicMaterial).opacity = 0.25 + 0.12 * Math.sin(t * 1.8);
+        // Bob the orb up and down slightly
+        const orb = g.children[5] as Mesh;
+        orb.position.y = 6.1 + 0.15 * Math.sin(t * 1.2);
       }
     }
 
