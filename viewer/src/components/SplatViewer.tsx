@@ -16,11 +16,15 @@ import {
   Euler,
   BoxGeometry,
   SphereGeometry,
+  TorusGeometry,
   PlaneGeometry,
   MeshStandardMaterial,
   MeshBasicMaterial,
   CanvasTexture,
   Mesh,
+  AdditiveBlending,
+  Group,
+  DoubleSide,
 } from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -67,12 +71,17 @@ interface Props {
   propPlacementPending?: boolean;
   onPropPlace?: (pos: { x: number; y: number; z: number }) => void;
   onPropPlaceCancel?: () => void;
+  portalPlacementPending?: boolean;
+  onPortalPlace?: (pos: { x: number; y: number; z: number }) => void;
+  onPortalPlaceCancel?: () => void;
+  onPortalApproach?: (objectId: string, targetSceneId: string | null, targetSceneName: string | null) => void;
+  onPortalLeave?: () => void;
 }
 
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -112,18 +121,29 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onPropPlaceCancelRef.current = onPropPlaceCancel;
   const propPlacementPendingRef = useRef(propPlacementPending);
   propPlacementPendingRef.current = propPlacementPending;
+  const onPortalPlaceRef = useRef(onPortalPlace);
+  onPortalPlaceRef.current = onPortalPlace;
+  const onPortalPlaceCancelRef = useRef(onPortalPlaceCancel);
+  onPortalPlaceCancelRef.current = onPortalPlaceCancel;
+  const portalPlacementPendingRef = useRef(portalPlacementPending);
+  portalPlacementPendingRef.current = portalPlacementPending;
   const onNpcApproachRef = useRef(onNpcApproach);
   onNpcApproachRef.current = onNpcApproach;
   const onNpcLeaveRef = useRef(onNpcLeave);
   onNpcLeaveRef.current = onNpcLeave;
+  const onPortalApproachRef = useRef(onPortalApproach);
+  onPortalApproachRef.current = onPortalApproach;
+  const onPortalLeaveRef = useRef(onPortalLeave);
+  onPortalLeaveRef.current = onPortalLeave;
+  const nearPortalIdRef = useRef<string | null>(null);
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
 
   // Exit pointer lock when entering placement mode so clicks reach the free-fly handler.
   useEffect(() => {
-    if ((propPlacementPending || npcPlacementPending) && document.pointerLockElement) {
+    if ((propPlacementPending || npcPlacementPending || portalPlacementPending) && document.pointerLockElement) {
       document.exitPointerLock();
     }
-  }, [propPlacementPending, npcPlacementPending]);
+  }, [propPlacementPending, npcPlacementPending, portalPlacementPending]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -274,6 +294,117 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       shadow.geometry.dispose();
     }
 
+    // ── Portal helpers ────────────────────────────────────────────────────────
+    interface PortalEntry {
+      position: { x: number; y: number; z: number };
+      targetSceneId: string | null;
+      targetSceneName: string | null;
+      group: Group;
+    }
+    const portalMap = new Map<string, PortalEntry>();
+
+    function createPortalMesh(pos: { x: number; y: number; z: number }): Group {
+      const g = new Group();
+      // Outer ring
+      const ringMat = new MeshBasicMaterial({
+        color: 0x9933ff,
+        transparent: true,
+        opacity: 0.9,
+        side: DoubleSide,
+        blending: AdditiveBlending,
+        depthWrite: false,
+      });
+      const ring = new Mesh(new TorusGeometry(1.0, 0.07, 16, 64), ringMat);
+      // Inner shimmer disc
+      const shimmerMat = new MeshBasicMaterial({
+        color: 0x5511cc,
+        transparent: true,
+        opacity: 0.15,
+        side: DoubleSide,
+        blending: AdditiveBlending,
+        depthWrite: false,
+      });
+      const shimmer = new Mesh(new PlaneGeometry(1.9, 1.9), shimmerMat);
+      g.add(ring, shimmer);
+      // Stand upright (ring in XY plane = vertical portal)
+      g.position.set(pos.x, pos.y + 1.0, pos.z);
+      scene.add(g);
+      return g;
+    }
+
+    function disposePortal(entry: PortalEntry): void {
+      const g = entry.group;
+      scene.remove(g);
+      g.traverse((child) => {
+        if (!(child instanceof Mesh)) return;
+        child.geometry.dispose();
+        (child.material as MeshBasicMaterial).dispose();
+      });
+    }
+
+    // Rotate portals and pulse shimmer — called each frame in both render loops.
+    function tickPortals(): void {
+      const t = performance.now() * 0.001;
+      for (const entry of portalMap.values()) {
+        entry.group.rotation.y = t * 0.35;
+        const shimmer = entry.group.children[1] as Mesh;
+        (shimmer.material as MeshBasicMaterial).opacity = 0.10 + 0.06 * Math.sin(t * 1.8);
+      }
+    }
+
+    // Load all portal objects from sceneObjects.
+    function loadPortals(): void {
+      for (const obj of sceneObjectsRef.current ?? []) {
+        if (obj.type !== "portal") continue;
+        if (portalMap.has(obj.objectId)) continue;
+        const pos = {
+          x: (obj.metadata.playerPosition as { x: number } | undefined)?.x ?? obj.position.x,
+          y: (obj.metadata.playerPosition as { y: number } | undefined)?.y ?? obj.position.y,
+          z: (obj.metadata.playerPosition as { z: number } | undefined)?.z ?? obj.position.z,
+        };
+        const targetSceneId = typeof obj.metadata.targetSceneId === "string" ? obj.metadata.targetSceneId : null;
+        const targetSceneName = typeof obj.metadata.targetSceneName === "string" ? obj.metadata.targetSceneName : null;
+        const group = createPortalMesh(pos);
+        portalMap.set(obj.objectId, { position: pos, targetSceneId, targetSceneName, group });
+      }
+    }
+
+    // Portal proximity check — call from physicsLoop after syncPhysicsProps.
+    const PORTAL_ENTER_DIST = 1.5;
+    const PORTAL_LEAVE_DIST = 2.0;
+    function checkPortalProximity(playerX: number, playerZ: number): void {
+      let nearId: string | null = null;
+      let nearEntry: PortalEntry | null = null;
+      for (const [id, entry] of portalMap) {
+        const dx = entry.position.x - playerX;
+        const dz = entry.position.z - playerZ;
+        if (Math.sqrt(dx * dx + dz * dz) < PORTAL_ENTER_DIST) {
+          nearId = id;
+          nearEntry = entry;
+          break;
+        }
+      }
+
+      if (nearId && nearPortalIdRef.current !== nearId) {
+        nearPortalIdRef.current = nearId;
+        onPortalApproachRef.current?.(nearId, nearEntry!.targetSceneId, nearEntry!.targetSceneName);
+      } else if (!nearId && nearPortalIdRef.current) {
+        // Check still outside leave distance for all portals
+        const currentEntry = portalMap.get(nearPortalIdRef.current);
+        if (currentEntry) {
+          const dx = currentEntry.position.x - playerX;
+          const dz = currentEntry.position.z - playerZ;
+          if (Math.sqrt(dx * dx + dz * dz) > PORTAL_LEAVE_DIST) {
+            nearPortalIdRef.current = null;
+            onPortalLeaveRef.current?.();
+          }
+        } else {
+          nearPortalIdRef.current = null;
+          onPortalLeaveRef.current?.();
+        }
+      }
+    }
+
     // ── Free-fly: mouse-drag look + WASD ─────────────────────────────────────
     // No pointer lock in free-fly — mouse look only while button is held.
     // This avoids a race where the free-fly lock resolves before the physics
@@ -322,12 +453,17 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               onPropPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
               return;
             }
+            // If portal placement is pending, deliver the hit position and consume the click
+            if (portalPlacementPendingRef.current) {
+              onPortalPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
+              return;
+            }
             // Show 2-second visual indicator dot at screen position
             if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
             setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top });
             clickIndicatorTimer = setTimeout(() => setClickIndicator(null), 2000);
           }
-        } else if (npcPlacementPendingRef.current || propPlacementPendingRef.current) {
+        } else if (npcPlacementPendingRef.current || propPlacementPendingRef.current || portalPlacementPendingRef.current) {
           // No physics world available — intersect camera ray with a horizontal ground plane.
           // splatGroundOffset is the Marble ground_plane_offset — negate for Three.js world Y.
           const groundY = splatGroundOffset !== undefined ? -splatGroundOffset : (camera.position.y - 1.7);
@@ -345,6 +481,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               const pt = { x: origin.x + dir.x * t, y: groundY, z: origin.z + dir.z * t };
               if (npcPlacementPendingRef.current) {
                 onNpcPlaceRef.current?.(pt);
+              } else if (portalPlacementPendingRef.current) {
+                onPortalPlaceRef.current?.(pt);
               } else {
                 onPropPlaceRef.current?.(pt);
               }
@@ -393,6 +531,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
         if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
       }
+      tickPortals();
       renderer.render(scene, camera);
       // Once the splat is parsed, sample the center pixel each frame.
       // SparkRenderer uploads to GPU asynchronously; the scene is visible only
@@ -627,6 +766,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         });
       }
 
+      // Load all portals that exist at physics init time.
+      loadPortals();
+
       // Physics ready — GLBs load in background; show "Click to enter" immediately
       setPhysicsReady(true);
 
@@ -835,7 +977,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           b.mesh.quaternion.set(r.x, r.y, r.z, r.w);
         }
         syncPhysicsProps(props);
-
+        checkPortalProximity(pos.x, pos.z);
+        tickPortals();
         renderer.render(scene, camera);
       }
 
@@ -918,6 +1061,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         // ESC key: cancel pending prop placement if active
         if (e.key === "Escape" && propPlacementPendingRef.current) {
           onPropPlaceCancelRef.current?.();
+          return;
+        }
+        // ESC key: cancel pending portal placement if active
+        if (e.key === "Escape" && portalPlacementPendingRef.current) {
+          onPortalPlaceCancelRef.current?.();
           return;
         }
         // ESC: close NPC chat if open
@@ -1003,6 +1151,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         npcGroups.clear();
         npcPositions.clear();
+        for (const entry of portalMap.values()) {
+          disposePortal(entry);
+        }
+        portalMap.clear();
         world.free();
       };
     }
@@ -1118,6 +1270,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         noPhysicsNpcPos.delete(objectId);
       };
+
+      // Load portals in no-physics mode too.
+      loadPortals();
     }
 
     if (colliderMeshUrl) {
@@ -1146,6 +1301,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         scene.remove(g);
       }
       npcGroupsRef.current.clear();
+      for (const entry of portalMap.values()) {
+        disposePortal(entry);
+      }
+      portalMap.clear();
+      nearPortalIdRef.current = null;
       doPlacementRef.current = null;
       exitPlacementRef.current = null;
       cleanupPhysics?.();
@@ -1159,7 +1319,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: "block", cursor: (placementMode || npcPlacementPending || propPlacementPending) ? "crosshair" : "default" }}
+        style={{ width: "100%", height: "100%", display: "block", cursor: (placementMode || npcPlacementPending || propPlacementPending || portalPlacementPending) ? "crosshair" : "default" }}
       />
 
       {/* Prop picker overlay */}

@@ -264,6 +264,62 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		}
 	});
 
+	// POST /scenes/:sceneId/portals — add a portal to the scene.
+	// Body: { name?, targetSceneId?, targetSceneName?, playerPosition? }
+	app.post("/:sceneId/portals", async (c) => {
+		const { sceneId } = c.req.param();
+		const sessionParam = c.req.query("session");
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+
+		const body = await c.req.json<{
+			name?: string;
+			targetSceneId?: string;
+			targetSceneName?: string;
+			playerPosition?: { x: number; y: number; z: number };
+		}>();
+
+		const objectId = `portal_${randomUUID().slice(0, 8)}`;
+		const newPortal = {
+			objectId,
+			name: body.name ?? "传送门",
+			type: "portal" as const,
+			position: body.playerPosition ?? { x: 0, y: 0, z: 0 },
+			description: body.targetSceneName ? `前往 ${body.targetSceneName}` : "通往另一个世界的门",
+			interactable: true,
+			interactionHint: body.targetSceneName ? `进入传送门 → ${body.targetSceneName}` : "进入传送门",
+			metadata: {
+				placement: body.playerPosition ? "exact" : "near_camera",
+				...(body.playerPosition ? { playerPosition: body.playerPosition } : {}),
+				...(body.targetSceneId ? { targetSceneId: body.targetSceneId } : {}),
+				...(body.targetSceneName ? { targetSceneName: body.targetSceneName } : {}),
+			},
+		};
+
+		const updated = await sceneManager.addPropsToScene(sceneId, [newPortal]);
+		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+		return c.json({ ok: true, objectId, version: updated.version });
+	});
+
+	// DELETE /scenes/:sceneId/portals/:portalId — remove a portal from the scene.
+	app.delete("/:sceneId/portals/:portalId", async (c) => {
+		const { sceneId, portalId } = c.req.param();
+		const sessionParam = c.req.query("session");
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+
+		try {
+			const updated = await sceneManager.removePropFromScene(sceneId, portalId);
+			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			return c.json({ ok: true, version: updated.version });
+		} catch (err) {
+			const status = (err as { status?: number }).status ?? 500;
+			return c.json({ error: err instanceof Error ? err.message : "Failed to remove portal" }, status as 404 | 500);
+		}
+	});
+
 	// PATCH /scenes/:sceneId/objects/:objectId — lock a resolved position back to the object.
 	// Called fire-and-forget by the viewer after resolvePosition() to prevent position drift.
 	// Body: { placement: "exact"; playerPosition: { x: number; y: number; z: number } }

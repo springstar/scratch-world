@@ -296,6 +296,44 @@ export async function pollGenerateProp(
 }
 
 
+export async function addScenePortal(
+  sceneId: string,
+  sessionId: string,
+  portal: {
+    name?: string;
+    targetSceneId?: string;
+    targetSceneName?: string;
+    playerPosition?: { x: number; y: number; z: number };
+  },
+): Promise<{ objectId: string; version: number }> {
+  const res = await fetch(`${BASE}/scenes/${sceneId}/portals?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(portal),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ objectId: string; version: number }>;
+}
+
+export async function removeScenePortal(
+  sceneId: string,
+  sessionId: string,
+  portalId: string,
+): Promise<{ version: number }> {
+  const res = await fetch(
+    `${BASE}/scenes/${sceneId}/portals/${encodeURIComponent(portalId)}?session=${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ version: number }>;
+}
+
 export async function removeSceneProp(
   sceneId: string,
   sessionId: string,

@@ -11,11 +11,12 @@ import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
-import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition } from "./api.js";
+import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition, addScenePortal } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
 import type { PendingNpc, GeneratedNpcModel } from "./components/NpcDrawer.js";
 import { PropDrawer } from "./components/PropDrawer.js";
 import type { PendingProp, GeneratedProp } from "./components/PropDrawer.js";
+import { PortalDrawer } from "./components/PortalDrawer.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -85,6 +86,12 @@ export function App() {
   const [pendingNpc, setPendingNpc] = useState<PendingNpc | null>(null);
   const [showPropDrawer, setShowPropDrawer] = useState(false);
   const [pendingProp, setPendingProp] = useState<PendingProp | null>(null);
+
+  // Portal state
+  const [showPortalDrawer, setShowPortalDrawer] = useState(false);
+  const [pendingPortal, setPendingPortal] = useState<{ name?: string; targetSceneId?: string; targetSceneName?: string } | null>(null);
+  const [portalApproach, setPortalApproach] = useState<{ objectId: string; targetSceneId: string | null; targetSceneName: string | null } | null>(null);
+  const [portalScenePicker, setPortalScenePicker] = useState(false);
 
   // Prop library — persisted to localStorage so it survives page reloads
   const [generatedProps, setGeneratedProps] = useState<GeneratedProp[]>(() => {
@@ -511,6 +518,28 @@ export function App() {
     setNpcChatTarget(null);
   }, []);
 
+  const handlePortalApproach = useCallback(
+    (objectId: string, targetSceneId: string | null, targetSceneName: string | null) => {
+      if (pendingProp !== null || pendingNpc !== null) return;
+      setPortalApproach({ objectId, targetSceneId, targetSceneName });
+    },
+    [pendingProp, pendingNpc],
+  );
+
+  const handlePortalLeave = useCallback(() => {
+    setPortalApproach(null);
+    setPortalScenePicker(false);
+  }, []);
+
+  const handlePortalTravel = useCallback(
+    (targetSceneId: string) => {
+      setPortalApproach(null);
+      setPortalScenePicker(false);
+      loadSceneById(targetSceneId, { session: sessionId });
+    },
+    [loadSceneById, sessionId],
+  );
+
   // Bottom padding to keep 3D canvas above the chat drawer (peek = 72px)
   const PEEK_HEIGHT = 72;
 
@@ -537,8 +566,7 @@ export function App() {
               onNpcLeave={handleNpcLeave}
               npcSpeech={npcSpeech}
               npcPlacementPending={pendingNpc !== null}
-              onNpcPlace={(pos) => {
-                if (!pendingNpc || !scene) return;
+              onNpcPlace={(pos) => {                if (!pendingNpc || !scene) return;
                 const npcSnapshot = pendingNpc;
                 setPendingNpc(null);
                 if (npcSnapshot.objectId) {
@@ -586,6 +614,21 @@ export function App() {
                 }
               }}
               onPropPlaceCancel={() => setPendingProp(null)}
+              portalPlacementPending={pendingPortal !== null}
+              onPortalPlace={(pos) => {
+                if (!pendingPortal || !scene) return;
+                const portalSnapshot = pendingPortal;
+                setPendingPortal(null);
+                addScenePortal(scene.sceneId, sessionId, {
+                  ...portalSnapshot,
+                  playerPosition: pos,
+                })
+                  .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                  .catch(console.warn);
+              }}
+              onPortalPlaceCancel={() => setPendingPortal(null)}
+              onPortalApproach={handlePortalApproach}
+              onPortalLeave={handlePortalLeave}
               onPlacementRequest={(text) => { void handleSend(text); }}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
@@ -703,6 +746,92 @@ export function App() {
                 onDismiss={() => setSelected(null)}
               />
             )}
+
+            {/* Portal approach prompt */}
+            {portalApproach && (
+              <div style={{
+                position: "absolute",
+                bottom: 90,
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: "rgba(14,6,36,0.94)",
+                backdropFilter: "blur(14px)",
+                border: "1px solid rgba(140,80,255,0.45)",
+                borderRadius: 14,
+                padding: "16px 24px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 10,
+                zIndex: 200,
+                minWidth: 240,
+                fontFamily: "system-ui, -apple-system, sans-serif",
+              }}>
+                <div style={{ color: "rgba(200,180,255,0.95)", fontSize: 15, fontWeight: 600 }}>
+                  {scene.sceneData.objects.find((o) => o.objectId === portalApproach.objectId)?.name ?? "传送门"}
+                </div>
+                {portalApproach.targetSceneName && (
+                  <div style={{ color: "rgba(170,200,255,0.8)", fontSize: 13 }}>
+                    → {portalApproach.targetSceneName}
+                  </div>
+                )}
+                {!portalApproach.targetSceneId && (
+                  <div style={{ color: "rgba(150,160,220,0.65)", fontSize: 12 }}>
+                    通往未知世界…
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+                  {portalApproach.targetSceneId ? (
+                    <button
+                      onClick={() => handlePortalTravel(portalApproach.targetSceneId!)}
+                      style={{
+                        background: "rgba(100,50,220,0.55)",
+                        border: "1px solid rgba(140,90,255,0.5)",
+                        borderRadius: 8,
+                        padding: "8px 20px",
+                        color: "rgba(220,210,255,0.95)",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      进入
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setPortalScenePicker(true)}
+                      style={{
+                        background: "rgba(100,50,220,0.55)",
+                        border: "1px solid rgba(140,90,255,0.5)",
+                        borderRadius: 8,
+                        padding: "8px 20px",
+                        color: "rgba(220,210,255,0.95)",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      选择目标
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setPortalApproach(null)}
+                    style={{
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: 8,
+                      padding: "8px 14px",
+                      color: "rgba(180,160,220,0.7)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    离开
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -732,7 +861,7 @@ export function App() {
           <button
             onClick={() => {
                 setShowNpcDrawer((v) => {
-                  if (!v) { setNpcChatTarget(null); setShowPropDrawer(false); }
+                  if (!v) { setNpcChatTarget(null); setShowPropDrawer(false); setShowPortalDrawer(false); }
                   return !v;
                 });
               }}
@@ -747,6 +876,25 @@ export function App() {
             }}
           >
             NPC
+          </button>
+          <button
+            onClick={() => {
+              setShowPortalDrawer((v) => {
+                if (!v) { setShowNpcDrawer(false); setShowPropDrawer(false); }
+                return !v;
+              });
+            }}
+            style={{
+              background: showPortalDrawer ? "rgba(100,60,220,0.4)" : "rgba(20,15,40,0.75)",
+              border: "1px solid rgba(120,80,255,0.35)",
+              borderRadius: 8, padding: "7px 14px",
+              color: "rgba(210,200,255,0.9)", fontSize: 13,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              fontFamily: "system-ui, -apple-system, sans-serif",
+            }}
+          >
+            传送门
           </button>
         </div>
       )}
@@ -782,6 +930,32 @@ export function App() {
           setShowPropDrawer(false);
         }}
       />
+
+      {/* Portal drawer */}
+      <PortalDrawer
+        open={showPortalDrawer}
+        onClose={() => setShowPortalDrawer(false)}
+        currentSceneId={scene?.sceneId}
+        onPlace={(portalDef) => {
+          setPendingPortal(portalDef);
+          setShowPortalDrawer(false);
+        }}
+      />
+
+      {/* Portal scene picker — shown when player approaches portal without a preset target */}
+      {portalScenePicker && (
+        <PortalDrawer
+          open={portalScenePicker}
+          onClose={() => setPortalScenePicker(false)}
+          currentSceneId={scene?.sceneId}
+          onPlace={(portalDef) => {
+            setPortalScenePicker(false);
+            if (portalDef.targetSceneId) {
+              handlePortalTravel(portalDef.targetSceneId);
+            }
+          }}
+        />
+      )}
 
       {/* NPC chat overlay — shown when interacting with an NPC */}
       {npcChatTarget && (
