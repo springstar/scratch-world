@@ -15,7 +15,6 @@ import {
   Box3,
   Euler,
   BoxGeometry,
-  CylinderGeometry,
   SphereGeometry,
   TorusGeometry,
   PlaneGeometry,
@@ -305,41 +304,81 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     function createPortalMesh(pos: { x: number; y: number; z: number }): Group {
       const g = new Group();
+      const SIZE = 256;
 
-      // Two perpendicular rings — visible from any horizontal angle
-      const ringMat = new MeshBasicMaterial({ color: 0xcc55ff });
-      const ring1 = new Mesh(new TorusGeometry(1.05, 0.13, 16, 64), ringMat);
-      const ring2 = new Mesh(new TorusGeometry(1.05, 0.13, 16, 64), ringMat.clone());
-      ring2.rotation.y = Math.PI / 2; // perpendicular
-
-      // Bright white accent ring inside
-      const accentMat = new MeshBasicMaterial({ color: 0xffffff });
-      const accent = new Mesh(new TorusGeometry(0.82, 0.055, 12, 48), accentMat);
-
-      // Translucent inner disc (visible color fill)
+      // ── Spiral vortex disc (canvas texture) ──────────────────────────────
+      const cv2d = document.createElement("canvas");
+      cv2d.width = SIZE; cv2d.height = SIZE;
+      const ctx2d = cv2d.getContext("2d")!;
+      const cx = SIZE / 2;
+      // Dark deep-space base
+      ctx2d.fillStyle = "#050010";
+      ctx2d.fillRect(0, 0, SIZE, SIZE);
+      // Radial glow: bright centre → deep violet → transparent edge
+      const rg = ctx2d.createRadialGradient(cx, cx, 0, cx, cx, cx);
+      rg.addColorStop(0,    "rgba(230,160,255,1.0)");
+      rg.addColorStop(0.15, "rgba(170,60,255,0.95)");
+      rg.addColorStop(0.42, "rgba(70,10,170,0.82)");
+      rg.addColorStop(0.72, "rgba(18,4,55,0.55)");
+      rg.addColorStop(1,    "rgba(0,0,0,0)");
+      ctx2d.fillStyle = rg;
+      ctx2d.fillRect(0, 0, SIZE, SIZE);
+      // Three spiral arms — visible when the disc rotates
+      for (let arm = 0; arm < 3; arm++) {
+        ctx2d.beginPath();
+        const base = (arm / 3) * Math.PI * 2;
+        for (let r = 8; r < cx - 4; r++) {
+          const a = base + (r / (cx - 4)) * Math.PI * 4;
+          const x = cx + r * Math.cos(a);
+          const y = cx + r * Math.sin(a);
+          if (r === 8) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
+        }
+        ctx2d.strokeStyle = "rgba(215,130,255,0.42)";
+        ctx2d.lineWidth = 2.5;
+        ctx2d.stroke();
+      }
+      const discTex = new CanvasTexture(cv2d);
       const discMat = new MeshBasicMaterial({
-        color: 0xaa44ff,
-        transparent: true,
-        opacity: 0.35,
-        side: DoubleSide,
-        depthWrite: false,
+        map: discTex, transparent: true, side: DoubleSide, depthWrite: false,
       });
-      const disc = new Mesh(new PlaneGeometry(1.85, 1.85), discMat);
+      const disc = new Mesh(new PlaneGeometry(1.80, 1.80), discMat);
       disc.renderOrder = 1;
 
-      // Vertical beacon pillar above the portal (visible from far away)
-      const pillarMat = new MeshBasicMaterial({ color: 0xdd88ff });
-      const pillar = new Mesh(new CylinderGeometry(0.06, 0.06, 5, 8), pillarMat);
-      pillar.position.y = 3.5; // 3.5m above portal center → top at ~5.5m above ground
+      // ── Outer ring ────────────────────────────────────────────────────────
+      const ringMat = new MeshBasicMaterial({ color: 0xaa44ff });
+      const ring = new Mesh(new TorusGeometry(1.0, 0.11, 20, 80), ringMat);
+      ring.renderOrder = 2;
 
-      // Floating orb at pillar top
-      const orbMat = new MeshBasicMaterial({ color: 0xffffff });
-      const orb = new Mesh(new SphereGeometry(0.18, 12, 12), orbMat);
-      orb.position.y = 6.1;
+      // ── Inner accent ring ─────────────────────────────────────────────────
+      const accentMat = new MeshBasicMaterial({ color: 0xeeddff });
+      const accent = new Mesh(new TorusGeometry(0.85, 0.040, 12, 60), accentMat);
+      accent.renderOrder = 2;
 
-      g.add(ring1, ring2, accent, disc, pillar, orb);
-      // Portal center at 1m above ground
-      g.position.set(pos.x, pos.y + 1.0, pos.z);
+      // ── Ground glow circle ────────────────────────────────────────────────
+      const glowCv = document.createElement("canvas");
+      glowCv.width = SIZE; glowCv.height = SIZE;
+      const gCtx = glowCv.getContext("2d")!;
+      const gg = gCtx.createRadialGradient(cx, cx, 0, cx, cx, cx);
+      gg.addColorStop(0,   "rgba(140,50,255,0.65)");
+      gg.addColorStop(0.4, "rgba(80,20,200,0.32)");
+      gg.addColorStop(0.72,"rgba(35,7,90,0.14)");
+      gg.addColorStop(1,   "rgba(0,0,0,0)");
+      gCtx.fillStyle = gg;
+      gCtx.fillRect(0, 0, SIZE, SIZE);
+      const glowMat = new MeshBasicMaterial({
+        map: new CanvasTexture(glowCv), transparent: true, depthWrite: false,
+      });
+      const groundGlow = new Mesh(new PlaneGeometry(3.4, 3.4), glowMat);
+      groundGlow.rotation.x = -Math.PI / 2;
+      groundGlow.position.y = -(1.0 + 0.11); // ground relative to group centre
+      groundGlow.renderOrder = 0;
+
+      g.add(disc, ring, accent, groundGlow);
+      g.userData.disc = disc;
+      g.userData.ring = ring;
+
+      // Bottom of ring touches ground: group.y = pos.y + radius + tube
+      g.position.set(pos.x, pos.y + 1.0 + 0.11, pos.z);
       scene.add(g);
       return g;
     }
@@ -360,14 +399,17 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const t = performance.now() * 0.001;
       for (const entry of portalMap.values()) {
         const g = entry.group;
-        // Slowly spin the whole group around Y
-        g.rotation.y = t * 0.3;
-        // Pulse the inner disc opacity
-        const disc = g.children[3] as Mesh;
-        (disc.material as MeshBasicMaterial).opacity = 0.25 + 0.12 * Math.sin(t * 1.8);
-        // Bob the orb up and down slightly
-        const orb = g.children[5] as Mesh;
-        orb.position.y = 6.1 + 0.15 * Math.sin(t * 1.2);
+        // Rotate the vortex disc (creates the swirling illusion)
+        const disc = g.userData.disc as Mesh;
+        disc.rotation.z = t * 0.55;
+        // Pulse the outer ring colour between deep violet and bright purple
+        const ring = g.userData.ring as Mesh;
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.4);
+        (ring.material as MeshBasicMaterial).color.setRGB(
+          0.52 + 0.22 * pulse,
+          0.14 + 0.14 * pulse,
+          0.90 + 0.10 * pulse,
+        );
       }
     }
 
