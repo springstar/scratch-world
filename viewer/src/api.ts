@@ -1,4 +1,4 @@
-import type { SceneResponse, RealtimeEvent } from "./types.js";
+import type { DisplayConfig, SceneResponse, RealtimeEvent } from "./types.js";
 
 const BASE = import.meta.env.DEV ? "" : (import.meta.env.VITE_API_BASE ?? "");
 
@@ -56,7 +56,8 @@ export async function postInteract(payload: {
   sceneId: string;
   objectId: string;
   action: string;
-}): Promise<void> {
+  playerPosition?: { x: number; y: number; z: number };
+}): Promise<{ display?: DisplayConfig }> {
   const res = await fetch(`${BASE}/interact`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -66,6 +67,7 @@ export async function postInteract(payload: {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
   }
+  return res.json() as Promise<{ display?: DisplayConfig }>;
 }
 
 export async function postChat(payload: {

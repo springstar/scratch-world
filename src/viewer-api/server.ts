@@ -70,7 +70,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 
 	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus));
 	app.route("/screenshots", screenshotsRoute);
-	app.route("/interact", interactRoute(sessionManager, bus));
+	app.route("/interact", interactRoute(sessionManager, sceneManager, bus));
 	app.route("/npc-interact", npcInteractRoute(sceneManager, bus));
 	app.route("/npc-greet", npcGreetRoute(sceneManager, bus));
 	app.route("/chat", chatRoute(sessionManager, bus));

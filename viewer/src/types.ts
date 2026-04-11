@@ -1,6 +1,16 @@
 // Types mirroring src/scene/types.ts — kept in sync manually.
 // The viewer never imports from the backend directly.
 
+/**
+ * Display payload returned by a behavior skill on /interact.
+ * BehaviorOverlay.tsx renders each variant.
+ */
+export type DisplayConfig =
+  | { type: "iframe"; url: string; title?: string }
+  | { type: "video"; url: string; title?: string }
+  | { type: "markdown"; content: string; title?: string }
+  | { type: "table"; headers: string[]; rows: string[][]; title?: string };
+
 export interface Vec3 {
   x: number;
   y: number;

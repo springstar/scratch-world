@@ -7,6 +7,7 @@ import { trimContext } from "./context-trimmer.js";
 import { addToCatalogTool } from "./tools/add-to-catalog.js";
 import { analyzeSceneObjectsTool } from "./tools/analyze-scene-objects.js";
 import { applySkillChangesTool } from "./tools/apply-skill-changes.js";
+import { attachSkillTool } from "./tools/attach-skill.js";
 import { createCityTool } from "./tools/create-city.js";
 import { createSceneTool } from "./tools/create-scene.js";
 import { evaluateSceneTool } from "./tools/evaluate-scene.js";
@@ -193,6 +194,24 @@ Example — a wooden crate the player can push:
 The viewer auto-corrects Y to the real ground surface. position.x/z are ignored — placement
 logic resolves all coordinates. Multiple props spread automatically, never overlapping.
 
+## Behavior skills for interactive objects
+
+When a user wants an object to DO something when the player interacts with it (show a web page,
+play a video, display stock data, show a sign, etc.), use attach_skill:
+
+1. First call attach_skill with skillName='list' to see available skills and their config schemas.
+2. Ask the user for any missing required config values (e.g. the URL or stock symbols).
+3. Call attach_skill with the sceneId, objectId, chosen skillName, and filled-in config.
+
+Built-in skills:
+- web-view: embed any HTTPS URL in a panel (requires: url)
+- stock-ticker: show real-time stock quotes (requires: symbols — comma-separated tickers like "AAPL,TSLA,000001.SS")
+- video-player: play YouTube, Bilibili, or direct video URL (requires: url)
+- text-display: show a static markdown text board (requires: content)
+
+The object must already exist as a scene object (either placed by place_prop or existing in the scene).
+If it does not exist yet, place it first, then attach the skill.
+
 ## Scene composition (MANDATORY)
 
 Every scene must have three depth layers: foreground (0–6 m), midground (6–25 m), background (25–200 m).
@@ -368,6 +387,7 @@ export function createAgent(
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 				placePropTool(sceneManager, viewerUrl),
 				removePropTool(sceneManager),
+				attachSkillTool(sceneManager),
 				analyzeSceneObjectsTool(sceneManager),
 				webSearchTool(),
 				evaluateSceneTool(),

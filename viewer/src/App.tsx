@@ -12,11 +12,12 @@ import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition, addScenePortal } from "./api.js";
-import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject } from "./types.js";
+import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject, DisplayConfig } from "./types.js";
 import type { PendingNpc, GeneratedNpcModel } from "./components/NpcDrawer.js";
 import { PropDrawer } from "./components/PropDrawer.js";
 import type { PendingProp, GeneratedProp } from "./components/PropDrawer.js";
 import { PortalDrawer } from "./components/PortalDrawer.js";
+import { BehaviorOverlay } from "./components/BehaviorOverlay.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -91,6 +92,9 @@ export function App() {
   const [showPortalDrawer, setShowPortalDrawer] = useState(false);
   const [pendingPortal, setPendingPortal] = useState<{ name?: string; targetSceneId?: string; targetSceneName?: string } | null>(null);
   const [portalScenePicker, setPortalScenePicker] = useState(false);
+
+  // Behavior skill overlay
+  const [behaviorDisplay, setBehaviorDisplay] = useState<DisplayConfig | null>(null);
 
   // Prop library — persisted to localStorage so it survives page reloads
   const [generatedProps, setGeneratedProps] = useState<GeneratedProp[]>(() => {
@@ -428,7 +432,11 @@ export function App() {
       setIsStreaming(true);
       streamingBuffer.current = "";
       try {
-        await postInteract({ sessionId, sceneId: scene.sceneId, objectId: selected.objectId, action });
+        const result = await postInteract({ sessionId, sceneId: scene.sceneId, objectId: selected.objectId, action });
+        if (result.display) {
+          setIsStreaming(false);
+          setBehaviorDisplay(result.display);
+        }
       } catch (err) {
         setNarrativeLines([err instanceof Error ? err.message : "Interaction failed"]);
         setIsStreaming(false);
@@ -461,7 +469,14 @@ export function App() {
       setIsStreaming(true);
       streamingBuffer.current = "";
       try {
-        await postInteract({ sessionId, sceneId: scene.sceneId, objectId, action });
+        const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+          | { x: number; y: number; z: number }
+          | undefined;
+        const result = await postInteract({ sessionId, sceneId: scene.sceneId, objectId, action, playerPosition });
+        if (result.display) {
+          setIsStreaming(false);
+          setBehaviorDisplay(result.display);
+        }
       } catch (err) {
         setNarrativeLines([err instanceof Error ? err.message : "Interaction failed"]);
         setIsStreaming(false);
@@ -876,6 +891,11 @@ export function App() {
             }
           }}
         />
+      )}
+
+      {/* Behavior skill overlay — shown when an interactive object with a skill is activated */}
+      {behaviorDisplay && (
+        <BehaviorOverlay display={behaviorDisplay} onClose={() => setBehaviorDisplay(null)} />
       )}
 
       {/* NPC chat overlay — shown when interacting with an NPC */}

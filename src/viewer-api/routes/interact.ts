@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { behaviorRegistry } from "../../behaviors/registry.js";
+import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SessionManager } from "../../session/session-manager.js";
 import type { RealtimeBus } from "../realtime.js";
 
@@ -7,12 +9,15 @@ interface InteractBody {
 	sceneId: string;
 	objectId: string;
 	action: string;
+	playerPosition?: { x: number; y: number; z: number };
 }
 
-export function interactRoute(sessionManager: SessionManager, bus: RealtimeBus): Hono {
+export function interactRoute(sessionManager: SessionManager, sceneManager: SceneManager, bus: RealtimeBus): Hono {
 	const app = new Hono();
 
-	// POST /interact — viewer sends user interaction, gets narrative outcome
+	// POST /interact — viewer sends user interaction.
+	// If the object has a behavior skill attached (metadata.skill), run it directly and
+	// return the DisplayConfig in the response. Otherwise fall through to the agent.
 	app.post("/", async (c) => {
 		let body: InteractBody;
 		try {
@@ -21,16 +26,37 @@ export function interactRoute(sessionManager: SessionManager, bus: RealtimeBus):
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const { sessionId, sceneId, objectId, action } = body;
+		const { sessionId, sceneId, objectId, action, playerPosition } = body;
 		if (!sessionId || !sceneId || !objectId || !action) {
 			return c.json({ error: "Missing required fields: sessionId, sceneId, objectId, action" }, 400);
 		}
 
-		// Synthesize a ChatMessage-like prompt and dispatch through the agent
-		// The agent will call interact_with_object and narrate the result.
-		// Text deltas are streamed to the viewer via RealtimeBus.
-		const text = `[viewer interaction] ${action} the object "${objectId}" in scene "${sceneId}"`;
+		// ── Behavior skill fast path ──────────────────────────────────────────
+		const scene = await sceneManager.getScene(sceneId);
+		if (scene) {
+			const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+			const skillMeta = obj?.metadata.skill;
+			if (skillMeta && typeof skillMeta === "object" && skillMeta !== null) {
+				try {
+					const display = await behaviorRegistry.run({
+						objectId,
+						objectName: obj?.name ?? objectId,
+						sceneId,
+						playerPosition,
+						config: skillMeta as Record<string, unknown>,
+					});
+					if (display) {
+						return c.json({ ok: true, display });
+					}
+				} catch (err) {
+					// Log but fall through to agent path
+					console.error(`[behavior-skill] error for ${objectId}:`, err);
+				}
+			}
+		}
 
+		// ── Agent narrative fallback ──────────────────────────────────────────
+		const text = `[viewer interaction] ${action} the object "${objectId}" in scene "${sceneId}"`;
 		try {
 			await sessionManager.dispatchViewerInteraction(sessionId, sceneId, text, bus);
 			return c.json({ ok: true });
