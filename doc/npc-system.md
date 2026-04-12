@@ -287,9 +287,25 @@ All in-memory cooldowns reset on server restart.
 
 ---
 
-## NPC 3D Model Placement (No-Physics Scenes)
+## NPC 3D Model Placement
 
-Gaussian splat scenes have no Rapier collider mesh. NPC models are placed via ray-plane intersection against a virtual ground plane derived from `splatGroundOffset`.
+### Click-to-Place Y Snapping (Physics Scenes)
+
+When the user clicks to place an NPC in a physics scene, the viewer casts a Rapier ray from the
+camera through the click pixel. The ray can hit a tree trunk, a rock, or any other elevated
+collider — not necessarily the ground surface. To prevent storing a wrong `playerPosition.y`, a
+**second downward ray** is cast from 3 m above the click XZ to find the actual terrain Y:
+
+```typescript
+// SplatViewer.tsx — onMouseDown physics click handler
+const downRay = new R.Ray({ x: hitX, y: fbY + 3, z: hitZ }, { x: 0, y: -1, z: 0 });
+const groundHit = pw.castRay(downRay, 30, false);
+if (groundHit) groundedY = (fbY + 3) - groundHit.timeOfImpact;
+// groundedY is then passed to onNpcPlace / onPropPlace / onPortalPlace
+```
+
+`__clickPosition` still stores the original (non-snapped) hit for general interaction use;
+only placement callbacks receive the ground-snapped Y.
 
 ### splatGroundOffset Convention
 
@@ -354,10 +370,13 @@ if (hint === "exact" && playerPosition) {
 }
 ```
 
-**Corruption risk during development:** When the Vite dev server hot-reloads while viewer code is
-in a broken intermediate state, the broken code may call `resolvePosition` with a wrong `pos.y`
-and immediately patch that bad value to the database. Since `placement: "exact"` is already set,
-the correct code on the next reload uses the wrong stored `y` directly, causing the NPC to float.
+**Two known causes of corruption:**
+1. **Vite hot-reload during development** — broken intermediate code calls `resolvePosition`
+   with a wrong `pos.y` and patches it to the database before the correct code loads.
+2. **Click on elevated collider** — before the downward-snap fix (commit `03aebfd`), the primary
+   raycast could hit a tree trunk or raised terrain at Y > 0, storing that as `playerPosition.y`.
+   The downward snap now prevents this for new placements, but objects placed before that commit
+   may still have corrupted Y values.
 
 **Diagnosis:** Query the database for `playerPosition.y > 0`:
 
