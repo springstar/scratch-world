@@ -67,12 +67,16 @@ export function splatProxyRoute(sceneManager: SceneManager, marbleApiKey: string
 			return c.json({ error: `Marble CDN returned ${upstream.status}` }, 502);
 		}
 
-		const body = await upstream.arrayBuffer();
-		return c.body(body, 200, {
-			"Content-Type": "application/octet-stream",
-			"Content-Disposition": `inline; filename="${sceneId}.spz"`,
-			"Cache-Control": "public, max-age=3600",
-			"Access-Control-Allow-Origin": "*",
+		// Stream directly to avoid buffering the entire SPZ file in memory.
+		// arrayBuffer() would throw if the CDN drops the connection mid-transfer.
+		return new Response(upstream.body, {
+			status: 200,
+			headers: {
+				"Content-Type": "application/octet-stream",
+				"Content-Disposition": `inline; filename="${sceneId}.spz"`,
+				"Cache-Control": "public, max-age=3600",
+				"Access-Control-Allow-Origin": "*",
+			},
 		});
 	});
 
