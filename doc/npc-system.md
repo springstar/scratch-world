@@ -317,11 +317,75 @@ if (extY < maxExt * 0.75) {
 
 ### Auto-Scale and Ground Offset
 
-After orientation correction, models with `scale=1` are auto-scaled to 1.6 m (human height). Ground offset aligns the bottom of the bounding box to the ground plane — **do not multiply by scale** (world-space bbox already includes it):
+After orientation correction, models with `scale=1` are auto-scaled into the 0.3–2.5 m range
+(target 1.6 m for humans). Ground offset aligns the bottom of the bounding box to the ground
+plane — **do not multiply by scale** (world-space bbox already includes it):
 
 ```typescript
 const groundOffset = -finalBbox.min.y;  // finalBbox is world-space after all transforms
 group.position.set(pos.x, pos.y + groundOffset, pos.z);
+```
+
+**`scale === 1` guard** — the auto-clamp only fires when `scale === 1`. If the agent or placement
+code stored an explicit `scale !== 1`, that value is used verbatim. Do NOT remove this guard:
+removing it causes all existing NPCs to get re-measured from scratch on every load, which changes
+the computed `effectiveScale` and shifts `groundOffset`, making placed NPCs float.
+
+**`targetHeight` metadata** — for semantically correct sizing (human 1.7 m, cat 0.3 m etc.),
+set `metadata.targetHeight` when placing. It bypasses the `scale === 1` guard and pins the model
+to the exact world height: `effectiveScale = targetHeight / rawHeight`. Works additively on top of
+the existing guard — objects without `targetHeight` behave exactly as before.
+
+### Position Persistence and Corruption Pattern
+
+After the NPC's first successful placement, `patchSceneObjectPosition` is called:
+
+```typescript
+// viewer/src/api.ts — patchSceneObjectPosition
+body: JSON.stringify({ placement: "exact", playerPosition: position })
+```
+
+This sets `placement: "exact"` and stores the raycasted terrain Y as `playerPosition.y`. On every
+subsequent load, `resolvePosition` returns `playerPosition` directly without re-raycasting:
+
+```typescript
+if (hint === "exact" && playerPosition) {
+  return { x: playerPosition.x, y: playerPosition.y, z: playerPosition.z };
+}
+```
+
+**Corruption risk during development:** When the Vite dev server hot-reloads while viewer code is
+in a broken intermediate state, the broken code may call `resolvePosition` with a wrong `pos.y`
+and immediately patch that bad value to the database. Since `placement: "exact"` is already set,
+the correct code on the next reload uses the wrong stored `y` directly, causing the NPC to float.
+
+**Diagnosis:** Query the database for `playerPosition.y > 0`:
+
+```bash
+sqlite3 dev.db "SELECT json_extract(scene_data, '$.objects') FROM scenes WHERE scene_id='<id>';" \
+  | python3 -c "import sys,json; [print(o['name'], o.get('metadata',{}).get('playerPosition',{}).get('y')) for o in json.loads(sys.stdin.read())['objects']]"
+```
+
+For the garden scene (`美丽私家花园`), ground Y is in the range **-0.7 to -2.0**. Any positive
+`playerPosition.y` is corrupted.
+
+**Fix:** Reset the Y to a known good terrain value from a nearby correctly-placed object:
+
+```python
+import sqlite3, json
+db = sqlite3.connect('dev.db')
+cur = db.cursor()
+scene_id = '<scene_id>'
+cur.execute("SELECT scene_data FROM scenes WHERE scene_id=?", (scene_id,))
+scene_data = json.loads(cur.fetchone()[0])
+TERRAIN_Y = -0.747  # from a nearby correct NPC
+for o in scene_data['objects']:
+    pp = o.get('metadata', {}).get('playerPosition')
+    if pp and pp.get('y', 0) > 0:
+        pp['y'] = TERRAIN_Y
+        o.get('position', {})['y'] = TERRAIN_Y
+cur.execute("UPDATE scenes SET scene_data=? WHERE scene_id=?", (json.dumps(scene_data), scene_id))
+db.commit()
 ```
 
 ### hasEnteredScene Guard
