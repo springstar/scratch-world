@@ -4,9 +4,12 @@ function toEmbedUrl(url: string): string {
 	// YouTube: convert watch URL to embed URL
 	const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
 	if (ytMatch) return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1`;
-	// Bilibili: convert regular URL to embed URL
+	// Bilibili: convert regular video URL to embed URL
 	const bvMatch = url.match(/bilibili\.com\/video\/(BV[A-Za-z0-9]+)/);
 	if (bvMatch) return `https://player.bilibili.com/player.html?bvid=${bvMatch[1]}&autoplay=1`;
+	// Bilibili live room: live.bilibili.com/<roomId>
+	const biliLiveMatch = url.match(/live\.bilibili\.com\/(\d+)/);
+	if (biliLiveMatch) return `https://live.bilibili.com/h5/${biliLiveMatch[1]}`;
 	// Direct video file — return as-is for <video> tag
 	return url;
 }

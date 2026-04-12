@@ -199,18 +199,40 @@ logic resolves all coordinates. Multiple props spread automatically, never overl
 When a user wants an object to DO something when the player interacts with it (show a web page,
 play a video, display stock data, show a sign, etc.), use attach_skill:
 
-1. First call attach_skill with skillName='list' to see available skills and their config schemas.
-2. Ask the user for any missing required config values (e.g. the URL or stock symbols).
+1. Get the sceneId (from list_scenes if unknown, or from context).
+2. Call get_scene to find existing sceneObjects. If the target object already exists as a sceneObject,
+   use its objectId directly. If it is only visual (part of the splat point cloud, with no sceneObject
+   entry), call place_prop first to create an interactive prop at the location, then use the returned
+   objectId (field: addedProps[].id) in the attach_skill call.
 3. Call attach_skill with the sceneId, objectId, chosen skillName, and filled-in config.
+   Do NOT call attach_skill with skillName='list' first — go straight to the attachment.
 
 Built-in skills:
 - web-view: embed any HTTPS URL in a panel (requires: url)
 - stock-ticker: show real-time stock quotes (requires: symbols — comma-separated tickers like "AAPL,TSLA,000001.SS")
-- video-player: play YouTube, Bilibili, or direct video URL (requires: url)
+- video-player: play YouTube, Bilibili (including live.bilibili.com), or direct video URL (requires: url)
 - text-display: show a static markdown text board (requires: content)
 
-The object must already exist as a scene object (either placed by place_prop or existing in the scene).
-If it does not exist yet, place it first, then attach the skill.
+### Playing live TV channels (CCTV, etc.)
+
+When a user asks to play a named TV channel (e.g. "播放cctv新闻频道", "play CCTV news"):
+1. Call web_search to find the channel's current official live stream on YouTube or Bilibili.
+   Example queries: "cctv13 bilibili live room", "CGTN YouTube live stream".
+   Prefer YouTube embed (already supported) or Bilibili live rooms (live.bilibili.com/<roomId>).
+2. Use the video-player skill with the found URL.
+   If no embeddable stream is found, use the web-view skill with the channel's official web page URL.
+
+### TV/screen in Marble splat scenes
+
+In Marble (Gaussian splat) scenes the TV or monitor is typically visual-only (part of the point
+cloud), with no corresponding sceneObject. To make it interactive:
+1. Call place_prop to add a flat-screen TV prop near the player position. Use modelUrl from catalog:
+   - Flat screen / monitor: https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tv_studio_monitor_01/tv_studio_monitor_01_1k.gltf  (scale: 1)
+   If the exact model is not in catalog, call find_gltf_assets with query "flat screen TV monitor".
+2. The place_prop result includes addedProps[].id — that is the objectId to use for attach_skill.
+3. Call attach_skill with that objectId and video-player (or web-view) skill.
+
+Do NOT call update_scene or create_scene for this flow — only place_prop + attach_skill.
 
 ## Scene composition (MANDATORY)
 
@@ -289,6 +311,11 @@ Rules:
 Prefer photorealistic (Polyhaven PBR) assets for Marble/splat scenes — they match the scene's
 photo-quality renderer. Stylized assets (Three.js characters) are kept only because no
 photorealistic rigged alternative exists. All Polyhaven models are in metres (scale=1).
+
+### Electronics / screens (Polyhaven)
+| Name | modelUrl | scale |
+|------|----------|-------|
+| Studio monitor / flat screen | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tv_studio_monitor_01/tv_studio_monitor_01_1k.gltf | 1 |
 
 ### Furniture — photorealistic PBR (Polyhaven)
 | Name | modelUrl | scale |

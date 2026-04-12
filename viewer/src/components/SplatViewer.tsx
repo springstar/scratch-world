@@ -335,55 +335,32 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const innerRing = new Mesh(new TorusGeometry(0.86, 0.045, 12, 60), innerRingMat);
       innerRing.renderOrder = 4;
 
-      // ── Multi-layer vortex discs — depth parallax ─────────────────────────
-      function makeVortexCanvas(alpha: number): HTMLCanvasElement {
-        const cv = document.createElement("canvas");
-        cv.width = SIZE; cv.height = SIZE;
-        const ctx = cv.getContext("2d")!;
-        const cx = SIZE / 2;
-        ctx.fillStyle = `rgba(0,8,30,${alpha})`;
-        ctx.fillRect(0, 0, SIZE, SIZE);
-        const rg = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx);
-        rg.addColorStop(0,    `rgba(200,255,255,${alpha})`);
-        rg.addColorStop(0.12, `rgba(0,210,255,${alpha * 0.92})`);
-        rg.addColorStop(0.32, `rgba(0,80,200,${alpha * 0.72})`);
-        rg.addColorStop(0.65, `rgba(0,22,70,${alpha * 0.42})`);
-        rg.addColorStop(1,    "rgba(0,0,0,0)");
-        ctx.fillStyle = rg;
-        ctx.fillRect(0, 0, SIZE, SIZE);
-        for (let arm = 0; arm < 4; arm++) {
-          ctx.beginPath();
-          const base = (arm / 4) * Math.PI * 2;
-          for (let r = 6; r < cx - 4; r++) {
-            const a = base + (r / (cx - 4)) * Math.PI * 5;
-            const x = cx + r * Math.cos(a);
-            const y = cx + r * Math.sin(a);
-            if (r === 6) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          }
-          ctx.strokeStyle = `rgba(80,230,255,${alpha * 0.55})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
-        return cv;
-      }
-
-      const zOffsets = [0.14, 0, -0.14];
-      const alphas = [0.72, 0.88, 0.60];
-      const layers: Mesh[] = [];
-      for (let i = 0; i < 3; i++) {
-        const layerMat = new MeshBasicMaterial({
-          map: new CanvasTexture(makeVortexCanvas(alphas[i])),
-          transparent: true,
-          side: DoubleSide,
-          depthWrite: false,
-        });
-        const layerDisc = new Mesh(new PlaneGeometry(1.72, 1.72), layerMat);
-        layerDisc.position.z = zOffsets[i];
-        layerDisc.renderOrder = 2;
-        layers.push(layerDisc);
-        g.add(layerDisc);
-      }
-      g.userData.layers = layers;
+      // ── Ring-edge haze disc — transparent centre, faint glow near torus ──
+      // No dark fill, no spiral arms: only a very faint annular shimmer so the
+      // scene behind the portal is fully visible through the centre.
+      const hazeCv = document.createElement("canvas");
+      hazeCv.width = SIZE; hazeCv.height = SIZE;
+      const hCtx = hazeCv.getContext("2d")!;
+      const cx = SIZE / 2;
+      // Annular gradient: transparent at centre (r<0.5), peaks near ring (r≈0.85), fades to 0 at edge
+      const hazeGrad = hCtx.createRadialGradient(cx, cx, cx * 0.50, cx, cx, cx);
+      hazeGrad.addColorStop(0,    "rgba(0,180,255,0)");
+      hazeGrad.addColorStop(0.55, "rgba(0,180,255,0.06)");
+      hazeGrad.addColorStop(0.78, "rgba(40,220,255,0.18)");
+      hazeGrad.addColorStop(0.90, "rgba(80,240,255,0.12)");
+      hazeGrad.addColorStop(1.0,  "rgba(0,100,200,0)");
+      hCtx.fillStyle = hazeGrad;
+      hCtx.fillRect(0, 0, SIZE, SIZE);
+      const hazeMat = new MeshBasicMaterial({
+        map: new CanvasTexture(hazeCv),
+        transparent: true,
+        side: DoubleSide,
+        depthWrite: false,
+      });
+      const hazeDisc = new Mesh(new PlaneGeometry(2.24, 2.24), hazeMat);
+      hazeDisc.renderOrder = 2;
+      g.userData.hazeDisc = hazeDisc;
+      g.add(hazeDisc);
 
       // ── Ground glow ───────────────────────────────────────────────────────
       const glowCv = document.createElement("canvas");
@@ -391,9 +368,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const gCtx = glowCv.getContext("2d")!;
       const gcx = SIZE / 2;
       const gg = gCtx.createRadialGradient(gcx, gcx, 0, gcx, gcx, gcx);
-      gg.addColorStop(0,    "rgba(0,200,255,0.60)");
-      gg.addColorStop(0.35, "rgba(0,120,220,0.28)");
-      gg.addColorStop(0.70, "rgba(0,50,120,0.10)");
+      gg.addColorStop(0,    "rgba(0,200,255,0.45)");
+      gg.addColorStop(0.40, "rgba(0,120,220,0.18)");
+      gg.addColorStop(0.75, "rgba(0,50,120,0.06)");
       gg.addColorStop(1,    "rgba(0,0,0,0)");
       gCtx.fillStyle = gg;
       gCtx.fillRect(0, 0, SIZE, SIZE);
@@ -431,13 +408,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const t = performance.now() * 0.001;
       for (const entry of portalMap.values()) {
         const g = entry.group;
-        // Rotate vortex layers at different speeds for parallax depth
-        const layers = g.userData.layers as Mesh[] | undefined;
-        if (layers) {
-          layers[0].rotation.z = t * 0.60;
-          layers[1].rotation.z = -t * 0.35;
-          layers[2].rotation.z = t * 0.18;
-        }
+        // Slowly rotate the haze disc for a gentle swirling impression
+        const hazeDisc = g.userData.hazeDisc as Mesh | undefined;
+        if (hazeDisc) hazeDisc.rotation.z = t * 0.12;
         // Pulse outer ring emissive intensity
         const ring = g.userData.ring as Mesh;
         const pulse = 0.5 + 0.5 * Math.sin(t * 1.8);
@@ -453,11 +426,24 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     function loadSinglePortal(obj: SceneObject): void {
       if (obj.type !== "portal") return;
       if (portalMap.has(obj.objectId)) return;
-      const pos = {
-        x: (obj.metadata.playerPosition as { x: number } | undefined)?.x ?? obj.position.x,
-        y: (obj.metadata.playerPosition as { y: number } | undefined)?.y ?? obj.position.y,
-        z: (obj.metadata.playerPosition as { z: number } | undefined)?.z ?? obj.position.z,
-      };
+      const storedX = (obj.metadata.playerPosition as { x: number } | undefined)?.x ?? obj.position.x;
+      const storedZ = (obj.metadata.playerPosition as { z: number } | undefined)?.z ?? obj.position.z;
+
+      // Snap to the actual terrain floor via a downward Rapier raycast — identical
+      // approach to resolvePosition() in prop-placement.ts used for props/NPCs.
+      // This corrects any Y inaccuracy in the stored position and works for both
+      // outdoor (real collision mesh) and indoor (synthetic flat floor) scenes.
+      const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+      const pw = physicsRef.world;
+      const R = physicsRef.RAPIER;
+      let floorY = fbY;
+      if (pw && R) {
+        const downRay = new R.Ray({ x: storedX, y: fbY + 2, z: storedZ }, { x: 0, y: -1, z: 0 });
+        const floorHit = pw.castRay(downRay, 30, false);
+        if (floorHit) floorY = (fbY + 2) - floorHit.timeOfImpact;
+      }
+
+      const pos = { x: storedX, y: floorY, z: storedZ };
       const targetSceneId = typeof obj.metadata.targetSceneId === "string" ? obj.metadata.targetSceneId : null;
       const targetSceneName = typeof obj.metadata.targetSceneName === "string" ? obj.metadata.targetSceneName : null;
       const group = createPortalMesh(pos);
@@ -907,14 +893,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         });
       }
 
+      // Physics ready — expose world refs first so loadPortals() can raycast.
+      physicsRef.world = world as typeof physicsRef.world;
+      physicsRef.RAPIER = RAPIER as typeof physicsRef.RAPIER;
+
       // Load all portals that exist at physics init time.
       loadPortals();
 
-      // Physics ready — GLBs load in background; show "Click to enter" immediately
       setPhysicsReady(true);
-
-      physicsRef.world = world as typeof physicsRef.world;
-      physicsRef.RAPIER = RAPIER as typeof physicsRef.RAPIER;
 
       // Placement mode: track mouse position so doPlacement can raycast on submit
       const onPlacementMouseMove = (e: MouseEvent) => {
