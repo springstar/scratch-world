@@ -825,13 +825,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           if (modelHeight > 0.01) {
             const NPC_MIN = 0.3;
             const NPC_MAX = 2.5;
-            const NPC_TARGET = 1.7;
-            // Always scale to NPC_TARGET for type="npc" models — do not leave mid-range
-            // models at their native (often inconsistent) Hunyuan height.
-            // Cap at 5× so a misdetected orientation doesn't explode the model.
+            const NPC_TARGET = 1.6;
             if (modelHeight < NPC_MIN) effectiveScale = Math.min(NPC_TARGET / modelHeight, 5);
             else if (modelHeight > NPC_MAX) effectiveScale = NPC_MAX / modelHeight;
-            else effectiveScale = NPC_TARGET / modelHeight;
           }
         }
         group.scale.setScalar(effectiveScale);
@@ -1401,10 +1397,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               if (mh > 0.01) {
                 const NPC_MIN = 0.3;
                 const NPC_MAX = 2.5;
-                const NPC_TARGET = 1.7;
+                const NPC_TARGET = 1.6;
                 if (mh < NPC_MIN) effectiveScaleNp = Math.min(NPC_TARGET / mh, 5);
                 else if (mh > NPC_MAX) effectiveScaleNp = NPC_MAX / mh;
-                else effectiveScaleNp = NPC_TARGET / mh;
               }
             }
             g.scale.setScalar(effectiveScaleNp);
