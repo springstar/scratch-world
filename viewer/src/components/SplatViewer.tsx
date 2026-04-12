@@ -537,13 +537,25 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           );
           const hit = pw.castRay(ray, 200, true);
           if (hit) {
+            const hitX = origin.x + dir.x * hit.timeOfImpact;
+            const hitZ = origin.z + dir.z * hit.timeOfImpact;
+            const hitY = origin.y + dir.y * hit.timeOfImpact;
+            // For NPC/prop/portal placement, always snap Y to the actual terrain surface
+            // by casting a second downward ray from above the hit XZ point.
+            // This prevents storing a tree-trunk or elevated-surface Y when the user
+            // clicks on a raised collider rather than the ground.
+            const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+            let groundedY = hitY;
+            const downRay = new R.Ray({ x: hitX, y: fbY + 3, z: hitZ }, { x: 0, y: -1, z: 0 });
+            const groundHit = pw.castRay(downRay, 30, false);
+            if (groundHit) groundedY = (fbY + 3) - groundHit.timeOfImpact;
             const pt = {
-              x: origin.x + dir.x * hit.timeOfImpact,
-              y: origin.y + dir.y * hit.timeOfImpact,
-              z: origin.z + dir.z * hit.timeOfImpact,
+              x: hitX,
+              y: groundedY,
+              z: hitZ,
               ts: Date.now(),
             };
-            (window as unknown as Record<string, unknown>).__clickPosition = pt;
+            (window as unknown as Record<string, unknown>).__clickPosition = { x: hitX, y: hitY, z: hitZ, ts: pt.ts };
             // If NPC placement is pending, deliver the hit position and consume the click
             if (npcPlacementPendingRef.current) {
               onNpcPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
