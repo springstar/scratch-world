@@ -183,6 +183,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			skills?: string[];
 			modelUrl?: string;
 			scale?: number;
+			targetHeight?: number;
 			placement?: string;
 			playerPosition?: { x: number; y: number; z: number };
 			cameraForward?: { x: number; z: number };
@@ -208,6 +209,7 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 				physicsShape: "box",
 				mass: 10,
 				scale: body.scale ?? 1,
+				...(body.targetHeight !== undefined ? { targetHeight: body.targetHeight } : {}),
 				placement: body.placement ?? "near_camera",
 				...(body.playerPosition ? { playerPosition: body.playerPosition } : {}),
 				...(body.cameraForward ? { cameraForward: body.cameraForward } : {}),

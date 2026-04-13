@@ -815,20 +815,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             group.rotation.x = -Math.PI / 2;
           }
         }
-        // Auto-scale NPCs: clamp height to 0.3–2.5 m when no explicit scale was provided.
-        // Cap at 5× to prevent extreme multipliers if orientation detection misfires.
+        // Scale to targetHeight when provided — purely data-driven, no type inference.
+        // Cap at 10× to guard against orientation-detection misfires on tiny models.
         let effectiveScale = scale;
-        if (scale === 1) {
+        const targetHeight = typeof obj.metadata.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
+        if (targetHeight !== undefined && scale === 1) {
           group.updateMatrixWorld(true);
           const scaledBbox = new Box3().setFromObject(group);
           const modelHeight = scaledBbox.max.y - scaledBbox.min.y;
-          if (modelHeight > 0.01) {
-            const NPC_MIN = 0.3;
-            const NPC_MAX = 2.5;
-            const NPC_TARGET = 1.6;
-            if (modelHeight < NPC_MIN) effectiveScale = Math.min(NPC_TARGET / modelHeight, 5);
-            else if (modelHeight > NPC_MAX) effectiveScale = NPC_MAX / modelHeight;
-          }
+          if (modelHeight > 0.01) effectiveScale = Math.min(targetHeight / modelHeight, 10);
         }
         group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
@@ -1029,21 +1024,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           setPropLoadErrors((prev) => [...prev, obj.name]);
           return;
         }
-        // Auto-normalize scale for models without an explicit scale — clamp height to 0.3–2.5m.
-        // Hunyuan GLBs are typically ~0.5m tall at scale=1 which is correct; but guard against
-        // extreme sizes that would make the prop invisible or overwhelm the scene.
+        // Scale to targetHeight when provided — data-driven, no type inference.
         let effectiveScale = scale;
-        if (scale === 1) {
+        const propTargetHeight = typeof obj.metadata.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
+        if (propTargetHeight !== undefined && scale === 1) {
           group.scale.setScalar(1);
           group.updateMatrixWorld(true);
           const rawBbox = new Box3().setFromObject(group);
           const rawHeight = rawBbox.max.y - rawBbox.min.y;
-          if (rawHeight > 0.01) {
-            const TARGET_MAX_HEIGHT = 2.5;
-            const TARGET_MIN_HEIGHT = 0.3;
-            if (rawHeight > TARGET_MAX_HEIGHT) effectiveScale = TARGET_MAX_HEIGHT / rawHeight;
-            else if (rawHeight < TARGET_MIN_HEIGHT) effectiveScale = TARGET_MIN_HEIGHT / rawHeight;
-          }
+          if (rawHeight > 0.01) effectiveScale = Math.min(propTargetHeight / rawHeight, 10);
         }
         group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
@@ -1390,17 +1379,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               }
             }
             let effectiveScaleNp = scale;
-            if (scale === 1) {
+            const npTargetHeight = typeof obj.metadata.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
+            if (npTargetHeight !== undefined && scale === 1) {
               g.updateMatrixWorld(true);
               const sbbox = new Box3().setFromObject(g);
               const mh = sbbox.max.y - sbbox.min.y;
-              if (mh > 0.01) {
-                const NPC_MIN = 0.3;
-                const NPC_MAX = 2.5;
-                const NPC_TARGET = 1.6;
-                if (mh < NPC_MIN) effectiveScaleNp = Math.min(NPC_TARGET / mh, 5);
-                else if (mh > NPC_MAX) effectiveScaleNp = NPC_MAX / mh;
-              }
+              if (mh > 0.01) effectiveScaleNp = Math.min(npTargetHeight / mh, 10);
             }
             g.scale.setScalar(effectiveScaleNp);
             g.updateMatrixWorld(true);

@@ -333,24 +333,61 @@ if (extY < maxExt * 0.75) {
 
 ### Auto-Scale and Ground Offset
 
-After orientation correction, models with `scale=1` are auto-scaled into the 0.3–2.5 m range
-(target 1.6 m for humans). Ground offset aligns the bottom of the bounding box to the ground
-plane — **do not multiply by scale** (world-space bbox already includes it):
+Model scaling is **purely data-driven** via `metadata.targetHeight`. The viewer has no knowledge
+of semantic categories — all size decisions are made at creation time by the agent.
+
+```typescript
+// viewer/src/components/SplatViewer.tsx — all three NPC/prop paths
+const targetHeight = typeof obj.metadata.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
+if (targetHeight !== undefined && scale === 1) {
+  const modelHeight = bbox.max.y - bbox.min.y;
+  if (modelHeight > 0.01) effectiveScale = Math.min(targetHeight / modelHeight, 10);
+}
+```
+
+If `targetHeight` is absent (or `scale !== 1`), the model renders at its native size.
+
+Ground offset aligns the bottom of the bounding box to the ground plane — **do not multiply by
+scale** (world-space bbox already includes it):
 
 ```typescript
 const groundOffset = -finalBbox.min.y;  // finalBbox is world-space after all transforms
 group.position.set(pos.x, pos.y + groundOffset, pos.z);
 ```
 
-**`scale === 1` guard** — the auto-clamp only fires when `scale === 1`. If the agent or placement
-code stored an explicit `scale !== 1`, that value is used verbatim. Do NOT remove this guard:
-removing it causes all existing NPCs to get re-measured from scratch on every load, which changes
-the computed `effectiveScale` and shifts `groundOffset`, making placed NPCs float.
+**`scale === 1` guard** — scaling only fires when `scale === 1`. An explicit `scale !== 1` stored
+in metadata is used verbatim. Do NOT remove this guard: removing it causes existing NPCs to be
+re-measured from scratch, shifting `groundOffset` and making placed NPCs float.
 
-**`targetHeight` metadata** — for semantically correct sizing (human 1.7 m, cat 0.3 m etc.),
-set `metadata.targetHeight` when placing. It bypasses the `scale === 1` guard and pins the model
-to the exact world height: `effectiveScale = targetHeight / rawHeight`. Works additively on top of
-the existing guard — objects without `targetHeight` behave exactly as before.
+### Semantic Height Table
+
+The agent MUST set `metadata.targetHeight` on every NPC/prop it creates. Use the closest match:
+
+| Category              | targetHeight (m) |
+|-----------------------|-----------------|
+| adult human/humanoid  | 1.7             |
+| child (human)         | 1.2             |
+| cat                   | 0.3             |
+| dog (small)           | 0.3             |
+| dog (large)           | 0.7             |
+| horse                 | 1.6             |
+| rabbit                | 0.2             |
+| bird                  | 0.15            |
+| bicycle               | 1.0             |
+| car                   | 1.5             |
+| chair                 | 0.9             |
+| table / desk          | 0.75            |
+| sofa/couch            | 0.85            |
+| bookshelf             | 1.8             |
+| door                  | 2.1             |
+| tree (small)          | 3.0             |
+| tree (large)          | 8.0             |
+| barrel/crate          | 0.6             |
+| lamp/lantern          | 1.5             |
+| potted plant          | 0.5             |
+
+`type=npc` vs `type=prop` indicates interactivity, NOT size. A cat NPC and a cat prop both use
+`targetHeight: 0.3`. Never infer size from `type`.
 
 ### Position Persistence and Corruption Pattern
 

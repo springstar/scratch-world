@@ -13,6 +13,14 @@ const PropMetadataSchema = Type.Object({
 	),
 	mass: Type.Optional(Type.Number({ description: "Mass in kg (default 10)" })),
 	scale: Type.Optional(Type.Number({ description: "World scale multiplier (default 1)" })),
+	targetHeight: Type.Optional(
+		Type.Number({
+			description:
+				"Target real-world height in metres. The viewer scales the model so its bounding-box height matches this value. " +
+				"Set based on semantic category: human/humanoid 1.7, child 1.2, cat 0.3, dog 0.5, horse 1.6, chair 0.9, table 0.75, bicycle 1.0. " +
+				"ALWAYS set this field — it ensures correct proportions relative to other scene objects.",
+		}),
+	),
 	placement: Type.Optional(
 		Type.Union(
 			[

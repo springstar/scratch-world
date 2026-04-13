@@ -165,6 +165,32 @@ Required metadata fields:
 - physicsShape: "box" | "sphere" | "convex" — collider type (default: "box")
 - mass: number — kg (default 10; heavy crates ~50, small props ~5)
 - scale: number — world scale multiplier (default 1)
+- targetHeight: number — REQUIRED. Real-world height in metres so the viewer scales the model correctly.
+  Semantic height table (use the closest match):
+  | Category            | targetHeight |
+  |---------------------|-------------|
+  | adult human/humanoid | 1.7        |
+  | child (human)       | 1.2         |
+  | cat                 | 0.3         |
+  | dog (small)         | 0.3         |
+  | dog (large)         | 0.7         |
+  | horse               | 1.6         |
+  | rabbit              | 0.2         |
+  | bird                | 0.15        |
+  | bicycle             | 1.0         |
+  | motorcycle          | 1.1         |
+  | car                 | 1.5         |
+  | chair               | 0.9         |
+  | table               | 0.75        |
+  | sofa/couch          | 0.85        |
+  | desk                | 0.75        |
+  | bookshelf           | 1.8         |
+  | door                | 2.1         |
+  | tree (small)        | 3.0         |
+  | tree (large)        | 8.0         |
+  | barrel/crate        | 0.6         |
+  | lamp/lantern        | 1.5         |
+  | potted plant        | 0.5         |
 
 Optional:
 - placement: "near_camera" | "near_entrance" | "scene_center" | "exact"
