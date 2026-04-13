@@ -151,7 +151,92 @@ renderer.setAnimationLoop(() => renderer.render(scene, camera));
 
 ---
 
-## SimWorld
+## Image-Similarity-Based Scale Estimation for 3D Model
+
+- **论文**: "Image-Similarity-Based Scale Estimation for 3D Model", SA Posters '25, December 2025, Hong Kong
+- **作者**: Tianrui Hu, Jiaao Yu, Wenjun Hou（北京邮电大学 / 腾讯混元）
+- **DOI**: 10.1145/3737571468
+- **调研日期**: 2026-04-13
+
+### 论文核心思路
+
+生成模型后自动推断真实世界尺寸，无需人工标注。流程：
+
+```
+3D 模型（GLB/GLTF）
+  → 渲染为图像（多角度）
+  → CLIP 向量化
+  → 在有真实尺寸标注的 3D 数据库中检索最相似物体（cosine similarity）
+  → 用检索结果的尺寸（指数加权平均）推断目标尺寸
+  → 以最短轴为缩放参考，uniform scale 应用到模型
+```
+
+**缩放策略**：不直接匹配三轴，而是用最短轴（`argmin axis`）为基准：
+
+```
+s = argmin(axis_B) / argmin(axis_A)
+```
+
+避免形状变形；最短轴通常对应物体最稳健的几何特征。
+
+**评估结果**（40 个 8 类别标准化模型，ground-truth 尺寸手工测量）：
+
+| 方法 | Average Error | Usability |
+|------|--------------|-----------|
+| Depth 估计（baseline）| 0.894 | 5% |
+| 本文（CLIP 检索）| 0.202 | 80% |
+
+CLIP 检索方案误差降低 77%，可用率提升 16×。
+
+### 与 scratch-world 的关联
+
+#### 当前方案的局限
+
+我们现在用 agent 根据文字名称判断语义类别，再查表写入 `metadata.targetHeight`。这条路存在根本缺陷：
+
+- agent 看到的是文字（"一桶"），不是模型视觉内容
+- 依赖人工维护语义高度表，新类别需要手动添加
+- 分类错误无法自动修正（调试中已出现"一桶"被误判为人的情况）
+
+#### 论文方案的优势
+
+渲染后用 CLIP 做视觉检索，**看的是模型本身**，不依赖名称：
+
+- 一只躺着的猫和一只坐着的猫都能匹配到猫的尺寸
+- 不需要维护分类表，泛化到任意新物体
+- 可与 Hunyuan 3D 生成流程串联：生成完立即推断尺寸并写入 metadata
+
+#### 对 scratch-world 的具体启发
+
+**短期（可立即实现）**：在 Hunyuan 生成完成后，用 CLIP 对渲染缩略图做零样本分类（human / animal / furniture / vehicle），映射到对应 `targetHeight` 区间，比纯文字名称更可信。我们已经在生成流程中产出缩略图，CLIP 调用成本极低。
+
+**中期（需构建数据库）**：用 3D-FUTURE / ShapeNet / Objaverse 中有真实尺寸标注的子集构建嵌入数据库，实现论文的完整检索流程。生成一个模型的同时自动查询并写入 `targetHeight`，完全消除人工干预。
+
+**缩放参考轴**：论文建议用最短轴而非 Y 轴（高度轴）作为缩放参考，这与我们当前遇到的模型躺倒检测问题直接对应——如果用最短轴，躺倒的模型和直立的模型都能得到正确的缩放比例，无需先做方向矫正。
+
+### 实现路径建议
+
+```
+阶段 1：CLIP 零样本分类（低成本，可快速验证）
+  - 在 image-to-3d.ts 生成完成后，渲染模型缩略图
+  - 调用 CLIP（OpenAI API 或本地 clip-vit-base）对缩略图分类
+  - 按分类结果自动写入 targetHeight
+  - 不依赖外部数据库，纯推理
+
+阶段 2：嵌入数据库（更高精度）
+  - 下载 3D-FUTURE 或 Objaverse-XL 的有尺寸标注子集
+  - 预计算 CLIP 嵌入，构建向量索引（FAISS）
+  - 检索时返回最相似物体的真实尺寸
+  - 用论文的指数加权平均 + 最短轴方案计算 targetHeight
+```
+
+### 与当前架构的集成点
+
+| 集成位置 | 说明 |
+|---------|------|
+| `src/agent/tools/image-to-3d.ts` | Hunyuan 生成完成后触发 CLIP 推断，自动填 `targetHeight` |
+| `src/viewer-api/routes/scenes.ts` | NPC POST 接口已支持 `targetHeight` 字段，直接接收推断结果 |
+| `viewer/src/components/SplatViewer.tsx` | 渲染层已纯数据驱动，读 `targetHeight` 即可，无需改动 |
 
 - **仓库**: https://github.com/SimWorld-AI/SimWorld
 - **论文**: arXiv 2512.01078，NeurIPS 2025 Spotlight
