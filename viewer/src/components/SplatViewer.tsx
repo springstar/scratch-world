@@ -229,6 +229,25 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       console.log("[markTV] saved:", cal);
     };
 
+    // Auto-calibrate TV overlay from sceneObjects: if any object with a screen skill
+    // (video-player or code-gen) has a real world position but no modelUrl (invisible marker),
+    // write its position as the calibration so setTvContent() works without __markTV().
+    // This runs once at scene load; loadSceneProp covers the case where a GLTF prop is placed.
+    if (!localStorage.getItem(calKey)) {
+      const screenObj = (sceneObjects ?? []).find((o) => {
+        const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
+        return (skill === "video-player" || skill === "code-gen") && !o.metadata?.modelUrl;
+      });
+      if (screenObj) {
+        const p = screenObj.position;
+        localStorage.setItem(calKey, JSON.stringify({
+          pos: { x: p.x, y: p.y, z: p.z },
+          w: 1.5,
+          h: 0.85,
+        }));
+      }
+    }
+
     const clock = new Clock();
     const sparkRenderer = new SparkRenderer({ renderer, clock });
     scene.add(sparkRenderer);

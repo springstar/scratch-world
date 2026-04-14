@@ -243,7 +243,8 @@ Built-in skills:
     Example: [{"title":"CCTV新闻","url":"https://live.bilibili.com/xxxxx"},{"title":"体育频道","url":"https://youtu.be/xxxxx"}]
     When channels is set, the player sees a channel list and picks one. url is optional if channels is provided.
   - title: panel header text (optional, defaults to object name)
-- text-display: show a static markdown text board (requires: content)
+- text-display: show a static markdown text board on a sign, notice board, or information panel
+  (requires: content). DO NOT use for TV screens or monitors — use code-gen instead.
 - code-gen: generate and execute a custom JavaScript behavior using the WorldAPI sandbox.
   The LLM generates a short script at interaction time and runs it in-world.
   Config options:
@@ -256,6 +257,13 @@ Built-in skills:
   Examples:
   - Rotating glowing sphere: prompt="spawn a glowing sphere that slowly rotates", mode="preset"
   - Player-driven sandbox: prompt="" (unused), mode="interactive" — player types any request
+  - Welcome message on TV screen: prompt="show a welcome message on the TV screen using world.setTvContent('<h2 style=\"color:#fff;text-align:center\">欢迎光临</h2>')", mode="preset", title="欢迎"
+  - Scrolling marquee on screen: prompt="use world.setTvContent to display a scrolling marquee welcome text on the TV screen", mode="preset"
+
+  IMPORTANT: For any TV, monitor, or display screen, the script MUST call world.setTvContent(html)
+  to render content on the screen. Do NOT use world.spawn() or Three.js mesh manipulation —
+  those have no effect on Gaussian splat geometry. world.setTvContent() uses screen-space
+  projection to overlay HTML directly on the TV's position in the 3D scene.
 
 CRITICAL: For code-gen on Marble/splat scenes, ALWAYS use place_prop + attach_skill.
 NEVER call update_scene or create_scene with sceneCode for a Marble scene — sceneCode runs
