@@ -30,6 +30,11 @@ world.animate(cb: (dt: number) => void): void
 // Show a temporary HUD toast message.
 world.showToast(text: string, durationMs?: number): void
 
+// Show an HTML panel in the center of the screen. Pass null to dismiss.
+// Use for text, formatted content, welcome messages, info panels, etc.
+// Supports any HTML tags: <h2>, <p>, <ul>, <b>, <span style="color:..."> etc.
+world.setDisplay(html: string | null): void
+
 // Current scene provider type.
 world.provider: "splat" | "threejs"
 

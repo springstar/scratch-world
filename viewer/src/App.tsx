@@ -114,6 +114,8 @@ export function App() {
 
   // Toast from WorldAPI scripts
   const [scriptToast, setScriptToast] = useState<string | null>(null);
+  // HTML display panel from WorldAPI world.setDisplay(html)
+  const [scriptDisplay, setScriptDisplay] = useState<string | null>(null);
 
   // Prop library — persisted to localStorage so it survives page reloads
   const [generatedProps, setGeneratedProps] = useState<GeneratedProp[]>(() => {
@@ -353,6 +355,16 @@ export function App() {
     };
     window.addEventListener("world:toast", handleToast);
     return () => window.removeEventListener("world:toast", handleToast);
+  }, []);
+
+  // world:display events fired by WorldAPI world.setDisplay(html)
+  useEffect(() => {
+    const handleDisplay = (e: Event) => {
+      const { html } = (e as CustomEvent<{ html: string | null }>).detail;
+      setScriptDisplay(html);
+    };
+    window.addEventListener("world:display", handleDisplay);
+    return () => window.removeEventListener("world:display", handleDisplay);
   }, []);
 
   // Chat send
@@ -1100,6 +1112,41 @@ export function App() {
         onCommand={handleCommand}
         onDeleteScene={handleDeleteScene}
       />
+
+      {/* Script display panel from world.setDisplay(html) */}
+      {scriptDisplay && (
+        <div
+          style={{
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: 400,
+            minWidth: 280,
+            maxWidth: 480,
+            background: "rgba(8,6,20,0.94)",
+            border: "1px solid rgba(120,80,255,0.35)",
+            borderRadius: 12,
+            boxShadow: "0 8px 40px rgba(0,0,0,0.7)",
+            fontFamily: "system-ui, -apple-system, sans-serif",
+            backdropFilter: "blur(10px)",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px 0" }}>
+            <button
+              type="button"
+              onClick={() => setScriptDisplay(null)}
+              style={{ background: "none", border: "none", color: "rgba(160,140,220,0.7)", fontSize: 18, cursor: "pointer", lineHeight: 1 }}
+            >×</button>
+          </div>
+          {/* eslint-disable-next-line react/no-danger */}
+          <div
+            style={{ padding: "4px 18px 18px", color: "rgba(210,195,255,0.92)", fontSize: 15, lineHeight: 1.6 }}
+            dangerouslySetInnerHTML={{ __html: scriptDisplay }}
+          />
+        </div>
+      )}
 
       {/* Script toast from WorldAPI */}
       {scriptToast && (

@@ -11,6 +11,8 @@ export interface WorldAPI {
   despawn(objectId: string): void;
   setColor(objectId: string, color: string): void;
   showToast(text: string, durationMs?: number): void;
+  /** Render arbitrary HTML in the display overlay panel. Pass null to dismiss. */
+  setDisplay(html: string | null): void;
 }
 
 export interface SpawnOpts {
