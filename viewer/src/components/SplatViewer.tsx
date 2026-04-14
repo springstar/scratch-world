@@ -872,7 +872,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 }); // standard -Y gravity; after PI-bake the floor is at world Y < camera
 
       const groundOffset = splatGroundOffset ?? 2.0;
-      const isIndoor = groundOffset < 1.5;
+      // isIndoor: splatGroundOffset < 1.5 means the floor is close to camera eye height → room/indoor.
+      // If splatGroundOffset is missing, fall back to whether a colliderMeshUrl exists:
+      // scenes with a collision mesh are outdoor; scenes without are treated as indoor.
+      const isIndoor = splatGroundOffset !== undefined ? groundOffset < 1.5 : !colliderMeshUrl;
 
       if (!isIndoor) {
         // Outdoor scenes: load the full collision mesh (terrain, slopes, etc.).
