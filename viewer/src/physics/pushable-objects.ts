@@ -130,7 +130,7 @@ export function loadPhysicsProps(
   onLoadError?: (name: string) => void,
 ): PhysicsProp[] {
   const propObjects = objects.filter(
-    (o) => o.type === "prop" && typeof o.metadata.modelUrl === "string",
+    (o) => o.type === "prop" && typeof o.metadata.modelUrl === "string" && o.metadata.modelUrl !== "",
   );
 
   const result: PhysicsProp[] = [];

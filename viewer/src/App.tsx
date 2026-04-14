@@ -193,7 +193,7 @@ export function App() {
             | ((obj: SceneObject) => void) | undefined;
           for (const obj of s.sceneData.objects) {
             if (prevIds.has(obj.objectId)) continue;
-            if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string") {
+            if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string" && obj.metadata.modelUrl !== "") {
               loadPropFn?.(obj).catch(console.warn);
             } else if (obj.type === "npc" && obj.interactable) {
               loadNpcFn?.(obj).catch(console.warn);
@@ -301,7 +301,7 @@ export function App() {
           // Load newly added props
           if (loadFn) {
             for (const obj of s.sceneData.objects) {
-              if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string" && !prevIds.has(obj.objectId)) {
+              if (obj.type === "prop" && typeof obj.metadata.modelUrl === "string" && obj.metadata.modelUrl !== "" && !prevIds.has(obj.objectId)) {
                 loadFn(obj).catch(console.warn);
               }
             }
