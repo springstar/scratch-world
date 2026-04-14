@@ -126,6 +126,7 @@ export async function addSceneNpc(
     skills?: string[];
     modelUrl: string;
     scale?: number;
+    targetHeight?: number;
     placement?: string;
     playerPosition?: { x: number; y: number; z: number };
     cameraForward?: { x: number; z: number };

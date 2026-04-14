@@ -10,7 +10,7 @@ interface Props {
   panoUrl: string;
   objectName: string;
   estimatedPos: Vec3;
-  pickerId: string;
+  pickerId?: string;
   onConfirm: (pos: Vec3) => void;
   onSkip: () => void;
 }

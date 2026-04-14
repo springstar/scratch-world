@@ -113,13 +113,19 @@ export function App() {
     skillConfig: Record<string, unknown>;
   } | null>(null);
 
-  // Position picker — shown when agent wants user to confirm/correct an estimated position
+  // Position picker — shown when agent wants user to confirm/correct an estimated position,
+  // OR when the viewer wants user to pick a placement position before click-to-place.
+  // pickerId is set for agent-driven cases (server Promise waits for POST /confirm-position).
+  // onConfirmLocal is set for viewer-driven cases (no server roundtrip needed).
+  // onSkipLocal is set for viewer-driven cases where skip = cancel (no fallback position).
   const [positionPicker, setPositionPicker] = useState<{
-    pickerId: string;
+    pickerId?: string;
     panoUrl: string;
     estimatedPos: { x: number; y: number; z: number };
     objectName: string;
     sceneId: string;
+    onConfirmLocal?: (pos: { x: number; y: number; z: number }) => void;
+    onSkipLocal?: () => void;
   } | null>(null);
 
   // Toast from WorldAPI scripts
@@ -607,14 +613,18 @@ export function App() {
   const handlePositionConfirm = useCallback(
     async (pos: { x: number; y: number; z: number }) => {
       if (!positionPicker) return;
-      try {
-        await fetch(`/confirm-position/${positionPicker.pickerId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pos }),
-        });
-      } catch (err) {
-        console.error("confirm-position failed", err);
+      if (positionPicker.onConfirmLocal) {
+        positionPicker.onConfirmLocal(pos);
+      } else if (positionPicker.pickerId) {
+        try {
+          await fetch(`/confirm-position/${positionPicker.pickerId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pos }),
+          });
+        } catch (err) {
+          console.error("confirm-position failed", err);
+        }
       }
       setPositionPicker(null);
     },
@@ -623,14 +633,21 @@ export function App() {
 
   const handlePositionSkip = useCallback(async () => {
     if (!positionPicker) return;
-    try {
-      await fetch(`/confirm-position/${positionPicker.pickerId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pos: positionPicker.estimatedPos }),
-      });
-    } catch (err) {
-      console.error("confirm-position skip failed", err);
+    if (positionPicker.onSkipLocal) {
+      positionPicker.onSkipLocal();
+    } else if (positionPicker.onConfirmLocal) {
+      // For local picker without explicit skip handler, skip = use estimated position
+      positionPicker.onConfirmLocal(positionPicker.estimatedPos);
+    } else if (positionPicker.pickerId) {
+      try {
+        await fetch(`/confirm-position/${positionPicker.pickerId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pos: positionPicker.estimatedPos }),
+        });
+      } catch (err) {
+        console.error("confirm-position skip failed", err);
+      }
     }
     setPositionPicker(null);
   }, [positionPicker]);
@@ -1102,9 +1119,38 @@ export function App() {
         onNpcUpdated={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
         onNpcDeleted={() => { if (scene) loadSceneById(scene.sceneId, { session: sessionId }); }}
         onBeginPlacement={(npc) => {
-          setPendingNpc(npc);
           setNpcChatTarget(null);
           setShowNpcDrawer(false);
+          // Show position picker when a panorama is available so user can pick placement
+          const panoUrl = scene?.sceneData.objects[0]?.metadata?.panoUrl as string | undefined;
+          if (panoUrl) {
+            setPositionPicker({
+              panoUrl,
+              estimatedPos: { x: 0, y: 0, z: 0 },
+              objectName: npc.name,
+              sceneId: scene?.sceneId ?? "",
+              onConfirmLocal: (pos) => {
+                if (!scene) return;
+                const fwd = (window as unknown as Record<string, unknown>).__cameraForward as
+                  | { x: number; z: number } | undefined;
+                addSceneNpc(scene.sceneId, sessionId, {
+                  ...npc,
+                  placement: "exact",
+                  playerPosition: pos,
+                  cameraForward: fwd,
+                  targetHeight: 1.7,
+                })
+                  .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
+                  .catch(console.warn);
+              },
+              onSkipLocal: () => {
+                // User dismissed picker — fall back to click-to-place in 3D scene
+                setPendingNpc(npc);
+              },
+            });
+          } else {
+            setPendingNpc(npc);
+          }
         }}
         generatedNpcModels={generatedNpcModels}
         onNpcModelGenerated={addGeneratedNpcModel}
