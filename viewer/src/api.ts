@@ -57,6 +57,7 @@ export async function postInteract(payload: {
   objectId: string;
   action: string;
   playerPosition?: { x: number; y: number; z: number };
+  interactionData?: Record<string, unknown>;
 }): Promise<{ display?: DisplayConfig }> {
   const res = await fetch(`${BASE}/interact`, {
     method: "POST",

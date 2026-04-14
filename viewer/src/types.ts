@@ -9,7 +9,9 @@ export type DisplayConfig =
   | { type: "iframe"; url: string; title?: string }
   | { type: "video"; url: string; title?: string }
   | { type: "markdown"; content: string; title?: string }
-  | { type: "table"; headers: string[]; rows: string[][]; title?: string };
+  | { type: "table"; headers: string[]; rows: string[][]; title?: string }
+  /** Client executes `code` in a WorldAPI sandbox — no overlay is shown. */
+  | { type: "script"; code: string; title?: string };
 
 export interface Vec3 {
   x: number;

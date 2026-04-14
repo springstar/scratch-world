@@ -2,6 +2,51 @@ import type { SceneObject } from "../types.js";
 
 const PROXIMITY_RADIUS = 2.5; // metres
 
+// ── Interactive prop proximity ────────────────────────────────────────────────
+
+export interface NearbyInteractiveProp {
+	objectId: string;
+	name: string;
+	skillName: string;
+	skillConfig: Record<string, unknown>;
+}
+
+const PROP_APPROACH_RADIUS = 3.0; // metres — panel pops up
+const PROP_LEAVE_RADIUS = 5.0; // metres — panel auto-dismisses
+
+export { PROP_LEAVE_RADIUS };
+
+/** Return the nearest prop with a skill attached within approach range, or null. */
+export function findNearbyInteractiveProp(
+	objects: SceneObject[],
+	cx: number,
+	cz: number,
+	positionOverrides?: Map<string, { x: number; y: number; z: number }>,
+): NearbyInteractiveProp | null {
+	let closest: NearbyInteractiveProp | null = null;
+	let closestDist2 = PROP_APPROACH_RADIUS * PROP_APPROACH_RADIUS;
+	for (const obj of objects) {
+		const skillMeta = obj.metadata?.skill as
+			| { name: string; config: Record<string, unknown> }
+			| undefined;
+		if (!skillMeta || obj.type === "npc") continue;
+		const pos = positionOverrides?.get(obj.objectId) ?? obj.position;
+		const dx = cx - pos.x;
+		const dz = cz - pos.z;
+		const dist2 = dx * dx + dz * dz;
+		if (dist2 < closestDist2) {
+			closestDist2 = dist2;
+			closest = {
+				objectId: obj.objectId,
+				name: obj.name,
+				skillName: skillMeta.name,
+				skillConfig: skillMeta.config ?? {},
+			};
+		}
+	}
+	return closest;
+}
+
 export interface NearbyNpc {
   objectId: string;
   name: string;

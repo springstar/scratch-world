@@ -1,6 +1,6 @@
 # scratch-world Codemap
 
-**Last Updated:** 2026-04-09 (NPC/prop Hunyuan 3D generation; GLTF renderer split; NPC placement orientation fix)
+**Last Updated:** 2026-04-14 (code-gen skill + WorldAPI sandbox; TV proximity panel; multi-channel video-player)
 
 A chat-driven AI agent for creating and exploring persistent 3D worlds through natural conversation. The system integrates Claude (via pi-agent-core) with a Three.js viewer and pluggable 3D generation backends.
 
@@ -85,6 +85,12 @@ Tool Execution          Scene CRUD         If provider.startGeneration:
 | **Object Renderer** | `viewer/src/renderer/object-renderer.ts` | Base class for Three.js object renderers with shared load/dispose lifecycle | `ObjectRenderer` |
 | **GLTF Object Renderer** | `viewer/src/renderer/gltf-object-renderer.ts` | Loads GLTF/GLB models into the scene; handles Hunyuan root-quaternion orientation detection, auto-scale to 1.6 m, foot-to-floor ground offset | `GltfObjectRenderer` |
 | **Logger** | `src/logger.ts` | Structured session/tool-scoped logger with timer helpers and 500-entry in-memory ring buffer; powers /debug/logs | `createLogger()`, `getRecentLogs()` |
+| **Prop Interaction Panel** | `viewer/src/components/PropInteractionPanel.tsx` | Proximity-triggered floating panel (bottom-right) for interactive props; supports video-player channel selection and code-gen request input | `PropInteractionPanel` |
+| **Prop Proximity** | `viewer/src/physics/npc-proximity.ts` | Detects interactive props (3m approach / 5m leave radius); exports `findNearbyInteractiveProp()` alongside `findNearbyNpc()` for props with `metadata.skill` | `findNearbyInteractiveProp()` |
+| **WorldAPI** | `viewer/src/behaviors/world-api.ts` | WorldAPI interface and `runScript()` sandbox executor for code-gen scripts; enables spawn/despawn/setColor/animate/toast in-world | `WorldAPI`, `runScript()` |
+| **Video Player Client** | `viewer/src/behaviors/video-player-client.ts` | Client-side URL resolver for YouTube/Bilibili/direct video; avoids server round-trip for channel selection | `resolveVideoDisplay()` |
+| **Code-Gen Skill** | `src/behaviors/skills/code-gen.ts` | Generates and executes custom JavaScript via WorldAPI sandbox; calls Claude (configurable model, default claude-sonnet-4-6) at interaction time; supports preset and interactive modes | `codeGenSkill` |
+| **Interact Route** | `src/viewer-api/routes/interact.ts` | POST /interact — accepts `interactionData` field; merges into skill config so code-gen can read `userRequest` from player input | `interactRoute()` |
 
 ## Settlement Generation (Two-Stage Architecture)
 

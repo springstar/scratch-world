@@ -236,8 +236,26 @@ play a video, display stock data, show a sign, etc.), use attach_skill:
 Built-in skills:
 - web-view: embed any HTTPS URL in a panel (requires: url)
 - stock-ticker: show real-time stock quotes (requires: symbols — comma-separated tickers like "AAPL,TSLA,000001.SS")
-- video-player: play YouTube, Bilibili (including live.bilibili.com), or direct video URL (requires: url)
+- video-player: play YouTube, Bilibili (including live.bilibili.com), or direct video URL.
+  Config options:
+  - url: single video URL (YouTube/Bilibili/MP4) — for single-channel TVs
+  - channels: array of {title, url} objects — for multi-channel remote control panels.
+    Example: [{"title":"CCTV新闻","url":"https://live.bilibili.com/xxxxx"},{"title":"体育频道","url":"https://youtu.be/xxxxx"}]
+    When channels is set, the player sees a channel list and picks one. url is optional if channels is provided.
+  - title: panel header text (optional, defaults to object name)
 - text-display: show a static markdown text board (requires: content)
+- code-gen: generate and execute a custom JavaScript behavior using the WorldAPI sandbox.
+  The LLM generates a short script at interaction time and runs it in-world.
+  Config options:
+  - prompt: natural language description of the desired behavior — the preset script request
+    (e.g. "make the object slowly rotate and pulse its color between red and blue").
+    Required when mode is "preset" (default).
+  - mode: "preset" (default) — run the preset prompt when player activates; "interactive" — show
+    a text input so the player can type their own request each time.
+  - title: label shown on the activation button (optional, default "激活").
+  Examples:
+  - Rotating glowing sphere: prompt="spawn a glowing sphere that slowly rotates", mode="preset"
+  - Player-driven sandbox: prompt="" (unused), mode="interactive" — player types any request
 
 ### Playing live TV channels (CCTV, etc.)
 

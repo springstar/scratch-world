@@ -15,6 +15,7 @@ import {
   Box3,
   Euler,
   BoxGeometry,
+  CylinderGeometry,
   SphereGeometry,
   TorusGeometry,
   PlaneGeometry,
@@ -41,7 +42,7 @@ import {
 } from "../physics/pushable-objects.js";
 import { type PlacementHint, resolvePosition } from "../physics/prop-placement.js";
 import { pickObject } from "../physics/raycast-pick.js";
-import { extractNpcs } from "../physics/npc-proximity.js";
+import { extractNpcs, findNearbyInteractiveProp, PROP_LEAVE_RADIUS } from "../physics/npc-proximity.js";
 import type { SceneObject, Viewpoint } from "../types.js";
 import type { AssetEntry } from "../renderer/asset-catalog.js";
 import { ASSET_CATALOG } from "../renderer/asset-catalog.js";
@@ -75,12 +76,16 @@ interface Props {
   onPortalPlaceCancel?: () => void;
   onPortalApproach?: (objectId: string, targetSceneId: string | null, targetSceneName: string | null) => void;
   onPortalLeave?: () => void;
+  onPropApproach?: (objectId: string, name: string, skillName: string, skillConfig: Record<string, unknown>) => void;
+  onPropLeave?: () => void;
+  /** Ref to the TV video overlay container div — SplatViewer updates its position/size each frame via direct DOM. */
+  tvContainerRef?: { current: HTMLDivElement | null };
 }
 
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -106,6 +111,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const npcPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
   // NPC Three.js groups — populated by both the physics path and the no-physics fallback.
   const npcGroupsRef = useRef<Map<string, import("three").Group>>(new Map());
+  // Prop world positions — keyed by objectId; used for prop proximity detection.
+  const propPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
   const onPlacementRequestRef = useRef(onPlacementRequest);
   onPlacementRequestRef.current = onPlacementRequest;
   const onNpcPlaceRef = useRef(onNpcPlace);
@@ -134,6 +141,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onPortalApproachRef.current = onPortalApproach;
   const onPortalLeaveRef = useRef(onPortalLeave);
   onPortalLeaveRef.current = onPortalLeave;
+  const onPropApproachRef = useRef(onPropApproach);
+  onPropApproachRef.current = onPropApproach;
+  const onPropLeaveRef = useRef(onPropLeave);
+  onPropLeaveRef.current = onPropLeave;
+  const tvContainerRefRef = useRef(tvContainerRef);
+  tvContainerRefRef.current = tvContainerRef;
   const nearPortalIdRef = useRef<string | null>(null);
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
 
@@ -198,6 +211,23 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     const camera = new PerspectiveCamera(65, canvas.clientWidth / canvas.clientHeight, 0.01, 1000);
     camera.position.set(0, 1.7, 0);
+
+    // Calibration helper: stand in front of the TV and call window.__markTV() in the console.
+    // Saves the estimated TV world position + screen dimensions to localStorage so the overlay
+    // is projected onto the screen each frame.  Defaults: 1.5 m width, 0.85 m height.
+    const calKey = `tv_calibration_${sceneId ?? ""}`;
+    (window as unknown as Record<string, unknown>).__markTV = (w = 1.5, h = 0.85) => {
+      // Estimate TV center: 1.5 m ahead of the camera at eye height
+      const fwdTmp = new Vector3();
+      camera.getWorldDirection(fwdTmp);
+      fwdTmp.y = 0;
+      fwdTmp.normalize();
+      const tvCenter = camera.position.clone().add(fwdTmp.multiplyScalar(1.5));
+      tvCenter.y = camera.position.y - 0.1; // slight downward — TV screen center at eye level
+      const cal = { pos: { x: tvCenter.x, y: tvCenter.y, z: tvCenter.z }, w, h };
+      localStorage.setItem(calKey, JSON.stringify(cal));
+      console.log("[markTV] saved:", cal);
+    };
 
     const clock = new Clock();
     const sparkRenderer = new SparkRenderer({ renderer, clock });
@@ -622,12 +652,50 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     canvas.addEventListener("mousemove", onMouseMove);
 
     // Keep flyEuler in sync when camera is repositioned externally
+
+    // ── Script sandbox state (shared across free-fly + physics loops) ─────────
+    const scriptAnimCallbacks: Array<(dt: number) => void> = [];
+    const scriptSpawnedObjects = new Map<string, import("three").Object3D>();
+    let scriptObjCounter = 0;
     const syncEuler = () => { flyEuler.setFromQuaternion(camera.quaternion, "YXZ"); };
 
     const freeFlyFwd   = new Vector3();
     const freeFlyRight = new Vector3();
     const freeFlyMove  = new Vector3();
+    const tvFwd        = new Vector3(); // reused each frame for TV projection
     let freeFlyFrameCount = 0;
+
+    // Project TV world position onto screen and update the container div's CSS directly.
+    // Reads calibration from localStorage; no-ops if not calibrated or div not mounted.
+    function updateTVOverlay() {
+      const el = tvContainerRefRef.current?.current;
+      if (!el) return;
+      const calStr = localStorage.getItem(calKey);
+      if (!calStr) { el.style.display = "none"; return; }
+      try {
+        const cal = JSON.parse(calStr) as { pos: { x: number; y: number; z: number }, w: number, h: number };
+        // Check TV is in front of camera
+        camera.getWorldDirection(tvFwd);
+        const toTV = new Vector3(cal.pos.x - camera.position.x, cal.pos.y - camera.position.y, cal.pos.z - camera.position.z);
+        if (toTV.dot(tvFwd) <= 0.05) { el.style.display = "none"; return; }
+        const dist = toTV.length();
+        // Project TV center to NDC
+        const tvNDC = new Vector3(cal.pos.x, cal.pos.y, cal.pos.z).project(camera);
+        const cw = canvas!.clientWidth;
+        const ch = canvas!.clientHeight;
+        const cx = (tvNDC.x + 1) / 2 * cw;
+        const cy = (1 - tvNDC.y) / 2 * ch;
+        // Apparent pixel size from angular size
+        const ppm = (ch / 2) / Math.tan((65 * Math.PI / 180) / 2) / dist;
+        const pw = cal.w * ppm;
+        const ph = cal.h * ppm;
+        el.style.display = "block";
+        el.style.left   = `${Math.round(cx - pw / 2)}px`;
+        el.style.top    = `${Math.round(cy - ph / 2)}px`;
+        el.style.width  = `${Math.round(pw)}px`;
+        el.style.height = `${Math.round(ph)}px`;
+      } catch { el.style.display = "none"; }
+    }
 
     function freeFlyLoop() {
       if (!freeFlyActive) return;
@@ -647,6 +715,32 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       }
       tickPortals();
       renderer.render(scene, camera);
+      updateTVOverlay();
+      // Run script animate callbacks from code-gen sandbox.
+      if (scriptAnimCallbacks.length > 0) {
+        const dt = clock.getDelta();
+        for (const cb of scriptAnimCallbacks) { try { cb(dt); } catch { /* ignore */ } }
+      }
+      if (freeFlyFrameCount % 10 === 0) {
+        const cx = camera.position.x;
+        const cz = camera.position.z;
+        const nearbyProp = findNearbyInteractiveProp(
+          sceneObjectsRef.current ?? [],
+          cx, cz,
+          propPositionsRef.current,
+        );
+        const prevPropId = (window as unknown as Record<string, unknown>).__nearbyInteractiveProp as string | null ?? null;
+        if (nearbyProp && nearbyProp.objectId !== prevPropId) {
+          (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = nearbyProp.objectId;
+          onPropApproachRef.current?.(nearbyProp.objectId, nearbyProp.name, nearbyProp.skillName, nearbyProp.skillConfig);
+        } else if (!nearbyProp && prevPropId !== null) {
+          const prevPos = propPositionsRef.current.get(prevPropId);
+          if (!prevPos || (cx - prevPos.x) ** 2 + (cz - prevPos.z) ** 2 > PROP_LEAVE_RADIUS * PROP_LEAVE_RADIUS) {
+            (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = null;
+            onPropLeaveRef.current?.();
+          }
+        }
+      }
       // Once the splat is parsed, sample the center pixel every ~30 frames.
       // readPixels causes a GPU-CPU sync stall; throttling keeps it cheap.
       // The 3-s setTimeout fallback above ensures we never get stuck.
@@ -1039,6 +1133,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const bbox = new Box3().setFromObject(group);
         const groundOffset = -bbox.min.y * effectiveScale;
         group.position.set(pos.x, pos.y + groundOffset, pos.z);
+        propPositionsRef.current.set(obj.objectId, { x: group.position.x, y: group.position.y, z: group.position.z });
         scene.add(group);
         group.updateMatrixWorld(true);
         const bboxWorld = new Box3().setFromObject(group);
@@ -1057,10 +1152,70 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       };
       (window as unknown as Record<string, unknown>).__loadSceneProp = loadSceneProp;
 
+      // ── WorldAPI — exposed for the code-gen script sandbox ───────────────────
+      // Scripts generated by the code-gen skill run inside a Function() sandbox
+      // that receives this object as `world`.  Keep the API minimal and safe.
+      const worldAPI = {
+        provider: "splat" as const,
+        scene,
+        camera,
+        animate(cb: (dt: number) => void) {
+          scriptAnimCallbacks.push(cb);
+        },
+        spawn(opts: {
+          shape?: string;
+          x?: number; y?: number; z?: number;
+          width?: number; height?: number; depth?: number;
+          radius?: number;
+          color?: string;
+          opacity?: number;
+          name?: string;
+        }) {
+          const x = opts.x ?? 0, y = opts.y ?? 1, z = opts.z ?? 0;
+          const color = opts.color ?? "#ffffff";
+          const opacity = opts.opacity ?? 1;
+          const mat = new MeshStandardMaterial({ color, transparent: opacity < 1, opacity });
+          let geo: import("three").BufferGeometry;
+          const shape = opts.shape ?? "box";
+          if (shape === "sphere") {
+            geo = new SphereGeometry(opts.radius ?? 0.5, 16, 16);
+          } else if (shape === "cylinder") {
+            geo = new CylinderGeometry(opts.radius ?? 0.3, opts.radius ?? 0.3, opts.height ?? 1, 16);
+          } else if (shape === "plane") {
+            geo = new PlaneGeometry(opts.width ?? 1, opts.height ?? 1);
+          } else {
+            geo = new BoxGeometry(opts.width ?? 1, opts.height ?? 1, opts.depth ?? 1);
+          }
+          const mesh = new Mesh(geo, mat);
+          mesh.position.set(x, y, z);
+          if (opts.name) mesh.name = opts.name;
+          scene.add(mesh);
+          const id = `script_obj_${++scriptObjCounter}`;
+          scriptSpawnedObjects.set(id, mesh);
+          return id;
+        },
+        despawn(objectId: string) {
+          const obj = scriptSpawnedObjects.get(objectId);
+          if (obj) { scene.remove(obj); scriptSpawnedObjects.delete(objectId); }
+        },
+        setColor(objectId: string, color: string) {
+          const obj = scriptSpawnedObjects.get(objectId);
+          if (obj instanceof Mesh && obj.material instanceof MeshStandardMaterial) {
+            obj.material.color.set(color);
+          }
+        },
+        showToast(text: string, durationMs = 3000) {
+          // Reuse the narrative overlay: emit a custom DOM event App.tsx listens to.
+          window.dispatchEvent(new CustomEvent("world:toast", { detail: { text, durationMs } }));
+        },
+      };
+      (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
+
       const removeSceneProp = (objectId: string): void => {
         const idx = props.findIndex((p) => p.objectId === objectId);
         if (idx === -1) return;
         const [removed] = props.splice(idx, 1);
+        propPositionsRef.current.delete(objectId);
         scene.remove(removed.group);
         world.removeRigidBody(removed.body);
       };
@@ -1085,6 +1240,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         return { x: startX, y: -groundOffset + 1.0, z: startZ };
       }
 
+      let physicsLoopFrame = 0;
       function physicsLoop() {
         if (!inPhysicsMode) return;
         animId = requestAnimationFrame(physicsLoop);
@@ -1127,8 +1283,45 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         syncPhysicsProps(props);
         checkPortalProximity(pos.x, pos.z);
+
+        // Prop proximity — check every 10 frames (~6 Hz at 60 fps)
+        if (physicsLoopFrame % 10 === 0) {
+          const nearbyProp = findNearbyInteractiveProp(
+            sceneObjectsRef.current ?? [],
+            pos.x, pos.z,
+            propPositionsRef.current,
+          );
+          const prevPropId = (window as unknown as Record<string, unknown>).__nearbyInteractiveProp as string | null ?? null;
+          if (nearbyProp && nearbyProp.objectId !== prevPropId) {
+            (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = nearbyProp.objectId;
+            onPropApproachRef.current?.(nearbyProp.objectId, nearbyProp.name, nearbyProp.skillName, nearbyProp.skillConfig);
+          } else if (!nearbyProp && prevPropId !== null) {
+            // Check leave radius (wider than approach to avoid oscillation)
+            const prevPos = propPositionsRef.current.get(prevPropId);
+            if (prevPos) {
+              const dx = pos.x - prevPos.x;
+              const dz = pos.z - prevPos.z;
+              if (dx * dx + dz * dz > PROP_LEAVE_RADIUS * PROP_LEAVE_RADIUS) {
+                (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = null;
+                onPropLeaveRef.current?.();
+              }
+            } else {
+              (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = null;
+              onPropLeaveRef.current?.();
+            }
+          }
+        }
+        physicsLoopFrame++;
+
+        // Run script animate callbacks from code-gen sandbox.
+        if (scriptAnimCallbacks.length > 0) {
+          const dt = clock.getDelta();
+          for (const cb of scriptAnimCallbacks) { try { cb(dt); } catch { /* ignore */ } }
+        }
+
         tickPortals();
         renderer.render(scene, camera);
+        updateTVOverlay();
       }
 
       let hasEnteredScene = false;
@@ -1162,6 +1355,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           cc.verticalVel = 0;
           world.step(); // commit teleport before cc.move() reads body.translation()
           clock.getDelta(); // flush accumulated delta
+          // Reset prop proximity tracking so the physics loop detects the TV fresh on first frame.
+          (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = null;
+          onPropLeaveRef.current?.();
           inPhysicsMode = true;
           physicsLoop();
         } else if (!locked && inPhysicsMode) {
@@ -1272,6 +1468,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       window.addEventListener("keydown", onKeyAction);
 
       (window as unknown as Record<string, unknown>).__nearbyNpc = null;
+      (window as unknown as Record<string, unknown>).__nearbyInteractiveProp = null;
 
       cleanupPhysics = () => {
         inPhysicsMode = false;
@@ -1283,6 +1480,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         cv.removeEventListener("contextmenu", onContextMenu);
         window.removeEventListener("keydown", onKeyAction);
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
+        delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
+        onPropLeaveRef.current?.();
+        const tvEl = tvContainerRefRef.current?.current;
+        if (tvEl) tvEl.style.display = "none";
         delete (window as unknown as Record<string, unknown>).__playerPosition;
         delete (window as unknown as Record<string, unknown>).__cameraForward;
         delete (window as unknown as Record<string, unknown>).__spawnProp;
@@ -1452,6 +1653,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       window.removeEventListener("keyup", onKeyUp);
       delete (window as unknown as Record<string, unknown>).__clickPosition;
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
+      delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
+      delete (window as unknown as Record<string, unknown>).__markTV;
+      delete (window as unknown as Record<string, unknown>).__worldAPI;
+      // Clean up any objects spawned by code-gen scripts.
+      for (const obj of scriptSpawnedObjects.values()) scene.remove(obj);
+      scriptSpawnedObjects.clear();
+      scriptAnimCallbacks.length = 0;
+      onPropLeaveRef.current?.();
       delete (window as unknown as Record<string, unknown>).__loadSceneNpc;
       delete (window as unknown as Record<string, unknown>).__removeSceneNpc;
       delete (window as unknown as Record<string, unknown>).__loadScenePortal;

@@ -20,16 +20,24 @@ function isDirectVideo(url: string): boolean {
 
 export const videoPlayerSkill: SkillHandler = {
 	name: "video-player",
-	description: "Play a video (YouTube, Bilibili, or direct MP4/WebM URL) when the player interacts with the object.",
+	description:
+		"Play a video (YouTube, Bilibili, or direct MP4/WebM URL) when the player interacts with the object. Supports single URL or multi-channel preset list.",
 	configSchema: {
 		url: {
-			description: "Video URL. Supports YouTube, Bilibili, or direct .mp4/.webm links.",
-			required: true,
+			description:
+				"Default video URL (single channel). Supports YouTube, Bilibili, or direct .mp4/.webm links. Optional if channels is set.",
+			required: false,
+		},
+		channels: {
+			description:
+				'Array of preset channels shown in the remote-control panel. Format: [{"title": "...", "url": "..."}]. If provided, players see a channel list and pick one.',
+			required: false,
 		},
 		title: { description: "Panel title.", required: false },
 	},
 	async handle(ctx: BehaviorContext): Promise<DisplayConfig> {
-		const url = String(ctx.config.url ?? "");
+		// channelUrl is set by the client when the player picks a specific channel
+		const url = String(ctx.config.channelUrl ?? ctx.config.url ?? "");
 		const title = ctx.config.title ? String(ctx.config.title) : ctx.objectName;
 		if (!url) {
 			return { type: "markdown", content: "**配置错误:** url 字段缺失。", title: "错误" };

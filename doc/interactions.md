@@ -111,7 +111,7 @@ User (Telegram) ──► TelegramAdapter
 
 ---
 
-## Viewer Interaction Flow
+## Viewer Interaction Flow (Legacy Agent Narrative Path)
 
 ```
 User clicks object in Viewer App
@@ -124,6 +124,26 @@ User clicks object in Viewer App
       → text deltas pushed via WebSocket
         → Viewer App displays narrative in overlay
 ```
+
+---
+
+## Behavior Skill Interaction Flow (Fast Path)
+
+Player approaches interactive prop (< 3 m)
+  → SplatViewer fires `onPropApproach(objectId, name, skillName, skillConfig)`
+    → App.tsx shows PropInteractionPanel (bottom-right floating panel)
+      → Player makes selection (channel pick / code-gen request / preset activate)
+        → For video-player: `resolveVideoDisplay()` client-side → BehaviorOverlay or TV overlay
+        → For code-gen:
+            ```
+            POST /interact { interactionData: { userRequest } }
+              → interactRoute merges interactionData into skill config
+                → codeGenSkill.handle() calls Claude → returns { type: "script", code }
+              → Client: runScript(code, window.__worldAPI)
+                → WorldAPI executes in-world (spawn objects, animate, show toast)
+            ```
+Player leaves prop (> 5 m)
+  → SplatViewer fires `onPropLeave` → panel auto-dismisses
 
 ---
 

@@ -18,6 +18,9 @@ import { PropDrawer } from "./components/PropDrawer.js";
 import type { PendingProp, GeneratedProp } from "./components/PropDrawer.js";
 import { PortalDrawer } from "./components/PortalDrawer.js";
 import { BehaviorOverlay } from "./components/BehaviorOverlay.js";
+import { PropInteractionPanel } from "./components/PropInteractionPanel.js";
+import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
+import { runScript } from "./behaviors/world-api.js";
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -95,6 +98,22 @@ export function App() {
 
   // Behavior skill overlay
   const [behaviorDisplay, setBehaviorDisplay] = useState<DisplayConfig | null>(null);
+
+  // TV in-world video overlay — iframe positioned over the TV screen in 3D space.
+  // tvDisplay holds the resolved URL; the container div is positioned by SplatViewer each frame.
+  const [tvDisplay, setTvDisplay] = useState<DisplayConfig | null>(null);
+  const tvContainerRef = useRef<HTMLDivElement>(null);
+
+  // Proximity-triggered prop interaction panel (e.g. TV remote control)
+  const [activePropPanel, setActivePropPanel] = useState<{
+    objectId: string;
+    name: string;
+    skillName: string;
+    skillConfig: Record<string, unknown>;
+  } | null>(null);
+
+  // Toast from WorldAPI scripts
+  const [scriptToast, setScriptToast] = useState<string | null>(null);
 
   // Prop library — persisted to localStorage so it survives page reloads
   const [generatedProps, setGeneratedProps] = useState<GeneratedProp[]>(() => {
@@ -325,6 +344,17 @@ export function App() {
     return disconnect;
   }, [sessionId]);
 
+  // world:toast events fired by WorldAPI scripts
+  useEffect(() => {
+    const handleToast = (e: Event) => {
+      const { text, durationMs = 3000 } = (e as CustomEvent<{ text: string; durationMs?: number }>).detail;
+      setScriptToast(text);
+      setTimeout(() => setScriptToast(null), durationMs);
+    };
+    window.addEventListener("world:toast", handleToast);
+    return () => window.removeEventListener("world:toast", handleToast);
+  }, []);
+
   // Chat send
   const handleSend = useCallback(
     async (text: string, images?: PendingImage[]) => {
@@ -483,6 +513,81 @@ export function App() {
       }
     },
     [scene, sessionId],
+  );
+
+  const handlePropApproach = useCallback(
+    (objectId: string, name: string, skillName: string, skillConfig: Record<string, unknown>) => {
+      setActivePropPanel({ objectId, name, skillName, skillConfig });
+    },
+    [],
+  );
+
+  const handlePropLeave = useCallback(() => {
+    setActivePropPanel(null);
+  }, []);
+
+  const handlePropPanelSelect = useCallback(
+    async (value: string) => {
+      if (!activePropPanel || !scene) return;
+      const { objectId, skillName, skillConfig, name } = activePropPanel;
+
+      // code-gen skill: send to server with interactionData, then execute returned script
+      if (skillName === "code-gen") {
+        const interactionData: Record<string, unknown> =
+          value === "__preset__" ? {} : { userRequest: value };
+        const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+          | { x: number; y: number; z: number }
+          | undefined;
+        try {
+          const result = await postInteract({
+            sessionId,
+            sceneId: scene.sceneId,
+            objectId,
+            action: "interact",
+            playerPosition,
+            interactionData,
+          });
+          if (result.display?.type === "script") {
+            const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+            if (worldAPI) {
+              const err = runScript(
+                result.display.code,
+                worldAPI as Parameters<typeof runScript>[1],
+              );
+              if (err) {
+                (window as unknown as Record<string, unknown>).__worldAPI &&
+                  (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(
+                    `脚本错误: ${err}`,
+                    5000,
+                  );
+              }
+            }
+          } else if (result.display) {
+            setBehaviorDisplay(result.display);
+          }
+        } catch (err) {
+          console.error("[code-gen] postInteract failed:", err);
+        }
+        setActivePropPanel(null);
+        return;
+      }
+
+      // video-player skill: resolve display client-side
+      const title = skillConfig.title as string | undefined;
+      const display = resolveVideoDisplay(value, title ?? name);
+      // If the TV has been calibrated (position saved in localStorage), show video
+      // directly on the TV screen in 3D space.  Otherwise fall back to the modal overlay.
+      const calKey = `tv_calibration_${scene.sceneId}`;
+      if (localStorage.getItem(calKey)) {
+        setTvDisplay(display);
+        setBehaviorDisplay(null);
+      } else {
+        setBehaviorDisplay(display);
+        setTvDisplay(null);
+      }
+      setActivePropPanel(null);
+    },
+    [activePropPanel, scene, sessionId],
   );
 
   const sendNpcMessage = useCallback(
@@ -651,6 +756,9 @@ export function App() {
               onPortalPlaceCancel={() => setPendingPortal(null)}
               onPortalApproach={handlePortalApproach}
               onPortalLeave={handlePortalLeave}
+              onPropApproach={handlePropApproach}
+              onPropLeave={handlePropLeave}
+              tvContainerRef={tvContainerRef}
               onPlacementRequest={(text) => { void handleSend(text); }}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
@@ -898,6 +1006,69 @@ export function App() {
         <BehaviorOverlay display={behaviorDisplay} onClose={() => setBehaviorDisplay(null)} />
       )}
 
+      {/* TV in-world video overlay — SplatViewer sets position/size each frame via direct DOM.
+          Rendered always when tvDisplay is set; hidden by SplatViewer until TV is on screen. */}
+      {tvDisplay && (
+        <div
+          ref={tvContainerRef}
+          style={{
+            position: "fixed",
+            display: "none", // SplatViewer controls this
+            zIndex: 450,
+            background: "#000",
+            overflow: "hidden",
+            boxShadow: "0 0 0 2px rgba(120,80,255,0.5), 0 8px 32px rgba(0,0,0,0.8)",
+          }}
+        >
+          {tvDisplay.type === "iframe" && (
+            <iframe
+              src={tvDisplay.url}
+              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              allow="autoplay; fullscreen"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          )}
+          {tvDisplay.type === "video" && (
+            <video
+              src={tvDisplay.url}
+              controls
+              autoPlay
+              style={{ width: "100%", height: "100%", display: "block", background: "#000" }}
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => { setTvDisplay(null); setActivePropPanel(null); }}
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 4,
+              background: "rgba(0,0,0,0.7)",
+              border: "none",
+              color: "#fff",
+              fontSize: 16,
+              width: 24,
+              height: 24,
+              borderRadius: 4,
+              cursor: "pointer",
+              lineHeight: 1,
+              zIndex: 1,
+            }}
+          >×</button>
+        </div>
+      )}
+
+      {/* Proximity prop panel — shown when player approaches an interactive prop (e.g. TV) */}
+      {activePropPanel && !behaviorDisplay && !tvDisplay && (
+        <PropInteractionPanel
+          objectName={activePropPanel.name}
+          skillName={activePropPanel.skillName}
+          skillConfig={activePropPanel.skillConfig}
+          onSelect={handlePropPanelSelect}
+          onDismiss={() => setActivePropPanel(null)}
+        />
+      )}
+
       {/* NPC chat overlay — shown when interacting with an NPC */}
       {npcChatTarget && (
         <div style={{ position: "absolute", inset: 0, bottom: PEEK_HEIGHT, pointerEvents: "none", zIndex: 115 }}>
@@ -929,6 +1100,29 @@ export function App() {
         onCommand={handleCommand}
         onDeleteScene={handleDeleteScene}
       />
+
+      {/* Script toast from WorldAPI */}
+      {scriptToast && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 80,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 600,
+            background: "rgba(8,6,20,0.90)",
+            border: "1px solid rgba(120,80,255,0.4)",
+            borderRadius: 8,
+            color: "rgba(210,195,255,0.95)",
+            fontSize: 13,
+            padding: "8px 16px",
+            pointerEvents: "none",
+            backdropFilter: "blur(6px)",
+          }}
+        >
+          {scriptToast}
+        </div>
+      )}
     </div>
   );
 }

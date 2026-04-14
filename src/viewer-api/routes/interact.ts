@@ -10,6 +10,8 @@ interface InteractBody {
 	objectId: string;
 	action: string;
 	playerPosition?: { x: number; y: number; z: number };
+	/** Extra runtime data merged into the skill config — e.g. { userRequest: "..." } for code-gen. */
+	interactionData?: Record<string, unknown>;
 }
 
 export function interactRoute(sessionManager: SessionManager, sceneManager: SceneManager, bus: RealtimeBus): Hono {
@@ -26,7 +28,7 @@ export function interactRoute(sessionManager: SessionManager, sceneManager: Scen
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const { sessionId, sceneId, objectId, action, playerPosition } = body;
+		const { sessionId, sceneId, objectId, action, playerPosition, interactionData } = body;
 		if (!sessionId || !sceneId || !objectId || !action) {
 			return c.json({ error: "Missing required fields: sessionId, sceneId, objectId, action" }, 400);
 		}
@@ -38,12 +40,23 @@ export function interactRoute(sessionManager: SessionManager, sceneManager: Scen
 			const skillMeta = obj?.metadata.skill;
 			if (skillMeta && typeof skillMeta === "object" && skillMeta !== null) {
 				try {
+					// Merge interactionData into skill config so skills like code-gen can read
+					// runtime user input (e.g. userRequest) alongside the stored config.
+					const mergedConfig = interactionData
+						? {
+								...(skillMeta as Record<string, unknown>),
+								config: {
+									...(((skillMeta as Record<string, unknown>).config ?? {}) as Record<string, unknown>),
+									...interactionData,
+								},
+							}
+						: skillMeta;
 					const display = await behaviorRegistry.run({
 						objectId,
 						objectName: obj?.name ?? objectId,
 						sceneId,
 						playerPosition,
-						config: skillMeta as Record<string, unknown>,
+						config: mergedConfig as Record<string, unknown>,
 					});
 					if (display) {
 						return c.json({ ok: true, display });
