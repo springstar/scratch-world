@@ -257,7 +257,7 @@ export class MarbleProvider implements SceneRenderProvider {
 				const res = await fetch(localSpzUrl!, { headers: { "WLT-Api-Key": this.apiKey } });
 				if (!res.ok) {
 					console.warn(`[MarbleProvider] SPZ download failed (${res.status}) — falling back to proxy mode`);
-					splatUrlTemplate = "/splat/{sceneId}";
+					splatUrlTemplate = `/splat/{sceneId}?v=${world.world_id.slice(0, 8)}`;
 				} else {
 					const buf = await res.arrayBuffer();
 					await writeFile(localPath, Buffer.from(buf));
@@ -268,7 +268,9 @@ export class MarbleProvider implements SceneRenderProvider {
 				// proxy mode: GET /splat/:sceneId adds WLT-Api-Key server-side.
 				// The sceneId is only known after SceneManager creates the record,
 				// so we return a template that SceneManager resolves.
-				splatUrlTemplate = "/splat/{sceneId}";
+				// Include assetId prefix as a cache-buster so browser never serves
+				// a stale splat after Marble re-generates the world.
+				splatUrlTemplate = `/splat/{sceneId}?v=${world.world_id.slice(0, 8)}`;
 			}
 		}
 
