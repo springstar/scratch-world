@@ -71,10 +71,18 @@ export class SceneManager {
 		let updated: Scene;
 
 		if (sceneData) {
-			// Skill path: Claude provided sceneData directly
+			// Skill path: Claude provided sceneData directly.
+			// Preserve marble-specific fields (splatUrl, colliderMeshUrl, splatGroundOffset)
+			// from the existing scene so a partial sceneData update never wipes the splat URL.
+			const mergedSceneData: SceneData = {
+				...sceneData,
+				splatUrl: sceneData.splatUrl ?? scene.sceneData.splatUrl,
+				colliderMeshUrl: sceneData.colliderMeshUrl ?? scene.sceneData.colliderMeshUrl,
+				splatGroundOffset: sceneData.splatGroundOffset ?? scene.sceneData.splatGroundOffset,
+			};
 			updated = {
 				...scene,
-				sceneData,
+				sceneData: mergedSceneData,
 				version: scene.version + 1,
 				updatedAt: now,
 			};

@@ -257,6 +257,12 @@ Built-in skills:
   - Rotating glowing sphere: prompt="spawn a glowing sphere that slowly rotates", mode="preset"
   - Player-driven sandbox: prompt="" (unused), mode="interactive" — player types any request
 
+CRITICAL: For code-gen on Marble/splat scenes, ALWAYS use place_prop + attach_skill.
+NEVER call update_scene or create_scene with sceneCode for a Marble scene — sceneCode runs
+inside the Three.js renderer which is NOT used in Marble scenes. Doing so overwrites the
+splatUrl and breaks the scene completely. The code-gen script runs in the viewer sandbox
+(WorldAPI), not in the scene renderer.
+
 ### Playing live TV channels (CCTV, etc.)
 
 When a user asks to play a named TV channel (e.g. "播放cctv新闻频道", "play CCTV news"):
