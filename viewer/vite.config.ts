@@ -17,6 +17,7 @@ export default defineConfig({
       "/splat": "http://localhost:3001",
       "/collider": "http://localhost:3001",
       "/gltf-proxy": "http://localhost:3001",
+      "/confirm-position": "http://localhost:3001",
       // Proxy WebSocket connections for the realtime bus
       "/realtime": { target: "ws://localhost:3001", ws: true },
     },

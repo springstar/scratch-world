@@ -3,6 +3,8 @@ import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "crypto";
 import type { SceneManager } from "../../scene/scene-manager.js";
+import { registerPicker } from "../../viewer-api/position-picker-registry.js";
+import type { RealtimeBus } from "../../viewer-api/realtime.js";
 
 const PropMetadataSchema = Type.Object({
 	modelUrl: Type.String({ description: "CDN-accessible GLB/GLTF URL for the prop model" }),
@@ -69,9 +71,26 @@ const parameters = Type.Object({
 	),
 });
 
+async function requestPositionPick(
+	bus: RealtimeBus,
+	sessionId: string,
+	sceneId: string,
+	panoUrl: string,
+	objectName: string,
+	estimatedPos: { x: number; y: number; z: number },
+): Promise<{ x: number; y: number; z: number }> {
+	if (!bus.hasSubscribers(sessionId)) return estimatedPos;
+	const pickerId = randomUUID();
+	const promise = registerPicker(pickerId, estimatedPos);
+	bus.publish(sessionId, { type: "position_picker", pickerId, panoUrl, estimatedPos, objectName, sceneId });
+	return promise;
+}
+
 export function placePropTool(
 	sceneManager: SceneManager,
 	viewerUrl: (sceneId: string) => string,
+	bus?: RealtimeBus,
+	sessionId?: string,
 ): AgentTool<typeof parameters> {
 	return {
 		name: "place_prop",
@@ -91,22 +110,59 @@ export function placePropTool(
 				};
 			}
 
-			const newObjects = params.props.map((p) => ({
-				objectId: `prop_${randomUUID().slice(0, 8)}`,
-				name: p.name,
-				type: "prop" as const,
-				position: { x: 0, y: 0, z: 0 }, // viewer placement logic overrides this
-				description: p.description,
-				interactable: p.interactable ?? true,
-				interactionHint: p.interactionHint,
-				metadata: {
-					...p.metadata,
-					physicsShape: p.metadata.physicsShape ?? "box",
-					mass: p.metadata.mass ?? 10,
-					scale: p.metadata.scale ?? 1,
-					placement: p.metadata.placement ?? "near_camera",
-				},
-			}));
+			// For Marble (splat) scenes with a viewer open, show position picker for each prop
+			// that has an explicit playerPosition estimate (not near_camera defaults).
+			const meta = scene.sceneData.objects[0]?.metadata as Record<string, unknown> | undefined;
+			const panoUrl = (typeof meta?.panoUrl === "string" ? meta.panoUrl : null) ?? "";
+			const shouldPick = !!(bus && sessionId && panoUrl);
+
+			const newObjects: Array<{
+				objectId: string;
+				name: string;
+				type: "prop";
+				position: { x: number; y: number; z: number };
+				description: string;
+				interactable: boolean;
+				interactionHint?: string;
+				metadata: Record<string, unknown>;
+			}> = [];
+
+			for (const p of params.props) {
+				let position = p.metadata.playerPosition ?? { x: 0, y: 0, z: 0 };
+
+				// Only show picker when an estimated position is provided (not default 0,0,0)
+				if (
+					shouldPick &&
+					p.metadata.playerPosition &&
+					(p.metadata.playerPosition.x !== 0 || p.metadata.playerPosition.z !== 0)
+				) {
+					position = await requestPositionPick(
+						bus!,
+						sessionId!,
+						params.sceneId,
+						panoUrl,
+						p.name,
+						p.metadata.playerPosition,
+					);
+				}
+
+				newObjects.push({
+					objectId: `prop_${randomUUID().slice(0, 8)}`,
+					name: p.name,
+					type: "prop",
+					position,
+					description: p.description,
+					interactable: p.interactable ?? true,
+					interactionHint: p.interactionHint,
+					metadata: {
+						...p.metadata,
+						physicsShape: p.metadata.physicsShape ?? "box",
+						mass: p.metadata.mass ?? 10,
+						scale: p.metadata.scale ?? 1,
+						placement: p.metadata.placement ?? "near_camera",
+					},
+				});
+			}
 
 			const updated = await sceneManager.addPropsToScene(params.sceneId, newObjects);
 

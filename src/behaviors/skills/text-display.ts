@@ -3,7 +3,8 @@ import type { BehaviorContext, DisplayConfig, SkillHandler } from "../types.js";
 export const textDisplaySkill: SkillHandler = {
 	name: "text-display",
 	description:
-		"Show a static markdown text panel when the player interacts with the object. Useful for signs, information boards, menus, or any fixed textual content.",
+		"Show a static markdown text panel when the player interacts with the object. Useful for signs, information boards, menus, or any fixed textual content. " +
+		"DO NOT use for TVs, monitors, screens, or displays — use code-gen with world.setTvContent() instead.",
 	configSchema: {
 		content: {
 			description: "Markdown-formatted text to display. Supports **bold**, *italic*, and newlines.",

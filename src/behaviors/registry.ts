@@ -1,11 +1,19 @@
 import { codeGenSkill } from "./skills/code-gen.js";
 import { stockTickerSkill } from "./skills/stock-ticker.js";
 import { textDisplaySkill } from "./skills/text-display.js";
+import { tvDisplaySkill } from "./skills/tv-display.js";
 import { videoPlayerSkill } from "./skills/video-player.js";
 import { webViewSkill } from "./skills/web-view.js";
 import type { BehaviorContext, DisplayConfig, SkillHandler } from "./types.js";
 
-const BUILT_IN: SkillHandler[] = [webViewSkill, stockTickerSkill, videoPlayerSkill, textDisplaySkill, codeGenSkill];
+const BUILT_IN: SkillHandler[] = [
+	webViewSkill,
+	stockTickerSkill,
+	videoPlayerSkill,
+	textDisplaySkill,
+	tvDisplaySkill,
+	codeGenSkill,
+];
 
 export class BehaviorRegistry {
 	private handlers = new Map<string, SkillHandler>();

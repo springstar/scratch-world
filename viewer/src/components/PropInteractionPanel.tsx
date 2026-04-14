@@ -94,6 +94,16 @@ export function PropInteractionPanel({ objectName, skillName, skillConfig, onSel
 
 			{/* Body */}
 			<div style={{ padding: "10px 12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+				{skillName === "tv-display" && (
+					<button
+						type="button"
+						onClick={() => onSelect("__view__")}
+						style={{ ...btnStyle, background: "rgba(120,80,255,0.2)", border: "1px solid rgba(120,80,255,0.35)", fontSize: 14, fontWeight: 600, textAlign: "center" }}
+					>
+						{typeof skillConfig.title === "string" ? skillConfig.title : "查看"}
+					</button>
+				)}
+
 				{skillName === "video-player" && (
 					<>
 						{channels.length > 0 ? (

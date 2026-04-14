@@ -228,15 +228,34 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       localStorage.setItem(calKey, JSON.stringify(cal));
       console.log("[markTV] saved:", cal);
     };
+    // Debug helper: call window.__tvDebug() to log current calibration and projected screen position.
+    (window as unknown as Record<string, unknown>).__tvDebug = () => {
+      const calStr = localStorage.getItem(calKey);
+      if (!calStr) { console.log("[tvDebug] no calibration stored"); return; }
+      const cal = JSON.parse(calStr) as { pos: { x: number; y: number; z: number }, w: number, h: number };
+      const fwdTmp = new Vector3();
+      camera.getWorldDirection(fwdTmp);
+      const toTV = new Vector3(cal.pos.x - camera.position.x, cal.pos.y - camera.position.y, cal.pos.z - camera.position.z);
+      const dot = toTV.dot(fwdTmp);
+      const ndc = new Vector3(cal.pos.x, cal.pos.y, cal.pos.z).project(camera);
+      const cw = canvas!.clientWidth; const ch = canvas!.clientHeight;
+      const px = (ndc.x + 1) / 2 * cw;
+      const py = (1 - ndc.y) / 2 * ch;
+      console.log("[tvDebug] cal:", cal, "\n  dot (>0.05 = visible):", dot.toFixed(3), "\n  NDC:", ndc.x.toFixed(3), ndc.y.toFixed(3), "\n  screen px:", Math.round(px), Math.round(py), "\n  viewport:", cw, "x", ch);
+      console.log("[tvDebug] camPos:", camera.position, "  camFwd:", fwdTmp);
+    };
 
-    // Auto-calibrate TV overlay from sceneObjects: if any object with a screen skill
-    // (video-player or code-gen) has a real world position but no modelUrl (invisible marker),
-    // write its position as the calibration so setTvContent() works without __markTV().
-    // This runs once at scene load; loadSceneProp covers the case where a GLTF prop is placed.
-    if (!localStorage.getItem(calKey)) {
+    // Auto-calibrate TV overlay from sceneObjects: find the first screen-skill object with a
+    // non-zero position (invisible marker placed by the agent). Always overwrite stale calibration.
+    // loadSceneProp covers the GLTF prop case; this handles invisible marker objects.
+    {
       const screenObj = (sceneObjects ?? []).find((o) => {
         const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
-        return (skill === "video-player" || skill === "code-gen") && !o.metadata?.modelUrl;
+        if (skill !== "video-player" && skill !== "code-gen") return false;
+        if (o.metadata?.modelUrl) return false;
+        // Must have a real (non-zero) position
+        const p = o.position;
+        return p && (Math.abs(p.x) + Math.abs(p.y) + Math.abs(p.z)) > 0.01;
       });
       if (screenObj) {
         const p = screenObj.position;
@@ -811,7 +830,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const dt = clock.getDelta();
         for (const cb of scriptAnimCallbacks) { try { cb(dt); } catch { /* ignore */ } }
       }
-      if (freeFlyFrameCount % 10 === 0) {
+      if (splatInitialized && freeFlyFrameCount % 10 === 0) {
         const cx = camera.position.x;
         const cz = camera.position.z;
         const nearbyProp = findNearbyInteractiveProp(

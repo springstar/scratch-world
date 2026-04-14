@@ -13,6 +13,7 @@ import type { SkillLoader } from "../skills/skill-loader.js";
 import { RealtimeBus } from "./realtime.js";
 import { chatRoute } from "./routes/chat.js";
 import { colliderProxyRoute } from "./routes/collider-proxy.js";
+import { confirmPositionRoute } from "./routes/confirm-position.js";
 import { generatorsRoute } from "./routes/generators.js";
 import { gltfProxyRoute } from "./routes/gltf-proxy.js";
 import { interactRoute } from "./routes/interact.js";
@@ -77,6 +78,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));
 	app.route("/collider", colliderProxyRoute(sceneManager, marbleApiKey));
 	app.route("/gltf-proxy", gltfProxyRoute());
+	app.route("/confirm-position", confirmPositionRoute());
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));

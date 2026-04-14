@@ -3,6 +3,7 @@ import { getModel } from "@mariozechner/pi-ai";
 import { join } from "path";
 import type { GenerationQueue } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
+import type { RealtimeBus } from "../viewer-api/realtime.js";
 import { trimContext } from "./context-trimmer.js";
 import { addToCatalogTool } from "./tools/add-to-catalog.js";
 import { analyzeSceneObjectsTool } from "./tools/analyze-scene-objects.js";
@@ -257,7 +258,7 @@ Built-in skills:
   Examples:
   - Rotating glowing sphere: prompt="spawn a glowing sphere that slowly rotates", mode="preset"
   - Player-driven sandbox: prompt="" (unused), mode="interactive" — player types any request
-  - Welcome message on TV screen: prompt="show a welcome message on the TV screen using world.setTvContent('<h2 style=\"color:#fff;text-align:center\">欢迎光临</h2>')", mode="preset", title="欢迎"
+  - Welcome message on TV screen: prompt="show a welcome message on the TV screen using world.setTvContent('<h2 style='color:#fff;text-align:center'>欢迎光临</h2>')", mode="preset", title="欢迎"
   - Scrolling marquee on screen: prompt="use world.setTvContent to display a scrolling marquee welcome text on the TV screen", mode="preset"
 
   IMPORTANT: For any TV, monitor, or display screen, the script MUST call world.setTvContent(html)
@@ -265,11 +266,10 @@ Built-in skills:
   those have no effect on Gaussian splat geometry. world.setTvContent() uses screen-space
   projection to overlay HTML directly on the TV's position in the 3D scene.
 
-CRITICAL: For code-gen on Marble/splat scenes, ALWAYS use place_prop + attach_skill.
-NEVER call update_scene or create_scene with sceneCode for a Marble scene — sceneCode runs
-inside the Three.js renderer which is NOT used in Marble scenes. Doing so overwrites the
-splatUrl and breaks the scene completely. The code-gen script runs in the viewer sandbox
-(WorldAPI), not in the scene renderer.
+CRITICAL: NEVER call update_scene or create_scene with sceneCode for a Marble scene — sceneCode
+runs inside the Three.js renderer which is NOT used in Marble scenes. Doing so overwrites the
+splatUrl and breaks the scene completely. For code-gen behaviors, always use attach_skill
+on an existing object (or a new place_prop without modelUrl), NOT sceneCode.
 
 ### Playing live TV channels (CCTV, etc.)
 
@@ -282,15 +282,24 @@ When a user asks to play a named TV channel (e.g. "播放cctv新闻频道", "pla
 
 ### TV/screen in Marble splat scenes
 
-In Marble (Gaussian splat) scenes the TV or monitor is typically visual-only (part of the point
-cloud), with no corresponding sceneObject. To make it interactive:
-1. Call place_prop to add a flat-screen TV prop near the player position. Use modelUrl from catalog:
-   - Flat screen / monitor: https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tv_studio_monitor_01/tv_studio_monitor_01_1k.gltf  (scale: 1)
-   If the exact model is not in catalog, call find_gltf_assets with query "flat screen TV monitor".
-2. The place_prop result includes addedProps[].id — that is the objectId to use for attach_skill.
-3. Call attach_skill with that objectId and video-player (or web-view) skill.
+FIRST check sceneData.objects for an existing object whose name contains "tv", "television",
+"monitor", or "screen" (case-insensitive). If one exists, use its objectId directly —
+do NOT place a new prop. Call attach_skill on the existing objectId.
 
-Do NOT call update_scene or create_scene for this flow — only place_prop + attach_skill.
+If no such object exists, ONLY THEN call place_prop to create an invisible marker:
+- Do NOT use a modelUrl — omit it entirely so the prop is invisible (no GLTF box appears)
+- Set position to estimated TV location (in front of the player near the wall)
+- The place_prop result includes addedProps[].id — use that objectId for attach_skill
+
+For ANY TV/screen/monitor object (existing or newly placed):
+- Skill to use: tv-display
+- Required config: { content: "<HTML string>", title: "button label" }
+- The content field is raw HTML that will be projected onto the physical TV screen position in 3D
+- Example: { "content": "<h2 style='color:#c8a0ff'>欢迎光临</h2><p>Welcome home</p>", "title": "电视欢迎屏" }
+- NEVER use text-display for TV objects — it shows a floating panel, not the TV screen
+
+Do NOT call update_scene or create_scene for this flow.
+"Regenerate", "update", "change", or "delete" the TV content = call attach_skill with the new content, NOT update_scene.
 
 ## Scene composition (MANDATORY)
 
@@ -321,12 +330,19 @@ export const PROVIDER_BASE_PROMPT = `\
 You are a world-building companion. You help users create and explore persistent 3D worlds through conversation.
 
 When a user describes a place or scene they want to create, call create_scene with ONLY the prompt and optional title.
-When a user wants to change something about the scene itself (lighting, atmosphere, layout), call update_scene with ONLY the instruction and optional title.
+When a user wants to change the physical environment (lighting, atmosphere, layout, weather, time of day), call update_scene with ONLY the instruction and optional title — this triggers a full Marble re-generation and takes several minutes. Only use it for environmental changes to the base 3D scene.
 When a user asks what scenes they have, call list_scenes.
 When a user wants to load, open, switch to, or revisit a scene by name (e.g. "加载阶梯教室", "open my classroom", "切换到森林场景"), call list_scenes first, find the best title match, then share its view link — do NOT create a new scene.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, call share_scene.
 When a user uploads a photo and asks to place it in the scene, turn it into a 3D object, or add it to the asset library, call image_to_3d with the imagePath from the [上传图片: path=...] prefix and a descriptive assetName. After success, call add_to_catalog to persist it, then call place_prop to add it to the active scene.
+
+CRITICAL — DO NOT call update_scene or create_scene for ANY of the following. These operations must use targeted tools instead:
+- Adding, placing, or removing objects/props → place_prop / remove_prop
+- Attaching, updating, or changing a skill on an object → attach_skill
+- Updating the welcome message, TV content, or any text/HTML on a screen → attach_skill (tv-display)
+- Deleting or fixing a proximity popup → remove_prop (to remove the object) or attach_skill (to update its skill)
+- Any operation on existing scene objects — positions, metadata, skills
 
 When a user wants to place ANY physical object in a Marble scene — robot, character, animal, vehicle, furniture, crate, box, plant, prop, or any other standalone object — call place_prop. Do NOT call update_scene or create_scene for object placement.
 
@@ -370,10 +386,9 @@ Prefer photorealistic (Polyhaven PBR) assets for Marble/splat scenes — they ma
 photo-quality renderer. Stylized assets (Three.js characters) are kept only because no
 photorealistic rigged alternative exists. All Polyhaven models are in metres (scale=1).
 
-### Electronics / screens (Polyhaven)
-| Name | modelUrl | scale |
-|------|----------|-------|
-| Studio monitor / flat screen | https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/tv_studio_monitor_01/tv_studio_monitor_01_1k.gltf | 1 |
+### Electronics / screens
+TVs and monitors in Marble scenes are handled as invisible marker props (no modelUrl).
+See "TV/screen in Marble splat scenes" above — do NOT use a GLTF model for TV props.
 
 ### Furniture — photorealistic PBR (Polyhaven)
 | Name | modelUrl | scale |
@@ -442,6 +457,7 @@ export function createAgent(
 	skillPrompt: string | null = null,
 	generationQueue: GenerationQueue,
 	projectRoot: string = process.cwd(),
+	bus?: RealtimeBus,
 ): Agent {
 	const ownerId = () => userId;
 	const viewerUrl = (sceneId: string) => `${viewerBaseUrl}/scene/${sceneId}?session=${sessionId}`;
@@ -470,9 +486,9 @@ export function createAgent(
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
-				placePropTool(sceneManager, viewerUrl),
+				placePropTool(sceneManager, viewerUrl, bus, sessionId),
 				removePropTool(sceneManager),
-				attachSkillTool(sceneManager),
+				attachSkillTool(sceneManager, bus, sessionId),
 				analyzeSceneObjectsTool(sceneManager),
 				webSearchTool(),
 				evaluateSceneTool(),

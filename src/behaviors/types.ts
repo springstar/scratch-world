@@ -18,7 +18,9 @@ export type DisplayConfig =
 	| { type: "markdown"; content: string; title?: string }
 	| { type: "table"; headers: string[]; rows: string[][]; title?: string }
 	/** Client executes `code` in a WorldAPI sandbox — no overlay is shown. */
-	| { type: "script"; code: string; title?: string };
+	| { type: "script"; code: string; title?: string }
+	/** Render HTML directly on the TV screen via screen-space projection. */
+	| { type: "tv"; content: string; title?: string };
 
 export interface SkillHandler {
 	/** Machine-readable name used in metadata.skill.name */

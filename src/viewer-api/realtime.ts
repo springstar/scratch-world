@@ -32,7 +32,15 @@ export type RealtimeEvent =
 			reward: string;
 			sceneId?: string;
 	  }
-	| { type: "error"; message: string };
+	| { type: "error"; message: string }
+	| {
+			type: "position_picker";
+			pickerId: string;
+			panoUrl: string;
+			estimatedPos: { x: number; y: number; z: number };
+			objectName: string;
+			sceneId: string;
+	  };
 
 export class RealtimeBus {
 	// sessionId → set of connected WebSocket clients

@@ -82,7 +82,7 @@ function extractJson(text: string): string {
 }
 
 function buildModel() {
-	const model = getModel("anthropic", "claude-haiku-4-5-20251001");
+	const model = getModel("anthropic", "claude-sonnet-4-6");
 	if (process.env.ANTHROPIC_BASE_URL) {
 		model.baseUrl = process.env.ANTHROPIC_BASE_URL;
 	}

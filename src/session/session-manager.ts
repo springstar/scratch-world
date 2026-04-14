@@ -37,6 +37,7 @@ export class SessionManager {
 		private generationQueue: GenerationQueue,
 		private projectRoot: string = process.cwd(),
 		private agentTtlMs: number = DEFAULT_AGENT_TTL_MS,
+		private bus?: RealtimeBus,
 	) {}
 
 	dispatch(msg: ChatMessage): Promise<void> {
@@ -328,6 +329,7 @@ export class SessionManager {
 			null,
 			this.generationQueue,
 			this.projectRoot,
+			this.bus,
 		);
 
 		if (record?.agentMessages) {

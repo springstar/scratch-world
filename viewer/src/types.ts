@@ -13,7 +13,9 @@ export type DisplayConfig =
   /** Client executes `code` in a WorldAPI sandbox — no overlay is shown. */
   | { type: "script"; code: string; title?: string }
   /** Arbitrary HTML rendered inside the TV/screen overlay (positioned over the prop in 3D space). */
-  | { type: "html"; content: string; title?: string };
+  | { type: "html"; content: string; title?: string }
+  /** tv-display skill: render HTML on the TV screen via screen-space projection. */
+  | { type: "tv"; content: string; title?: string };
 
 export interface Vec3 {
   x: number;
@@ -94,4 +96,12 @@ export type RealtimeEvent =
   | { type: "npc_trade_offer"; npcId: string; npcName: string; item: string; price: string; sceneId?: string }
   | { type: "npc_waypoint"; npcId: string; npcName: string; position: { x: number; z: number }; label: string; sceneId?: string }
   | { type: "npc_quest"; npcId: string; npcName: string; title: string; objective: string; reward: string; sceneId?: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      type: "position_picker";
+      pickerId: string;
+      panoUrl: string;
+      estimatedPos: { x: number; y: number; z: number };
+      objectName: string;
+      sceneId: string;
+    };

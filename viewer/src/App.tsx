@@ -19,6 +19,7 @@ import type { PendingProp, GeneratedProp } from "./components/PropDrawer.js";
 import { PortalDrawer } from "./components/PortalDrawer.js";
 import { BehaviorOverlay } from "./components/BehaviorOverlay.js";
 import { PropInteractionPanel } from "./components/PropInteractionPanel.js";
+import { PositionPicker } from "./components/PositionPicker.js";
 import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
 import { runScript } from "./behaviors/world-api.js";
 
@@ -110,6 +111,15 @@ export function App() {
     name: string;
     skillName: string;
     skillConfig: Record<string, unknown>;
+  } | null>(null);
+
+  // Position picker — shown when agent wants user to confirm/correct an estimated position
+  const [positionPicker, setPositionPicker] = useState<{
+    pickerId: string;
+    panoUrl: string;
+    estimatedPos: { x: number; y: number; z: number };
+    objectName: string;
+    sceneId: string;
   } | null>(null);
 
   // Toast from WorldAPI scripts
@@ -341,6 +351,15 @@ export function App() {
         setIsTyping(false);
         // Also show errors in the chat so they're visible even without a loaded scene
         setChatMessages((prev) => [...prev, { id: nextId(), role: "agent", text: `Error: ${event.message}` }]);
+
+      } else if (event.type === "position_picker") {
+        setPositionPicker({
+          pickerId: event.pickerId,
+          panoUrl: event.panoUrl,
+          estimatedPos: event.estimatedPos,
+          objectName: event.objectName,
+          sceneId: event.sceneId,
+        });
       }
     });
     return disconnect;
@@ -376,7 +395,22 @@ export function App() {
         setTvDisplay(null);
         setScriptDisplay(null);
       } else {
-        const calKey = `tv_calibration_${sceneRef.current?.sceneId ?? ""}`;
+        const sceneId = sceneRef.current?.sceneId ?? "";
+        const calKey = `tv_calibration_${sceneId}`;
+        // If calibration not yet written, try to derive it from sceneObjects on the fly
+        if (!localStorage.getItem(calKey) && sceneRef.current) {
+          const screenObj = sceneRef.current.sceneData.objects.find((o) => {
+            const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
+            if (skill !== "video-player" && skill !== "code-gen") return false;
+            if (o.metadata?.modelUrl) return false;
+            const p = o.position;
+            return p && (Math.abs(p.x) + Math.abs(p.y) + Math.abs(p.z)) > 0.01;
+          });
+          if (screenObj) {
+            const p = screenObj.position;
+            localStorage.setItem(calKey, JSON.stringify({ pos: { x: p.x, y: p.y, z: p.z }, w: 1.5, h: 0.85 }));
+          }
+        }
         if (localStorage.getItem(calKey)) {
           // Calibrated: render on the physical TV screen in 3D space
           setTvDisplay({ type: "html", content: html });
@@ -404,6 +438,11 @@ export function App() {
       setChatMessages((prev) => [...prev, userMsg]);
       setIsTyping(true);
       streamingBuffer.current = "";
+      // Safety timeout: if agent_done never arrives (SSE drop), unblock the input after 90s
+      const typingTimeout = setTimeout(() => {
+        setIsTyping(false);
+        setIsStreaming(false);
+      }, 90_000);
       const apiImages = images?.map((img) => ({ base64: img.base64, mimeType: img.mimeType }));
       const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
         | { x: number; y: number; z: number }
@@ -420,6 +459,8 @@ export function App() {
         setIsTyping(false);
         const msg = err instanceof Error ? err.message : "Failed to send";
         setChatMessages((prev) => [...prev, { id: nextId(), role: "agent", text: `Error: ${msg}` }]);
+      } finally {
+        clearTimeout(typingTimeout);
       }
     },
     [sessionId],
@@ -563,10 +604,82 @@ export function App() {
     setActivePropPanel(null);
   }, []);
 
+  const handlePositionConfirm = useCallback(
+    async (pos: { x: number; y: number; z: number }) => {
+      if (!positionPicker) return;
+      try {
+        await fetch(`/confirm-position/${positionPicker.pickerId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pos }),
+        });
+      } catch (err) {
+        console.error("confirm-position failed", err);
+      }
+      setPositionPicker(null);
+    },
+    [positionPicker],
+  );
+
+  const handlePositionSkip = useCallback(async () => {
+    if (!positionPicker) return;
+    try {
+      await fetch(`/confirm-position/${positionPicker.pickerId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pos: positionPicker.estimatedPos }),
+      });
+    } catch (err) {
+      console.error("confirm-position skip failed", err);
+    }
+    setPositionPicker(null);
+  }, [positionPicker]);
+
   const handlePropPanelSelect = useCallback(
     async (value: string) => {
       if (!activePropPanel || !scene) return;
       const { objectId, skillName, skillConfig, name } = activePropPanel;
+
+      // tv-display skill: render HTML directly on TV screen, no LLM call needed
+      if (skillName === "tv-display") {
+        const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+          | { x: number; y: number; z: number }
+          | undefined;
+        try {
+          const result = await postInteract({
+            sessionId,
+            sceneId: scene.sceneId,
+            objectId,
+            action: "interact",
+            playerPosition,
+          });
+          if (result.display?.type === "tv") {
+            const sceneId = scene.sceneId;
+            const calKey = `tv_calibration_${sceneId}`;
+            // Always refresh calibration from the current object position so corrections take effect
+            const screenObj = sceneRef.current?.sceneData.objects.find((o) => o.objectId === objectId)
+              ?? sceneRef.current?.sceneData.objects.find((o) => {
+                const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
+                if (skill !== "tv-display" && skill !== "video-player" && skill !== "code-gen") return false;
+                if (o.metadata?.modelUrl) return false;
+                const p = o.position;
+                return p && (Math.abs(p.x) + Math.abs(p.y) + Math.abs(p.z)) > 0.01;
+              });
+            if (screenObj) {
+              const p = screenObj.position;
+              localStorage.setItem(calKey, JSON.stringify({ pos: { x: p.x, y: p.y, z: p.z }, w: 1.5, h: 0.85 }));
+            }
+            setTvDisplay({ type: "html", content: result.display.content, title: result.display.title });
+            setBehaviorDisplay(null);
+          } else if (result.display) {
+            setBehaviorDisplay(result.display);
+          }
+        } catch (err) {
+          console.error("[tv-display] postInteract failed:", err);
+        }
+        setActivePropPanel(null);
+        return;
+      }
 
       // code-gen skill: send to server with interactionData, then execute returned script
       if (skillName === "code-gen") {
@@ -1123,6 +1236,17 @@ export function App() {
           skillConfig={activePropPanel.skillConfig}
           onSelect={handlePropPanelSelect}
           onDismiss={() => setActivePropPanel(null)}
+        />
+      )}
+
+      {positionPicker && (
+        <PositionPicker
+          panoUrl={positionPicker.panoUrl}
+          objectName={positionPicker.objectName}
+          estimatedPos={positionPicker.estimatedPos}
+          pickerId={positionPicker.pickerId}
+          onConfirm={handlePositionConfirm}
+          onSkip={handlePositionSkip}
         />
       )}
 

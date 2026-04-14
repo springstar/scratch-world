@@ -92,6 +92,8 @@ async function main() {
 		skillLoader,
 		generationQueue,
 		projectRoot,
+		undefined,
+		bus,
 	);
 	gateway.onMessage(async (msg) => {
 		await sessionManager.dispatch(msg);
