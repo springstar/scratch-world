@@ -716,6 +716,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       setDisplay(html: string | null) {
         window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
       },
+      /**
+       * Render HTML on the TV/screen prop in 3D space via screen-space projection.
+       * Requires the TV to have been calibrated with __markTV() — the overlay div is
+       * positioned over the physical screen each frame by updateTVOverlay().
+       * Falls back to a centered panel if not calibrated.
+       */
+      setTvContent(html: string | null) {
+        window.dispatchEvent(new CustomEvent("world:tv-content", { detail: { html } }));
+      },
     };
     (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
 

@@ -367,6 +367,31 @@ export function App() {
     return () => window.removeEventListener("world:display", handleDisplay);
   }, []);
 
+  // world:tv-content events fired by WorldAPI world.setTvContent(html)
+  // Renders HTML directly on the TV screen overlay (screen-space projected over the prop).
+  useEffect(() => {
+    const handleTvContent = (e: Event) => {
+      const { html } = (e as CustomEvent<{ html: string | null }>).detail;
+      if (html === null) {
+        setTvDisplay(null);
+        setScriptDisplay(null);
+      } else {
+        const calKey = `tv_calibration_${sceneRef.current?.sceneId ?? ""}`;
+        if (localStorage.getItem(calKey)) {
+          // Calibrated: render on the physical TV screen in 3D space
+          setTvDisplay({ type: "html", content: html });
+          setBehaviorDisplay(null);
+          setScriptDisplay(null);
+        } else {
+          // Not calibrated: fall back to centered panel
+          setScriptDisplay(html);
+        }
+      }
+    };
+    window.addEventListener("world:tv-content", handleTvContent);
+    return () => window.removeEventListener("world:tv-content", handleTvContent);
+  }, []);
+
   // Chat send
   const handleSend = useCallback(
     async (text: string, images?: PendingImage[]) => {
@@ -1038,6 +1063,26 @@ export function App() {
               style={{ width: "100%", height: "100%", border: "none", display: "block" }}
               allow="autoplay; fullscreen"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          )}
+          {tvDisplay.type === "html" && (
+            // eslint-disable-next-line react/no-danger
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "#0a0820",
+                color: "rgba(210,195,255,0.95)",
+                fontFamily: "system-ui, -apple-system, sans-serif",
+                fontSize: 18,
+                padding: 16,
+                boxSizing: "border-box",
+                textAlign: "center",
+              }}
+              dangerouslySetInnerHTML={{ __html: tvDisplay.content }}
             />
           )}
           {tvDisplay.type === "video" && (

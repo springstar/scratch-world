@@ -35,6 +35,13 @@ world.showToast(text: string, durationMs?: number): void
 // Supports any HTML tags: <h2>, <p>, <ul>, <b>, <span style="color:..."> etc.
 world.setDisplay(html: string | null): void
 
+// Render HTML directly ON the TV/screen prop in the 3D scene.
+// The content is projected onto the physical screen surface using screen-space rendering.
+// Use this when the object is a TV, monitor, screen, display board, or any flat surface
+// that should show content. Pass null to clear.
+// Example: world.setTvContent('<h2 style="color:#fff">欢迎光临</h2>')
+world.setTvContent(html: string | null): void
+
 // Current scene provider type.
 world.provider: "splat" | "threejs"
 

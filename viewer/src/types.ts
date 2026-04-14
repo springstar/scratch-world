@@ -11,7 +11,9 @@ export type DisplayConfig =
   | { type: "markdown"; content: string; title?: string }
   | { type: "table"; headers: string[]; rows: string[][]; title?: string }
   /** Client executes `code` in a WorldAPI sandbox — no overlay is shown. */
-  | { type: "script"; code: string; title?: string };
+  | { type: "script"; code: string; title?: string }
+  /** Arbitrary HTML rendered inside the TV/screen overlay (positioned over the prop in 3D space). */
+  | { type: "html"; content: string; title?: string };
 
 export interface Vec3 {
   x: number;
