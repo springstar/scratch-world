@@ -72,13 +72,25 @@ export class SceneManager {
 
 		if (sceneData) {
 			// Skill path: Claude provided sceneData directly.
-			// Preserve marble-specific fields (splatUrl, colliderMeshUrl, splatGroundOffset)
-			// from the existing scene so a partial sceneData update never wipes the splat URL.
+			// Preserve marble-specific fields from the existing scene so a partial sceneData
+			// update never wipes splat URLs, collision meshes, or provider-generated viewpoints.
+			const isMarble = scene.providerRef.provider === "marble";
 			const mergedSceneData: SceneData = {
 				...sceneData,
 				splatUrl: sceneData.splatUrl ?? scene.sceneData.splatUrl,
 				colliderMeshUrl: sceneData.colliderMeshUrl ?? scene.sceneData.colliderMeshUrl,
 				splatGroundOffset: sceneData.splatGroundOffset ?? scene.sceneData.splatGroundOffset,
+				// For marble scenes, always keep the provider-generated viewpoints and objects[0]
+				// (obj_world with spzUrls). LLM-authored viewpoints are wrong for splat scenes.
+				viewpoints: isMarble ? scene.sceneData.viewpoints : (sceneData.viewpoints ?? scene.sceneData.viewpoints),
+				objects: isMarble
+					? [
+							// Keep obj_world (objects[0] with spzUrls) at the front
+							...scene.sceneData.objects.filter((o) => o.objectId === "obj_world"),
+							// Then all non-obj_world objects from the new sceneData
+							...sceneData.objects.filter((o) => o.objectId !== "obj_world"),
+						]
+					: sceneData.objects,
 			};
 			updated = {
 				...scene,
