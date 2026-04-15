@@ -75,6 +75,7 @@ export async function postChat(payload: {
   sessionId: string;
   userId: string;
   text: string;
+  sceneId?: string;
   images?: Array<{ base64: string; mimeType: string }>;
   playerPosition?: { x: number; y: number; z: number };
   clickPosition?: { x: number; y: number; z: number };

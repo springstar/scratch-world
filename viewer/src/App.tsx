@@ -460,7 +460,7 @@ export function App() {
         ? { x: rawClick.x, y: rawClick.y, z: rawClick.z }
         : undefined;
       try {
-        await postChat({ sessionId, userId: userId.current, text, images: apiImages, playerPosition, clickPosition });
+        await postChat({ sessionId, userId: userId.current, text, sceneId: scene?.sceneId, images: apiImages, playerPosition, clickPosition });
       } catch (err) {
         setIsTyping(false);
         const msg = err instanceof Error ? err.message : "Failed to send";

@@ -56,9 +56,10 @@ export class SessionManager {
 		images?: Array<{ base64: string; mimeType: string }>,
 		playerPosition?: { x: number; y: number; z: number },
 		clickPosition?: { x: number; y: number; z: number },
+		viewerSceneId?: string,
 	): Promise<void> {
 		return this.enqueue(sessionId, () =>
-			this._dispatchWebChat(sessionId, userId, text, bus, images, playerPosition, clickPosition),
+			this._dispatchWebChat(sessionId, userId, text, bus, images, playerPosition, clickPosition, viewerSceneId),
 		);
 	}
 
@@ -127,6 +128,7 @@ export class SessionManager {
 		images?: Array<{ base64: string; mimeType: string }>,
 		playerPosition?: { x: number; y: number; z: number },
 		clickPosition?: { x: number; y: number; z: number },
+		viewerSceneId?: string,
 	): Promise<void> {
 		console.log(`[SessionManager] _dispatchWebChat sessionId=${sessionId}`);
 		// Upsert session record — web sessions may not exist yet
@@ -147,6 +149,20 @@ export class SessionManager {
 				agentMessages: "[]",
 				updatedAt: Date.now(),
 			});
+			existing = await this.sessionRepo.findById(sessionId);
+		}
+
+		// If the viewer reports a scene the session doesn't know about yet, sync it now
+		// so hydrateSystemPrompt sees the correct active scene.
+		if (viewerSceneId && existing?.activeSceneId !== viewerSceneId) {
+			await this.sessionRepo.save({
+				...(existing ?? { sessionId, userId, channelId: "web", agentMessages: "[]" }),
+				sessionId,
+				activeSceneId: viewerSceneId,
+				updatedAt: Date.now(),
+			});
+			// Refresh local reference so activeSceneId below is also in sync
+			if (existing) existing = { ...existing, activeSceneId: viewerSceneId };
 		}
 
 		const msg: ChatMessage = {
