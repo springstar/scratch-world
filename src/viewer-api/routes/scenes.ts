@@ -192,6 +192,13 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 			return c.json({ error: "Missing required fields: name, personality, modelUrl" }, 400);
 		}
 
+		// Reject duplicate NPC names in the same scene
+		const nameLower = body.name.toLowerCase();
+		const duplicate = scene.sceneData.objects.find((o) => o.type === "npc" && o.name.toLowerCase() === nameLower);
+		if (duplicate) {
+			return c.json({ error: `场景中已存在名为「${body.name}」的 NPC` }, 409);
+		}
+
 		const objectId = `npc_${randomUUID().slice(0, 8)}`;
 		const newNpc = {
 			objectId,
