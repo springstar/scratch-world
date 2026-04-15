@@ -336,7 +336,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     }
 
     const clock = new Clock();
-    const sparkRenderer = new SparkRenderer({ renderer, clock });
+    const sparkRenderer = new SparkRenderer({ renderer, clock, enableLod: true, sortRadial: true });
     scene.add(sparkRenderer);
 
     const splat = new SplatMesh({ url: splatUrl });

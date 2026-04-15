@@ -10,15 +10,15 @@
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",
-    "@sparkjsdev/spark": "^0.1.10",
+    "@sparkjsdev/spark": "^2.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "three": "^0.175.0"
+    "three": "^0.180.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@types/three": "^0.175.0",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "^4.4.1",
     "typescript": "^5.7.3",
     "vite": "^6.3.1"
