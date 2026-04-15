@@ -4,10 +4,16 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { applyEvolutionDelta, type EvolutionLogEntry } from "../../npcs/npc-evolution.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
+import type { SessionManager } from "../../session/session-manager.js";
 import type { RealtimeBus } from "../realtime.js";
 import { generatePropRoute } from "./generate-prop.js";
 
-export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus: RealtimeBus): Hono {
+export function scenesRoute(
+	sceneManager: SceneManager,
+	projectRoot: string,
+	bus: RealtimeBus,
+	sessionManager?: SessionManager,
+): Hono {
 	const app = new Hono();
 
 	// GET /scenes — list all scenes for the active provider
@@ -48,6 +54,13 @@ export function scenesRoute(sceneManager: SceneManager, projectRoot: string, bus
 		}
 
 		if (scene.sceneId !== sceneId) return c.json({ error: "Scene not found" }, 404);
+
+		// Sync active scene for the session so the agent always operates on the scene the viewer is showing.
+		const sessionParam = c.req.query("session");
+		if (sessionParam && sessionManager) {
+			sessionManager.setActiveScene(sessionParam, sceneId).catch(() => {});
+		}
+
 		return c.json({
 			sceneId: scene.sceneId,
 			title: scene.title,

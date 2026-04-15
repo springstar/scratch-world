@@ -35,6 +35,7 @@ import { createCharacterController } from "../physics/character-controller.js";
 import {
   loadPhysicsProps,
   loadGltf,
+  resolveModelUrl,
   buildCollider,
   syncPhysicsProps,
   disposePhysicsProps,
@@ -80,12 +81,15 @@ interface Props {
   onPropLeave?: () => void;
   /** Ref to the TV video overlay container div — SplatViewer updates its position/size each frame via direct DOM. */
   tvContainerRef?: { current: HTMLDivElement | null };
+  /** Model URL for drag-to-place ghost preview during NPC/prop placement. */
+  ghostModelUrl?: string;
+  ghostModelScale?: number;
 }
 
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef, ghostModelUrl, ghostModelScale }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -149,6 +153,69 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   tvContainerRefRef.current = tvContainerRef;
   const nearPortalIdRef = useRef<string | null>(null);
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
+
+  // Ghost drag-to-place: when placement starts, begin loading the model immediately.
+  // We track mouse position via a window-level listener (not canvas) so it works
+  // regardless of freeFlyActive or pointer-lock state.
+  const ghostLoadTriggerRef = useRef<{ url: string; scale: number } | null>(null);
+  const ghostPendingGroupRef = useRef<{ group: Group; groundOffset: number } | null>(null); // loaded but not yet added to scene
+
+  useEffect(() => {
+    const pending = npcPlacementPending || propPlacementPending;
+    if (pending && ghostModelUrl) {
+      const trigger = { url: ghostModelUrl, scale: ghostModelScale ?? 1 };
+      ghostLoadTriggerRef.current = trigger;
+      ghostPendingGroupRef.current = null;
+      // Start loading immediately — don't wait for first mousemove
+      console.log("[ghost] loading model:", trigger.url);      loadGltf(resolveModelUrl(trigger.url)).then((rawGroup) => {
+        if (!ghostLoadTriggerRef.current) return; // cancelled
+        rawGroup.position.set(0, 0, 0);
+        rawGroup.rotation.set(0, 0, 0);
+        rawGroup.scale.setScalar(1);
+        rawGroup.updateMatrixWorld(true);
+        const rawBbox = new Box3().setFromObject(rawGroup);
+        const extX = rawBbox.max.x - rawBbox.min.x;
+        const extY = rawBbox.max.y - rawBbox.min.y;
+        const extZ = rawBbox.max.z - rawBbox.min.z;
+        const maxExt = Math.max(extX, extY, extZ);
+        if (maxExt > 0.01 && extY < maxExt * 0.75) {
+          if (extX >= extZ) rawGroup.rotation.z = -Math.PI / 2;
+          else rawGroup.rotation.x = -Math.PI / 2;
+        }
+        rawGroup.updateMatrixWorld(true);
+        const scaledBbox = new Box3().setFromObject(rawGroup);
+        const mh = scaledBbox.max.y - scaledBbox.min.y;
+        const effectiveScale = mh > 0.01 ? Math.min(1.7 / mh, 10) * trigger.scale : trigger.scale;
+        rawGroup.scale.setScalar(effectiveScale);
+        // Compute ground offset: after all transforms, how far to lift so feet are at y=0
+        rawGroup.position.set(0, 0, 0);
+        rawGroup.updateMatrixWorld(true);
+        const finalBbox = new Box3().setFromObject(rawGroup);
+        const groundOffset = finalBbox.isEmpty() ? 0 : -finalBbox.min.y;
+        rawGroup.traverse((c) => {
+          if (c instanceof Mesh) {
+            // depthTest=false: ghost always renders on top of splat and through walls
+            const mats = Array.isArray(c.material) ? c.material : [c.material];
+            const cloned = mats.map((m) => {
+              const clone = (m as MeshStandardMaterial).clone();
+              clone.transparent = true;
+              clone.opacity = 0.8;
+              clone.depthTest = false;
+              clone.depthWrite = false;
+              return clone;
+            });
+            c.material = cloned.length === 1 ? cloned[0] : cloned;
+            c.renderOrder = 10;
+          }
+        });
+        ghostPendingGroupRef.current = { group: rawGroup, groundOffset };
+      }).catch((err) => { console.error("[ghost] loadGltf failed:", err); });
+    } else {
+      ghostLoadTriggerRef.current = null;
+      ghostPendingGroupRef.current = null;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [npcPlacementPending, propPlacementPending, ghostModelUrl, ghostModelScale]);
 
   // Exit pointer lock when entering placement mode so clicks reach the free-fly handler.
   useEffect(() => {
@@ -585,6 +652,59 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     // NPC meshes — populated by loadSceneNpc, used for click-to-talk raycasting.
     const npcMeshList: Mesh[] = [];
 
+    // ── Ghost drag-to-place state ─────────────────────────────────────────────
+    let ghostGroup: Group | null = null;
+    let ghostLoaded = false;
+    // Ground offset cached at load time: distance to lift the group so its bottom is at y=0
+    let ghostGroundOffset = 0;
+
+    const cleanupGhost = () => {
+      if (ghostGroup) {
+        scene.remove(ghostGroup);
+        ghostGroup.traverse((c) => {
+          if (c instanceof Mesh) {
+            c.geometry.dispose();
+            const mats = Array.isArray(c.material) ? c.material : [c.material];
+            for (const m of mats) (m as MeshStandardMaterial).dispose();
+          }
+        });
+        ghostGroup = null;
+      }
+      ghostLoaded = false;
+      ghostLoadTriggerRef.current = null;
+      ghostPendingGroupRef.current = null;
+    };
+
+    const updateGhostPosition = (clientX: number, clientY: number) => {
+      if (!ghostGroup) return;
+      const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+      const rect = canvas.getBoundingClientRect();
+      const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ny = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const raycaster = new Raycaster();
+      raycaster.setFromCamera(new Vector2(nx, ny), camera);
+      const { origin, direction: dir } = raycaster.ray;
+
+      // Project ray onto nominal ground plane for XZ.
+      // When pointing downward, intersect the floor plane; otherwise go 8 m ahead.
+      let tx: number;
+      let tz: number;
+      if (dir.y < -0.05) {
+        const t = Math.min((fbY - origin.y) / dir.y, 50);
+        tx = origin.x + dir.x * t;
+        tz = origin.z + dir.z * t;
+      } else {
+        const lenXZ = Math.sqrt(dir.x * dir.x + dir.z * dir.z) || 1;
+        tx = origin.x + (dir.x / lenXZ) * 8;
+        tz = origin.z + (dir.z / lenXZ) * 8;
+      }
+
+      // Keep ghost on the ground — use camera eye-level estimate when physics floor
+      // (fbY) falls back below the visible terrain (no geometry at that XZ position).
+      const groundY = Math.max(fbY, camera.position.y - 1.7);
+      ghostGroup.position.set(tx, groundY + ghostGroundOffset, tz);
+    };
+
     const onMouseDown = (e: MouseEvent) => {
       if (!freeFlyActive) return;
       if (e.button === 0) {
@@ -624,14 +744,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               ts: Date.now(),
             };
             (window as unknown as Record<string, unknown>).__clickPosition = { x: hitX, y: hitY, z: hitZ, ts: pt.ts };
+            // Use ghost's current position when drag-to-place is active; fallback to raycast hit
+            const placementPos = ghostGroup
+              ? { x: ghostGroup.position.x, y: ghostGroup.position.y, z: ghostGroup.position.z }
+              : { x: pt.x, y: pt.y, z: pt.z };
             // If NPC placement is pending, deliver the hit position and consume the click
             if (npcPlacementPendingRef.current) {
-              onNpcPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
+              onNpcPlaceRef.current?.(placementPos);
+              cleanupGhost();
               return;
             }
             // If prop placement is pending, deliver the hit position and consume the click
             if (propPlacementPendingRef.current) {
-              onPropPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
+              onPropPlaceRef.current?.(placementPos);
+              cleanupGhost();
               return;
             }
             // If portal placement is pending, deliver the hit position and consume the click
@@ -659,13 +785,17 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           if (Math.abs(dir.y) > 0.001) {
             const t = (groundY - origin.y) / dir.y;
             if (t > 0) {
-              const pt = { x: origin.x + dir.x * t, y: groundY, z: origin.z + dir.z * t };
+              const pt = ghostGroup
+                ? { x: ghostGroup.position.x, y: ghostGroup.position.y, z: ghostGroup.position.z }
+                : { x: origin.x + dir.x * t, y: groundY, z: origin.z + dir.z * t };
               if (npcPlacementPendingRef.current) {
                 onNpcPlaceRef.current?.(pt);
+                cleanupGhost();
               } else if (portalPlacementPendingRef.current) {
                 onPortalPlaceRef.current?.(pt);
               } else {
                 onPropPlaceRef.current?.(pt);
+                cleanupGhost();
               }
             }
           }
@@ -678,16 +808,92 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     };
     const onMouseUp = () => { ffDragging = false; };
     const onMouseMove = (e: MouseEvent) => {
-      if (!freeFlyActive || !ffDragging) return;
-      const sens = 0.003;
-      flyEuler.y -= e.movementX * sens;
-      flyEuler.x -= e.movementY * sens;
-      flyEuler.x = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, flyEuler.x));
-      camera.rotation.copy(flyEuler);
+      if (!freeFlyActive) return;
+      // Right-click drag: rotate camera
+      if (ffDragging) {
+        const sens = 0.003;
+        flyEuler.y -= e.movementX * sens;
+        flyEuler.x -= e.movementY * sens;
+        flyEuler.x = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, flyEuler.x));
+        camera.rotation.copy(flyEuler);
+      }
+      if (ghostGroup) updateGhostPosition(e.clientX, e.clientY);
     };
+
+    // Window-level ghost mouse tracker — fires even when cursor is outside canvas or
+    // pointer-lock is active. Picks up the loaded ghost from ghostPendingGroupRef and
+    // keeps it following the cursor over the terrain.
+    const onWindowMouseMove = (e: MouseEvent) => {
+      // Adopt the pending ghost (loaded by the React useEffect) into the scene
+      if (ghostPendingGroupRef.current && !ghostGroup) {
+        const pending = ghostPendingGroupRef.current;
+        ghostPendingGroupRef.current = null;
+        ghostGroup = pending.group;
+        ghostGroundOffset = pending.groundOffset;
+        scene.add(ghostGroup);
+      }
+      if (ghostGroup) updateGhostPosition(e.clientX, e.clientY);
+    };
+
+    // Window-level left-click handler for ghost placement — fires in both free-fly
+    // and physics mode (canvas mousedown is removed by stopFreeFly in physics mode).
+    const onWindowMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      if (!npcPlacementPendingRef.current && !propPlacementPendingRef.current) return;
+
+      const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+      // Best estimate of terrain Y: raycast hit, or camera eye-level minus 1.7 m
+      // (which equals ground height under the player's feet).
+      const estimatedGroundY = camera.position.y - 1.7;
+
+      // Use ghost position if available; otherwise fall back to terrain raycast at cursor.
+      let pos: { x: number; y: number; z: number };
+      if (ghostGroup) {
+        // Ghost Y is fixed at fbY (nominal); replace with camera-derived estimate if fbY missed
+        const ghostY = ghostGroup.position.y;
+        const y = Math.abs(ghostY - fbY) < 0.01 ? estimatedGroundY : ghostY;
+        pos = { x: ghostGroup.position.x, y, z: ghostGroup.position.z };
+      } else {
+        const rect = canvas.getBoundingClientRect();
+        const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        const raycaster = new Raycaster();
+        raycaster.setFromCamera(new Vector2(nx, ny), camera);
+        const { origin, direction: dir } = raycaster.ray;
+        const pw = physicsRef.world;
+        const R = physicsRef.RAPIER;
+        if (pw && R) {
+          const ray = new R.Ray({ x: origin.x, y: origin.y, z: origin.z }, { x: dir.x, y: dir.y, z: dir.z });
+          const hit = pw.castRay(ray, 200, true);
+          if (hit && hit.timeOfImpact > 0.01) {
+            pos = { x: origin.x + dir.x * hit.timeOfImpact, y: origin.y + dir.y * hit.timeOfImpact, z: origin.z + dir.z * hit.timeOfImpact };
+          } else {
+            pos = { x: origin.x + dir.x * 5, y: estimatedGroundY, z: origin.z + dir.z * 5 };
+          }
+        } else {
+          if (dir.y < -0.001) {
+            const t = (fbY - origin.y) / dir.y;
+            pos = { x: origin.x + dir.x * t, y: estimatedGroundY, z: origin.z + dir.z * t };
+          } else {
+            pos = { x: origin.x + dir.x * 5, y: estimatedGroundY, z: origin.z + dir.z * 5 };
+          }
+        }
+      }
+
+      if (npcPlacementPendingRef.current) {
+        onNpcPlaceRef.current?.(pos);
+        cleanupGhost();
+      } else if (propPlacementPendingRef.current) {
+        onPropPlaceRef.current?.(pos);
+        cleanupGhost();
+      }
+    };
+
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mouseup",   onMouseUp);
     canvas.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mousemove", onWindowMouseMove);
+    window.addEventListener("mousedown", onWindowMouseDown);
 
     // Keep flyEuler in sync when camera is repositioned externally
 
@@ -987,7 +1193,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         npcPositions.set(obj.objectId, pos);
 
         // Lock position back to server so it is stable on next reload.
-        if (hint !== "exact" && sceneId && sessionId) {
+        // Always patch including "exact" placements — Y from the position picker is approximate;
+        // the raycasted Y is the true terrain ground.
+        if (sceneId && sessionId) {
           patchSceneObjectPosition(sceneId, sessionId, obj.objectId, pos).catch(() => { /* non-fatal */ });
         }
 
@@ -1481,11 +1689,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         // ESC key: cancel pending NPC placement if active
         if (e.key === "Escape" && npcPlacementPendingRef.current) {
+          cleanupGhost();
           onNpcPlaceCancelRef.current?.();
           return;
         }
         // ESC key: cancel pending prop placement if active
         if (e.key === "Escape" && propPlacementPendingRef.current) {
+          cleanupGhost();
           onPropPlaceCancelRef.current?.();
           return;
         }
@@ -1716,9 +1926,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       cancelled = true;
       cancelAnimationFrame(animId);
       if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
+      cleanupGhost();
       ro.disconnect();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("mousemove", onWindowMouseMove);
+      window.removeEventListener("mousedown", onWindowMouseDown);
       delete (window as unknown as Record<string, unknown>).__clickPosition;
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
       delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
@@ -1894,7 +2107,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           whiteSpace: "nowrap",
         }}>
           <span style={{ fontSize: 18 }}>🧍</span>
-          <span>点击地面放置 NPC</span>
+          <span>{ghostModelUrl ? "移动鼠标定位 · 点击放置 NPC" : "点击地面放置 NPC"}</span>
           <span style={{ fontSize: 11, color: "rgba(140,150,180,0.5)", marginLeft: 4 }}>· ESC 取消</span>
         </div>
       )}
@@ -1912,7 +2125,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           display: "flex", alignItems: "center", gap: 10,
           whiteSpace: "nowrap",
         }}>
-          <span>点击地面放置物件</span>
+          <span>{ghostModelUrl ? "移动鼠标定位 · 点击放置物件" : "点击地面放置物件"}</span>
           <span style={{ fontSize: 11, color: "rgba(140,150,180,0.5)", marginLeft: 4 }}>· ESC 取消</span>
         </div>
       )}

@@ -41,9 +41,14 @@ function groundY(
   startY = 2,
   fallbackY = 0,
 ): number {
+  // Try solid=true first (handles ray origin inside terrain mesh)
   const ray = new RAPIER.Ray({ x, y: startY, z }, { x: 0, y: -1, z: 0 });
-  const hit = world.castRay(ray, 30, false);
-  return hit ? startY - hit.timeOfImpact : fallbackY;
+  const hit = world.castRay(ray, startY - fallbackY + 5, true);
+  if (hit && hit.timeOfImpact > 0.01) return startY - hit.timeOfImpact;
+  // Fallback: solid=false in case of false-positive solid hit at origin
+  const hit2 = world.castRay(ray, startY - fallbackY + 5, false);
+  if (hit2) return startY - hit2.timeOfImpact;
+  return fallbackY;
 }
 
 function tooClose(
@@ -92,11 +97,19 @@ export function resolvePosition(
   // always inside the room, not above the ceiling.
   const rayStartY = fallbackY + 2;
 
-  // "exact": use the stored position as-is. The stored Y was set by click-to-place
-  // (which finds the actual terrain height) and is correct for this XZ position.
-  // Do not re-raycast — in vegetation-heavy scenes the downward ray hits tree branches.
+  // "exact": use the stored XZ as-is, but still raycast to find the real terrain Y.
+  // The stored Y comes from the position picker (panorama-formula estimate) which is
+  // approximate and does not account for actual terrain elevation.
+  // Start the ray well above the terrain (10 m above nominal floor) to ensure the ray
+  // originates above elevated terrain like garden paths, ramps, or raised platforms.
   if (hint === "exact" && playerPosition) {
-    return { x: playerPosition.x, y: playerPosition.y, z: playerPosition.z };
+    const exactRayStart = fallbackY + 10;
+    const terrainY = groundY(world, playerPosition.x, playerPosition.z, exactRayStart, fallbackY);
+    // If raycast missed (returned fallback), trust the client's Y estimate over fallback.
+    // Client sends camera.position.y - 1.7 which gives actual terrain height under player.
+    const resolvedY = terrainY !== fallbackY ? terrainY : Math.max(playerPosition.y, fallbackY);
+    console.log(`[placement] exact hint: xz=(${playerPosition.x.toFixed(2)},${playerPosition.z.toFixed(2)}) rayStart=${exactRayStart.toFixed(2)} terrainY=${terrainY.toFixed(3)} resolvedY=${resolvedY.toFixed(3)} fallback=${fallbackY.toFixed(3)}`);
+    return { x: playerPosition.x, y: resolvedY, z: playerPosition.z };
   }
 
   if (hint === "near_entrance" && viewpoints.length > 0) {

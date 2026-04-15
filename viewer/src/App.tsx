@@ -926,6 +926,8 @@ export function App() {
               onPropApproach={handlePropApproach}
               onPropLeave={handlePropLeave}
               tvContainerRef={tvContainerRef}
+              ghostModelUrl={pendingNpc?.modelUrl ?? pendingProp?.modelUrl ?? undefined}
+              ghostModelScale={pendingNpc?.scale ?? pendingProp?.scale ?? 1}
               onPlacementRequest={(text) => { void handleSend(text); }}
               onAddProp={(entry, _objectId) => {
                 if (!scene) return;
@@ -1121,36 +1123,7 @@ export function App() {
         onBeginPlacement={(npc) => {
           setNpcChatTarget(null);
           setShowNpcDrawer(false);
-          // Show position picker when a panorama is available so user can pick placement
-          const panoUrl = scene?.sceneData.objects[0]?.metadata?.panoUrl as string | undefined;
-          if (panoUrl) {
-            setPositionPicker({
-              panoUrl,
-              estimatedPos: { x: 0, y: 0, z: 0 },
-              objectName: npc.name,
-              sceneId: scene?.sceneId ?? "",
-              onConfirmLocal: (pos) => {
-                if (!scene) return;
-                const fwd = (window as unknown as Record<string, unknown>).__cameraForward as
-                  | { x: number; z: number } | undefined;
-                addSceneNpc(scene.sceneId, sessionId, {
-                  ...npc,
-                  placement: "exact",
-                  playerPosition: pos,
-                  cameraForward: fwd,
-                  targetHeight: 1.7,
-                })
-                  .then(() => loadSceneById(scene.sceneId, { session: sessionId }))
-                  .catch(console.warn);
-              },
-              onSkipLocal: () => {
-                // User dismissed picker — fall back to click-to-place in 3D scene
-                setPendingNpc(npc);
-              },
-            });
-          } else {
-            setPendingNpc(npc);
-          }
+          setPendingNpc(npc);
         }}
         generatedNpcModels={generatedNpcModels}
         onNpcModelGenerated={addGeneratedNpcModel}

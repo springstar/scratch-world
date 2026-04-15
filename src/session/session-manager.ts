@@ -63,6 +63,13 @@ export class SessionManager {
 		);
 	}
 
+	/** Update the active scene for a session — called when the viewer loads a scene. */
+	async setActiveScene(sessionId: string, sceneId: string): Promise<void> {
+		const existing = await this.sessionRepo.findById(sessionId);
+		if (!existing || existing.activeSceneId === sceneId) return;
+		await this.sessionRepo.save({ ...existing, activeSceneId: sceneId, updatedAt: Date.now() });
+	}
+
 	// ── Private helpers ──────────────────────────────────────────────────────
 
 	/** Serialize tasks for a session; errors in one task don't block the next. */
@@ -130,7 +137,9 @@ export class SessionManager {
 		clickPosition?: { x: number; y: number; z: number },
 		viewerSceneId?: string,
 	): Promise<void> {
-		console.log(`[SessionManager] _dispatchWebChat sessionId=${sessionId}`);
+		console.log(
+			`[SessionManager] _dispatchWebChat sessionId=${sessionId} viewerSceneId=${viewerSceneId ?? "(none)"}`,
+		);
 		// Upsert session record — web sessions may not exist yet
 		let existing: Awaited<ReturnType<typeof this.sessionRepo.findById>>;
 		try {

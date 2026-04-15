@@ -230,6 +230,33 @@ export class SceneManager {
 		return updated;
 	}
 
+	/** Remove all objects whose name matches (case-insensitive). Returns count of removed objects. */
+	async removeObjectsByName(sceneId: string, name: string): Promise<{ scene: Scene; removedCount: number }> {
+		const scene = await this.requireScene(sceneId);
+		const nameLower = name.toLowerCase();
+		const filtered = scene.sceneData.objects.filter((o) => o.name.toLowerCase() !== nameLower);
+		const removedCount = scene.sceneData.objects.length - filtered.length;
+		if (removedCount === 0) {
+			return { scene, removedCount: 0 };
+		}
+		const now = Date.now();
+		const updated: Scene = {
+			...scene,
+			sceneData: { ...scene.sceneData, objects: filtered },
+			version: scene.version + 1,
+			updatedAt: now,
+		};
+		await this.repo.saveVersion({
+			sceneId: updated.sceneId,
+			version: updated.version,
+			sceneData: updated.sceneData,
+			providerRef: updated.providerRef,
+			createdAt: now,
+		});
+		await this.repo.save(updated);
+		return { scene: updated, removedCount };
+	}
+
 	/** Update name, metadata, or other mutable fields of an existing scene object.
 	 *  metadata is merged (not replaced). Throws 404 if objectId not found.
 	 */
