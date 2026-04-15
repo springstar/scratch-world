@@ -103,12 +103,14 @@ export function resolvePosition(
   // Start the ray well above the terrain (10 m above nominal floor) to ensure the ray
   // originates above elevated terrain like garden paths, ramps, or raised platforms.
   if (hint === "exact" && playerPosition) {
+    // Trust the client's Y directly — it comes from the ghost's ground-plane intersection
+    // which is more accurate than a server-side raycast on open terrain with no colliders.
+    // Only use our own raycast as a tiebreaker if the client Y equals the raw fallback
+    // (meaning the client also had no better information).
     const exactRayStart = fallbackY + 10;
     const terrainY = groundY(world, playerPosition.x, playerPosition.z, exactRayStart, fallbackY);
-    // If raycast missed (returned fallback), trust the client's Y estimate over fallback.
-    // Client sends camera.position.y - 1.7 which gives actual terrain height under player.
-    const resolvedY = terrainY !== fallbackY ? terrainY : Math.max(playerPosition.y, fallbackY);
-    console.log(`[placement] exact hint: xz=(${playerPosition.x.toFixed(2)},${playerPosition.z.toFixed(2)}) rayStart=${exactRayStart.toFixed(2)} terrainY=${terrainY.toFixed(3)} resolvedY=${resolvedY.toFixed(3)} fallback=${fallbackY.toFixed(3)}`);
+    const resolvedY = terrainY !== fallbackY ? terrainY : playerPosition.y;
+    console.log(`[placement] exact hint: xz=(${playerPosition.x.toFixed(2)},${playerPosition.z.toFixed(2)}) clientY=${playerPosition.y.toFixed(3)} terrainY=${terrainY.toFixed(3)} resolvedY=${resolvedY.toFixed(3)}`);
     return { x: playerPosition.x, y: resolvedY, z: playerPosition.z };
   }
 

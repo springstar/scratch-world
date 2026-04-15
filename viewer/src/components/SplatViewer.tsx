@@ -167,7 +167,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       ghostLoadTriggerRef.current = trigger;
       ghostPendingGroupRef.current = null;
       // Start loading immediately — don't wait for first mousemove
-      console.log("[ghost] loading model:", trigger.url);      loadGltf(resolveModelUrl(trigger.url)).then((rawGroup) => {
+      console.log("[ghost] loading model:", trigger.url);
+      loadGltf(resolveModelUrl(trigger.url)).then((rawGroup) => {
         if (!ghostLoadTriggerRef.current) return; // cancelled
         rawGroup.position.set(0, 0, 0);
         rawGroup.rotation.set(0, 0, 0);
@@ -677,7 +678,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     const updateGhostPosition = (clientX: number, clientY: number) => {
       if (!ghostGroup) return;
-      const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
       const rect = canvas.getBoundingClientRect();
       const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
       const ny = -((clientY - rect.top) / rect.height) * 2 + 1;
@@ -685,24 +685,53 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       raycaster.setFromCamera(new Vector2(nx, ny), camera);
       const { origin, direction: dir } = raycaster.ray;
 
-      // Project ray onto nominal ground plane for XZ.
-      // When pointing downward, intersect the floor plane; otherwise go 8 m ahead.
+      // Nominal floor Y — independent of camera height, used as XZ projection plane.
+      // Actual terrain is between fbY and fbY+2 in Marble scenes.
+      const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+
+      // Project cursor ray to nominal floor for XZ position.
+      // Minimum t=1.5m prevents placing ghost inside camera when cursor is at screen bottom.
+      const MIN_T = 1.5;
+      const MAX_T = 100;
       let tx: number;
       let tz: number;
-      if (dir.y < -0.05) {
-        const t = Math.min((fbY - origin.y) / dir.y, 50);
+      if (dir.y < -0.001) {
+        const rawT = (fbY - origin.y) / dir.y;
+        const t = Math.max(MIN_T, Math.min(rawT, MAX_T));
         tx = origin.x + dir.x * t;
         tz = origin.z + dir.z * t;
       } else {
+        // Cursor not pointing down — place 10m ahead in XZ direction
         const lenXZ = Math.sqrt(dir.x * dir.x + dir.z * dir.z) || 1;
-        tx = origin.x + (dir.x / lenXZ) * 8;
-        tz = origin.z + (dir.z / lenXZ) * 8;
+        tx = origin.x + (dir.x / lenXZ) * 10;
+        tz = origin.z + (dir.z / lenXZ) * 10;
       }
 
-      // Keep ghost on the ground — use camera eye-level estimate when physics floor
-      // (fbY) falls back below the visible terrain (no geometry at that XZ position).
-      const groundY = Math.max(fbY, camera.position.y - 1.7);
-      ghostGroup.position.set(tx, groundY + ghostGroundOffset, tz);
+      // Downward Rapier ray from that XZ → actual terrain Y.
+      // Cap terrainY to be below the camera to prevent overhead geometry hits.
+      const pw = physicsRef.world;
+      const R = physicsRef.RAPIER;
+      // Fallback when Rapier misses (open ground, no collider): camera is at panorama eye height,
+      // so ground is roughly camera.y - 1.7m. Clamp to [fbY, camera.y - 0.3] for safety.
+      const eyeHeightFallback = Math.max(fbY, Math.min(camera.position.y - 1.7, camera.position.y - 0.3));
+      let terrainY = eyeHeightFallback;
+      if (pw && R) {
+        const downRay = new R.Ray({ x: tx, y: fbY + 10, z: tz }, { x: 0, y: -1, z: 0 });
+        const hit = pw.castRay(downRay, 20, true);
+        if (hit && hit.timeOfImpact > 0.01) {
+          const hitY = (fbY + 10) - hit.timeOfImpact;
+          // Only accept hit if it's below camera (ignore ceiling/overhead colliders)
+          if (hitY < origin.y - 0.3) terrainY = hitY;
+        } else {
+          const hit2 = pw.castRay(downRay, 20, false);
+          if (hit2 && hit2.timeOfImpact > 0.01) {
+            const hitY = (fbY + 10) - hit2.timeOfImpact;
+            if (hitY < origin.y - 0.3) terrainY = hitY;
+          }
+        }
+      }
+
+      ghostGroup.position.set(tx, terrainY + ghostGroundOffset, tz);
     };
 
     const onMouseDown = (e: MouseEvent) => {
@@ -744,9 +773,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               ts: Date.now(),
             };
             (window as unknown as Record<string, unknown>).__clickPosition = { x: hitX, y: hitY, z: hitZ, ts: pt.ts };
-            // Use ghost's current position when drag-to-place is active; fallback to raycast hit
+            // Use ghost's current position when drag-to-place is active; fallback to raycast hit.
+            // Send terrainY (ghost.y - groundOffset) so the renderer's +groundOffset lands feet on ground.
             const placementPos = ghostGroup
-              ? { x: ghostGroup.position.x, y: ghostGroup.position.y, z: ghostGroup.position.z }
+              ? { x: ghostGroup.position.x, y: ghostGroup.position.y - ghostGroundOffset, z: ghostGroup.position.z }
               : { x: pt.x, y: pt.y, z: pt.z };
             // If NPC placement is pending, deliver the hit position and consume the click
             if (npcPlacementPendingRef.current) {
@@ -786,7 +816,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             const t = (groundY - origin.y) / dir.y;
             if (t > 0) {
               const pt = ghostGroup
-                ? { x: ghostGroup.position.x, y: ghostGroup.position.y, z: ghostGroup.position.z }
+                ? { x: ghostGroup.position.x, y: ghostGroup.position.y - ghostGroundOffset, z: ghostGroup.position.z }
                 : { x: origin.x + dir.x * t, y: groundY, z: origin.z + dir.z * t };
               if (npcPlacementPendingRef.current) {
                 onNpcPlaceRef.current?.(pt);
@@ -841,43 +871,49 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       if (e.button !== 0) return;
       if (!npcPlacementPendingRef.current && !propPlacementPendingRef.current) return;
 
-      const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
-      // Best estimate of terrain Y: raycast hit, or camera eye-level minus 1.7 m
-      // (which equals ground height under the player's feet).
-      const estimatedGroundY = camera.position.y - 1.7;
+      const pw = physicsRef.world;
+      const R = physicsRef.RAPIER;
 
-      // Use ghost position if available; otherwise fall back to terrain raycast at cursor.
+      // Ghost's position.y = terrainY + ghostGroundOffset (origin lifted so feet touch terrain).
+      // The renderer does: final.y = stored.y + groundOffset, so we must send terrainY (feet level)
+      // not the lifted origin, otherwise the NPC floats ghostGroundOffset above the ground.
       let pos: { x: number; y: number; z: number };
       if (ghostGroup) {
-        // Ghost Y is fixed at fbY (nominal); replace with camera-derived estimate if fbY missed
-        const ghostY = ghostGroup.position.y;
-        const y = Math.abs(ghostY - fbY) < 0.01 ? estimatedGroundY : ghostY;
-        pos = { x: ghostGroup.position.x, y, z: ghostGroup.position.z };
+        const terrainY = ghostGroup.position.y - ghostGroundOffset;
+        pos = { x: ghostGroup.position.x, y: terrainY, z: ghostGroup.position.z };
       } else {
+        // Ghost failed to load — compute position from cursor + ground plane
+        const fbY = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
         const rect = canvas.getBoundingClientRect();
         const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
         const raycaster = new Raycaster();
         raycaster.setFromCamera(new Vector2(nx, ny), camera);
         const { origin, direction: dir } = raycaster.ray;
-        const pw = physicsRef.world;
-        const R = physicsRef.RAPIER;
+        // Project to nominal floor first for approximate XZ
+        let tx = origin.x + dir.x * 10;
+        let tz = origin.z + dir.z * 10;
+        let groundY = fbY;
+        if (dir.y < -0.001) {
+          const t = (fbY - origin.y) / dir.y;
+          if (t > 0 && t < 150) { tx = origin.x + dir.x * t; tz = origin.z + dir.z * t; }
+        }
         if (pw && R) {
+          // Try direct cursor ray hit first (works on covered terrain)
           const ray = new R.Ray({ x: origin.x, y: origin.y, z: origin.z }, { x: dir.x, y: dir.y, z: dir.z });
           const hit = pw.castRay(ray, 200, true);
           if (hit && hit.timeOfImpact > 0.01) {
-            pos = { x: origin.x + dir.x * hit.timeOfImpact, y: origin.y + dir.y * hit.timeOfImpact, z: origin.z + dir.z * hit.timeOfImpact };
+            tx = origin.x + dir.x * hit.timeOfImpact;
+            groundY = origin.y + dir.y * hit.timeOfImpact;
+            tz = origin.z + dir.z * hit.timeOfImpact;
           } else {
-            pos = { x: origin.x + dir.x * 5, y: estimatedGroundY, z: origin.z + dir.z * 5 };
-          }
-        } else {
-          if (dir.y < -0.001) {
-            const t = (fbY - origin.y) / dir.y;
-            pos = { x: origin.x + dir.x * t, y: estimatedGroundY, z: origin.z + dir.z * t };
-          } else {
-            pos = { x: origin.x + dir.x * 5, y: estimatedGroundY, z: origin.z + dir.z * 5 };
+            // Open ground: downward ray from approximate XZ
+            const downRay = new R.Ray({ x: tx, y: fbY + 10, z: tz }, { x: 0, y: -1, z: 0 });
+            const dHit = pw.castRay(downRay, 20, false);
+            if (dHit && dHit.timeOfImpact > 0.01) groundY = (fbY + 10) - dHit.timeOfImpact;
           }
         }
+        pos = { x: tx, y: groundY, z: tz };
       }
 
       if (npcPlacementPendingRef.current) {
@@ -1189,14 +1225,26 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const playerPos = obj.metadata.playerPosition as { x: number; y: number; z: number } | undefined;
         const cameraFwd = obj.metadata.cameraForward as { x: number; z: number } | undefined;
         const occupied = [...npcPositions.values(), ...props.filter((p) => !p.removed).map((p) => { const t = p.body.translation(); return { x: t.x, y: t.y, z: t.z }; })];
+        // Always re-resolve position: Rapier auto-corrects bad stored Y values (e.g. fallback floor
+        // from old placements).  For "exact" hints this validates the terrain Y via downward raycast.
+        // CONTRACT: resolved pos.y is terrain surface (feet level); renderer adds groundOffset on top.
         const pos = resolvePosition(hint, world, occupied, viewpoints ?? [], npcGroups.size, playerPos, splatGroundOffset, cameraFwd);
-        npcPositions.set(obj.objectId, pos);
 
-        // Lock position back to server so it is stable on next reload.
-        // Always patch including "exact" placements — Y from the position picker is approximate;
-        // the raycasted Y is the true terrain ground.
-        if (sceneId && sessionId) {
-          patchSceneObjectPosition(sceneId, sessionId, obj.objectId, pos).catch(() => { /* non-fatal */ });
+        // If resolvePosition returned the fallback floor (Rapier missed — open terrain), substitute
+        // a better ground estimate: the eye-height estimate stored in playerPosition.y by the
+        // ghost placement flow.  This prevents NPCs from sinking below visual terrain on
+        // uncollided grass/path areas.  Only applies when the playerPosition.y is meaningfully
+        // above the fallback (i.e. was set by the ghost flow, not by the old fallback-only system).
+        const fallbackFloor = splatGroundOffset !== undefined ? -splatGroundOffset : 0;
+        const resolvedPos = (Math.abs(pos.y - fallbackFloor) < 0.01 && playerPos && playerPos.y > fallbackFloor + 0.5)
+          ? { x: pos.x, y: playerPos.y, z: pos.z }
+          : pos;
+        npcPositions.set(obj.objectId, resolvedPos);
+
+        // Lock position back to server only for non-exact placements (auto-resolved by arc/slot logic).
+        // Exact positions are stable — re-patching every load would generate unnecessary writes.
+        if (hint !== "exact" && sceneId && sessionId) {
+          patchSceneObjectPosition(sceneId, sessionId, obj.objectId, resolvedPos).catch(() => { /* non-fatal */ });
         }
 
         const group = (await objectRendererRegistry.render(obj, { envMap: sceneEnvMap ?? undefined })) as import("three").Group | null;
@@ -1241,7 +1289,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const bbox = new Box3().setFromObject(group);
         // bbox is in world space — negate min.y directly to sit model on ground.
         const groundOffset = -bbox.min.y;
-        group.position.set(pos.x, pos.y + groundOffset, pos.z);
+        group.position.set(resolvedPos.x, resolvedPos.y + groundOffset, resolvedPos.z);
         group.traverse((c) => {
           c.userData.objectId = obj.objectId;
           if (c instanceof Mesh) {
@@ -1251,7 +1299,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           }
         });
         scene.add(group);
-        group.userData.shadowPlane = createContactShadow(group, pos.y);
+        group.userData.shadowPlane = createContactShadow(group, resolvedPos.y);
         npcGroups.set(obj.objectId, group);
       };
 
@@ -1987,7 +2035,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       />
 
       {/* Physics mode: "click to enter" overlay */}
-      {physicsReady && status === "ready" && !isLocked && (
+      {physicsReady && status === "ready" && !isLocked && !npcPlacementPending && !propPlacementPending && !portalPlacementPending && (
         <div style={{
           position: "absolute", inset: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
