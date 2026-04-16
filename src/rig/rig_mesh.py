@@ -124,7 +124,7 @@ def export_glb(output_path: str) -> None:
         filepath=output_path,
         export_format="GLB",
         export_animations=True,
-        export_all_actions=True,
+        export_animation_mode="ACTIONS",
         export_skins=True,
         export_apply=False,
         use_selection=False,
