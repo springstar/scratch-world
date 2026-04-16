@@ -1,10 +1,11 @@
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
 import { buildPerceptionContext, extractSceneCaption } from "./npc-perception.js";
-import { spontaneousNpcLine } from "./npc-runner.js";
+import { reactAsNpcNoCD, spontaneousNpcLine } from "./npc-runner.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const SPONTANEOUS_CHANCE = 0.15; // 15% per NPC per tick
+const DIALOGUE_CHANCE = 0.4; // 40% chance of NPC-to-NPC exchange when 2+ NPCs present
 
 /**
  * Start the NPC world heartbeat.
@@ -49,7 +50,74 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 	);
 	if (npcs.length === 0) return;
 
-	// Pick a random NPC, fire with SPONTANEOUS_CHANCE probability per NPC
+	const env = scene.sceneData.environment;
+	const sceneCaption = extractSceneCaption(scene.sceneData.objects);
+
+	// With 2+ NPCs, 40% chance of generating a short NPC-to-NPC exchange
+	if (npcs.length >= 2 && Math.random() < DIALOGUE_CHANCE) {
+		// Pick two distinct NPCs at random
+		const shuffled = [...npcs].sort(() => Math.random() - 0.5);
+		const npcA = shuffled[0];
+		const npcB = shuffled[1];
+
+		const personalityA = (npcA.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
+		const personalityB = (npcB.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
+		const memoryA: string[] = Array.isArray(npcA.metadata.npcMemory)
+			? (npcA.metadata.npcMemory as string[]).filter((x): x is string => typeof x === "string")
+			: [];
+		const memoryB: string[] = Array.isArray(npcB.metadata.npcMemory)
+			? (npcB.metadata.npcMemory as string[]).filter((x): x is string => typeof x === "string")
+			: [];
+
+		const perceptionA = buildPerceptionContext(npcA, scene.sceneData.objects, undefined, env, sceneCaption);
+		const perceptionB = buildPerceptionContext(npcB, scene.sceneData.objects, undefined, env, sceneCaption);
+
+		try {
+			// NPC A initiates
+			const lineA = await reactAsNpcNoCD(
+				npcA.objectId,
+				npcA.name,
+				personalityA,
+				`（你看到了${npcB.name}，主动打个招呼或说一句话）`,
+				memoryA,
+				perceptionA,
+			);
+			if (!lineA) return;
+
+			bus.publish(sessionId, {
+				type: "npc_speech",
+				npcId: npcA.objectId,
+				npcName: npcA.name,
+				text: lineA,
+				sceneId: scene.sceneId,
+			});
+
+			// Brief pause before B replies, then NPC B responds
+			await new Promise((r) => setTimeout(r, 2500));
+			const lineB = await reactAsNpcNoCD(
+				npcB.objectId,
+				npcB.name,
+				personalityB,
+				`${npcA.name}说："${lineA}"`,
+				memoryB,
+				perceptionB,
+			);
+			if (!lineB) return;
+
+			bus.publish(sessionId, {
+				type: "npc_speech",
+				npcId: npcB.objectId,
+				npcName: npcB.name,
+				text: lineB,
+				sceneId: scene.sceneId,
+			});
+		} catch (err) {
+			console.error("[npc-heartbeat] npc-to-npc exchange failed:", err);
+		}
+		return;
+	}
+
+	// Single NPC spontaneous monologue
 	const candidate = npcs[Math.floor(Math.random() * npcs.length)];
 	if (Math.random() > SPONTANEOUS_CHANCE) return;
 
@@ -60,14 +128,7 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 		return raw.filter((x): x is string => typeof x === "string");
 	})();
 
-	const env = scene.sceneData.environment;
-	const perceptionContext = buildPerceptionContext(
-		candidate,
-		scene.sceneData.objects,
-		undefined,
-		env,
-		extractSceneCaption(scene.sceneData.objects),
-	);
+	const perceptionContext = buildPerceptionContext(candidate, scene.sceneData.objects, undefined, env, sceneCaption);
 
 	try {
 		const text = await spontaneousNpcLine(candidate.objectId, candidate.name, personality, memory, perceptionContext);

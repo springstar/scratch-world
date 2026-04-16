@@ -44,7 +44,7 @@ import {
 } from "../physics/pushable-objects.js";
 import { type PlacementHint, resolvePosition } from "../physics/prop-placement.js";
 import { pickObject } from "../physics/raycast-pick.js";
-import { extractNpcs, findNearbyInteractiveProp, PROP_LEAVE_RADIUS } from "../physics/npc-proximity.js";
+import { extractNpcs, findNearbyInteractiveProp, findNearbyNpc, PROP_LEAVE_RADIUS } from "../physics/npc-proximity.js";
 import type { SceneObject, Viewpoint } from "../types.js";
 import type { AssetEntry } from "../renderer/asset-catalog.js";
 import { ASSET_CATALOG } from "../renderer/asset-catalog.js";
@@ -1758,6 +1758,18 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               onPropLeaveRef.current?.();
             }
           }
+
+          // NPC proximity — open chat overlay when player walks within range
+          const npcList = extractNpcs(sceneObjectsRef.current ?? []);
+          const nearbyNpc = findNearbyNpc(npcList, pos.x, pos.y, pos.z, npcPositionsRef.current);
+          const prevNpcId = (window as unknown as Record<string, unknown>).__nearbyNpc as string | null ?? null;
+          if (nearbyNpc && nearbyNpc.objectId !== prevNpcId) {
+            (window as unknown as Record<string, unknown>).__nearbyNpc = nearbyNpc.objectId;
+            onNpcApproachRef.current?.(nearbyNpc.objectId, nearbyNpc.name);
+          } else if (!nearbyNpc && prevNpcId !== null) {
+            (window as unknown as Record<string, unknown>).__nearbyNpc = null;
+            onNpcLeaveRef.current?.();
+          }
         }
         physicsLoopFrame++;
 
@@ -1909,7 +1921,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               const npcHits = npcRaycaster.intersectObjects(npcMeshList, false);
               if (npcHits.length > 0 && npcHits[0].distance < 8) {
                 const hitMesh = npcHits[0].object;
-                document.exitPointerLock();
                 onNpcApproachRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
                 return;
               }
