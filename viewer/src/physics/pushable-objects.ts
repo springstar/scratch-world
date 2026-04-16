@@ -31,7 +31,11 @@ export function loadGltf(url: string, timeoutMs = 15000): Promise<THREE.Group> {
     const timer = setTimeout(() => reject(new Error(`loadGltf timeout: ${url}`)), timeoutMs);
     loader.load(
       url,
-      (gltf) => { clearTimeout(timer); resolve(gltf.scene); },
+      (gltf) => {
+        clearTimeout(timer);
+        gltf.scene.userData._animations = gltf.animations ?? [];
+        resolve(gltf.scene);
+      },
       undefined,
       (err) => { clearTimeout(timer); reject(err); },
     );

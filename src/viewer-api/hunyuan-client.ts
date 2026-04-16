@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { autoRig } from "../rig/auto-rig.js";
 
 /**
  * Thin client for the Tencent Hunyuan 3D image-to-3D API.
@@ -139,8 +140,23 @@ export async function generateFromImage(
 	const fileInfo = await stat(destPath);
 	if (fileInfo.size === 0) throw new Error("Downloaded GLB is empty");
 
+	// Attempt auto-rigging so the NPC plays skeletal animations in the viewer.
+	// Falls back to the unrigged model if Blender is not installed or the rig fails.
+	const riggedDir = join(uploadsDir, "rigged");
+	await mkdir(riggedDir, { recursive: true });
+	const riggedFileName = fileName.replace(".glb", "_rigged.glb");
+	const riggedPath = join(riggedDir, riggedFileName);
+
+	let finalModelUrl = `/uploads/generated/${fileName}`;
+	try {
+		await autoRig(destPath, riggedPath);
+		finalModelUrl = `/uploads/rigged/${riggedFileName}`;
+	} catch (err) {
+		console.warn("[hunyuan] auto-rig failed, using unrigged model:", err);
+	}
+
 	return {
-		modelUrl: `/uploads/generated/${fileName}`,
+		modelUrl: finalModelUrl,
 		thumbnailUrl: thumbFile?.PreviewImageUrl ?? null,
 		scale: 1,
 	};

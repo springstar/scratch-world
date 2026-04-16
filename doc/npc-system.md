@@ -1,6 +1,6 @@
 # NPC System
 
-**Last Updated:** 2026-04-09
+**Last Updated:** 2026-04-16
 
 Reactive, persistent, self-evolving NPCs for scratch-world scenes. Each NPC maintains personality, memory, an interaction counter, and an optional evolution log — all stored in `SceneObject.metadata`. No separate NPC table; NPCs are ordinary scene objects of `type="npc"`.
 
@@ -241,10 +241,27 @@ The `nearbyNpc` React state drives a `useEffect` that fires:
 
 ### NPC Movement and Emotes
 
-Two `window` bridges registered inside the physics closure:
+Three `window` bridges registered inside the physics closure:
 
 - `window.__moveNpc(npcId, { x, y, z })` — smooth 1.5 s `requestAnimationFrame` interpolation
-- `window.__emoteNpc(npcId, animation)` — sets `group.userData.pendingAnimation`; animation playback is handled by the GLTF animation system
+- `window.__emoteNpc(npcId, animation)` — crossfades the NPC's `AnimationMixer` to the named clip with a 0.3 s blend; falls back to `group.userData.pendingAnimation` if the mixer is not yet set up. Name map: `idle → Idle`, `walk → Walk`, `wave → Wave`, `bow → Bow`.
+- `window.__loadSceneNpc(obj)` — load / reload a single NPC model (exposed for hot-reload and agent-triggered add)
+
+### Animation Playback
+
+When a loaded GLB contains skeletal animation clips (rigged models), `loadSceneNpc` sets up a `THREE.AnimationMixer` and starts the **Idle** clip automatically:
+
+```typescript
+const clips = group.userData._animations as AnimationClip[];
+if (clips.length > 0) {
+  const mixer = new AnimationMixer(group);
+  mixer.clipAction(clips.find(c => /idle/i.test(c.name)) ?? clips[0]).play();
+  group.userData.mixer = mixer;
+  group.userData.animClips = clips;
+}
+```
+
+`_animations` is populated by `loadGltf` (`pushable-objects.ts`) from `gltf.animations`. The mixer is updated each frame in both `physicsLoop` and `freeFlyLoop` using the same `delta` value passed to the render call.
 
 ### App.tsx Wiring
 
@@ -319,17 +336,25 @@ Never use the raw value as world Y — it places objects 4 m above the scene.
 
 ### Orientation Detection
 
-Hunyuan-generated GLBs embed a root node quaternion `[0.7071, 0, 0, 0.7071]` (Blender Z-up → glTF Y-up conversion). After load the model may still be lying flat. Detection uses a bounding-box extent ratio:
+Hunyuan-generated GLBs have inconsistent export orientations — some arrive Y-up (already upright), others lie flat along X or Z. The viewer runs `orientUpright()` on every model after resetting its transforms to identity.
+
+**Algorithm:** try 5 candidate rotations `[identity, rx=-π/2, rx=+π/2, rz=-π/2, rz=+π/2]` and pick the one that maximises `extY − extZ`. A standing human is always taller than they are deep (front-to-back), so this metric correctly selects the upright orientation regardless of which axis the model was exported along. When two candidates tie (equal extents), the earlier entry in the list wins — negative rotations are listed before positive ones, matching the standard Hunyuan/Blender Z-up-to-Y-up convention.
 
 ```typescript
-// threshold 0.75: if Y extent < 75% of max extent, model is lying flat
-if (extY < maxExt * 0.75) {
-  extX >= extZ ? group.rotation.z = -Math.PI / 2   // X-dominant: sideways
-               : group.rotation.x = -Math.PI / 2;  // Z-dominant: Blender Z-up
+// viewer/src/components/SplatViewer.tsx
+function orientUpright(group: Group): void {
+  const candidates = [[0,0], [-π/2,0], [+π/2,0], [0,-π/2], [0,+π/2]];
+  let bestScore = -Infinity;
+  for (const [rx, rz] of candidates) {
+    group.rotation.set(rx, 0, rz);
+    group.updateMatrixWorld(true);
+    const bb = new Box3().setFromObject(group);
+    const score = (bb.max.y - bb.min.y) - (bb.max.z - bb.min.z);
+    if (score > bestScore) { bestScore = score; /* save rx,rz */ }
+  }
+  // apply best rotation
 }
 ```
-
-**Threshold 0.75** — safe upper bound. Values above 0.75 risk false positives for half-body (bust) models.
 
 ### Auto-Scale and Ground Offset
 
@@ -462,7 +487,10 @@ NPC proximity detection and click-to-talk are gated behind a `hasEnteredScene` f
 | `src/viewer-api/routes/npc-greet.ts` | POST /npc-greet — proximity greeting |
 | `src/viewer-api/routes/scenes.ts` | NPC CRUD + evolution approve/reject endpoints |
 | `src/viewer-api/routes/generate-prop.ts` | POST/GET `/scenes/:sceneId/generate-prop` — Hunyuan 3D job submission and polling |
-| `src/viewer-api/hunyuan-client.ts` | Tencent Hunyuan 3D v2 REST API wrapper |
+| `src/viewer-api/hunyuan-client.ts` | Tencent Hunyuan 3D v2 REST API wrapper; calls `autoRig()` after each GLB download |
+| `src/rig/rig_mesh.py` | Blender Python script: open template armature (.blend), import Hunyuan mesh, auto-weight parent, export rigged GLB |
+| `src/rig/auto-rig.ts` | Node.js wrapper: spawn Blender headless with rig_mesh.py; 120 s timeout; throws on failure so caller can fall back to unrigged URL |
+| `src/rig/base_humanoid.blend` | **One-time manual step**: copy Quaternius Universal Animation Library 2 `Female Mannequin/Mannequin_F.blend` here |
 | `src/viewer-api/job-store.ts` | In-memory store for async generation jobs |
 | `src/scene/scene-manager.ts` | `updateSceneObject()` — metadata merge with versioning |
 | `viewer/src/physics/npc-proximity.ts` | Proximity radius constants and nearest-NPC search |

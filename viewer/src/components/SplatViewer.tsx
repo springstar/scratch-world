@@ -25,6 +25,7 @@ import {
   Mesh,
   Group,
   DoubleSide,
+  AnimationMixer,
 } from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -51,6 +52,46 @@ import { patchSceneObjectPosition } from "../api.js";
 import { PropPicker } from "./PropPicker.js";
 import { ObjectRendererRegistry } from "../renderer/object-renderer.js";
 import { GltfObjectRenderer } from "../renderer/gltf-object-renderer.js";
+
+/**
+ * Rotate `group` to stand upright.
+ * Call after resetting position/rotation/scale to identity.
+ *
+ * Scoring: primary = (extY - extZ); bias = +0.25 for identity rotation.
+ *   - A standing human is always taller than they are deep (front-to-back).
+ *   - Identity bias prevents spurious rotations for already-upright models.
+ *   - Candidate order breaks ties: negative rotations (rz=-π/2, rx=-π/2)
+ *     are listed before their positive counterparts because they match the
+ *     standard Hunyuan/Blender export convention (head in -X or +Z maps to +Y).
+ */
+function orientUpright(group: Group): void {
+  const candidates: [number, number][] = [
+    [0, 0],             // identity (gets +0.25 bonus)
+    [-Math.PI / 2, 0],  // rx=-π/2: Z-up → Y-up (standard Blender export)
+    [Math.PI / 2, 0],   // rx=+π/2
+    [0, -Math.PI / 2],  // rz=-π/2: head-at-(-X) → +Y (preferred tie-winner)
+    [0, Math.PI / 2],   // rz=+π/2
+  ];
+
+  let bestRx = 0;
+  let bestRz = 0;
+  let bestScore = -Infinity;
+
+  for (const [rx, rz] of candidates) {
+    group.rotation.set(rx, 0, rz);
+    group.updateMatrixWorld(true);
+    const bb = new Box3().setFromObject(group);
+    const extY = bb.max.y - bb.min.y;
+    const extZ = bb.max.z - bb.min.z;
+    const score = extY - extZ;
+    if (score > bestScore) {
+      bestScore = score;
+      bestRx = rx;
+      bestRz = rz;
+    }
+  }
+  group.rotation.set(bestRx, 0, bestRz);
+}
 
 interface Props {
   splatUrl: string;
@@ -173,16 +214,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         rawGroup.position.set(0, 0, 0);
         rawGroup.rotation.set(0, 0, 0);
         rawGroup.scale.setScalar(1);
-        rawGroup.updateMatrixWorld(true);
-        const rawBbox = new Box3().setFromObject(rawGroup);
-        const extX = rawBbox.max.x - rawBbox.min.x;
-        const extY = rawBbox.max.y - rawBbox.min.y;
-        const extZ = rawBbox.max.z - rawBbox.min.z;
-        const maxExt = Math.max(extX, extY, extZ);
-        if (maxExt > 0.01 && extY < maxExt * 0.75) {
-          if (extX >= extZ) rawGroup.rotation.z = -Math.PI / 2;
-          else rawGroup.rotation.x = -Math.PI / 2;
-        }
+        // Orient upright before measuring height
+        orientUpright(rawGroup);
         rawGroup.updateMatrixWorld(true);
         const scaledBbox = new Box3().setFromObject(rawGroup);
         const mh = scaledBbox.max.y - scaledBbox.min.y;
@@ -656,7 +689,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     // ── Ghost drag-to-place state ─────────────────────────────────────────────
     let ghostGroup: Group | null = null;
-    let ghostLoaded = false;
     // Ground offset cached at load time: distance to lift the group so its bottom is at y=0
     let ghostGroundOffset = 0;
 
@@ -672,7 +704,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         });
         ghostGroup = null;
       }
-      ghostLoaded = false;
       ghostLoadTriggerRef.current = null;
       ghostPendingGroupRef.current = null;
     };
@@ -1068,10 +1099,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       tickPortals();
       renderer.render(scene, camera);
       updateTVOverlay();
-      // Run script animate callbacks from code-gen sandbox.
+      // Update NPC animation mixers and script animate callbacks.
+      // Both need a delta — compute once and share.
+      const ffDelta = clock.getDelta();
+      for (const [, grp] of npcGroupsRef.current) {
+        const m = grp.userData.mixer as AnimationMixer | undefined;
+        if (m) m.update(ffDelta);
+      }
       if (scriptAnimCallbacks.length > 0) {
-        const dt = clock.getDelta();
-        for (const cb of scriptAnimCallbacks) { try { cb(dt); } catch { /* ignore */ } }
+        for (const cb of scriptAnimCallbacks) { try { cb(ffDelta); } catch { /* ignore */ } }
       }
       if (splatInitialized && freeFlyFrameCount % 10 === 0) {
         const cx = camera.position.x;
@@ -1258,23 +1294,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         // the model is lying flat. Threshold 0.75 is calibrated in the placement skill
         // to catch Joyce (ratio ≈ 0.66) without triggering on upright models.
         // Reset ALL transforms: GLTF root scene may have baked-in position/rotation that
-        // would corrupt bbox measurements if not cleared first.
+        // Reset all transforms before measuring — GLTF root may have baked-in offsets
+        // that corrupt bbox measurements if not cleared first.
         group.position.set(0, 0, 0);
         group.rotation.set(0, 0, 0);
         group.scale.setScalar(1);
-        group.updateMatrixWorld(true);
-        const rawBboxNpc = new Box3().setFromObject(group);
-        const rawExtX = rawBboxNpc.max.x - rawBboxNpc.min.x;
-        const rawExtY = rawBboxNpc.max.y - rawBboxNpc.min.y;
-        const rawExtZ = rawBboxNpc.max.z - rawBboxNpc.min.z;
-        const rawMaxExt = Math.max(rawExtX, rawExtY, rawExtZ);
-        if (rawMaxExt > 0.01 && rawExtY < rawMaxExt * 0.75) {
-          if (rawExtX >= rawExtZ) {
-            group.rotation.z = -Math.PI / 2;
-          } else {
-            group.rotation.x = -Math.PI / 2;
-          }
-        }
+        // Orient upright: try all 90° candidates, keep whichever maximises Y/horizontal ratio
+        orientUpright(group);
         // Scale to targetHeight when provided — purely data-driven, no type inference.
         // Cap at 10× to guard against orientation-detection misfires on tiny models.
         let effectiveScale = scale;
@@ -1301,6 +1327,17 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         });
         scene.add(group);
         group.userData.shadowPlane = createContactShadow(group, resolvedPos.y);
+        // Animation setup — plays idle loop when the GLB contains skeletal clips
+        const clips = (group.userData._animations ?? []) as import("three").AnimationClip[];
+        if (clips.length > 0) {
+          const mixer = new AnimationMixer(group);
+          const idleClip = clips.find((c) => /idle/i.test(c.name)) ?? clips[0];
+          const idleAction = mixer.clipAction(idleClip);
+          idleAction.play();
+          group.userData.mixer = mixer;
+          group.userData.animClips = clips;
+          group.userData.activeAction = idleAction;
+        }
         npcGroups.set(obj.objectId, group);
       };
 
@@ -1343,12 +1380,30 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         requestAnimationFrame(step);
       };
 
-      // Play an animation clip on the NPC's AnimationMixer (if the GLB has clips)
+      // Play an animation clip on the NPC's AnimationMixer (if the GLB has clips).
+      // Crossfades from the currently active action when the mixer is set up.
       (window as unknown as Record<string, unknown>).__emoteNpc = (objectId: string, animation: string) => {
         const group = npcGroups.get(objectId);
         if (!group) return;
-        // Store animation name for the render loop to pick up
-        group.userData.pendingAnimation = animation;
+        const mixer = group.userData.mixer as AnimationMixer | undefined;
+        const clips = group.userData.animClips as import("three").AnimationClip[] | undefined;
+        if (!mixer || !clips) {
+          // Model not yet loaded or has no clips — store for when it becomes available
+          group.userData.pendingAnimation = animation;
+          return;
+        }
+        const NAME_MAP: Record<string, string> = { idle: "Idle", walk: "Walk", wave: "Wave", bow: "Bow" };
+        const clipName = NAME_MAP[animation.toLowerCase()] ?? animation;
+        const clip = clips.find((c) => c.name.toLowerCase() === clipName.toLowerCase()) ?? clips[0];
+        const prev = group.userData.activeAction as import("three").AnimationAction | undefined;
+        const next = mixer.clipAction(clip);
+        if (prev && prev !== next) {
+          next.reset().fadeIn(0.3);
+          prev.fadeOut(0.3);
+        } else {
+          next.reset().play();
+        }
+        group.userData.activeAction = next;
       };
 
       // Load all NPCs that exist at physics init time.
@@ -1637,6 +1692,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           }
         }
         physicsLoopFrame++;
+
+        // Update NPC animation mixers
+        for (const [, grp] of npcGroups) {
+          const m = grp.userData.mixer as AnimationMixer | undefined;
+          if (m) m.update(delta);
+        }
 
         // Run script animate callbacks from code-gen sandbox.
         if (scriptAnimCallbacks.length > 0) {
