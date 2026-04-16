@@ -82,11 +82,8 @@ export function App() {
   const [selected, setSelected] = useState<SelectedObject | null>(null);
   const [activeViewpoint, setActiveViewpoint] = useState<Viewpoint | null>(null);
   const streamingBuffer = useRef("");
-  // World speech feed — queue of recent NPC speeches shown as subtitles regardless of player proximity
+  // World speech feed — queue of recent NPC speeches shown as head-top bubbles
   const [speechFeed, setSpeechFeed] = useState<Array<{ id: string; npcId: string; npcName: string; text: string }>>([]);
-  // Legacy single-entry for SplatViewer proximity bubble (only shown near the NPC)
-  const [npcSpeech, setNpcSpeech] = useState<{ npcId: string; npcName: string; text: string } | null>(null);
-  const npcSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showNpcDrawer, setShowNpcDrawer] = useState(false);
   const [pendingNpc, setPendingNpc] = useState<PendingNpc | null>(null);
   const [showPropDrawer, setShowPropDrawer] = useState(false);
@@ -171,6 +168,8 @@ export function App() {
 
   // NPC chat session
   const [npcChatTarget, setNpcChatTarget] = useState<{ objectId: string; name: string } | null>(null);
+  const npcChatTargetRef = useRef<{ objectId: string; name: string } | null>(null);
+  npcChatTargetRef.current = npcChatTarget;
   const [npcChatHistory, setNpcChatHistory] = useState<NpcChatMessage[]>([]);
   const [npcChatPending, setNpcChatPending] = useState(false);
   // Track which NPCs have already greeted this session (key: sceneId:npcId)
@@ -325,17 +324,15 @@ export function App() {
       } else if (event.type === "npc_speech") {
         // Ignore events from a different scene (e.g. heartbeat for a non-active scene)
         if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
-        // Feed into the chat overlay if open, otherwise show the legacy speech bubble
-        setNpcChatPending(false);
-        setNpcChatHistory((prev) => [...prev, { role: "npc", text: event.text, npcName: event.npcName }]);
-        // Add to world speech feed (shown as subtitles regardless of player proximity)
+        // Only inject into chat overlay if this NPC is the current chat target
+        if (npcChatTargetRef.current?.objectId === event.npcId) {
+          setNpcChatPending(false);
+          setNpcChatHistory((prev) => [...prev, { role: "npc", text: event.text, npcName: event.npcName }]);
+        }
+        // All NPC speech goes to the world speech feed (head-top bubbles)
         const feedId = `${event.npcId}_${Date.now()}`;
         setSpeechFeed((prev) => [...prev.slice(-4), { id: feedId, npcId: event.npcId, npcName: event.npcName, text: event.text }]);
         setTimeout(() => setSpeechFeed((prev) => prev.filter((e) => e.id !== feedId)), 8000);
-        // Legacy proximity bubble
-        if (npcSpeechTimerRef.current) clearTimeout(npcSpeechTimerRef.current);
-        setNpcSpeech({ npcId: event.npcId, npcName: event.npcName, text: event.text });
-        npcSpeechTimerRef.current = setTimeout(() => setNpcSpeech(null), 8000);
 
       } else if (event.type === "npc_move") {
         if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
@@ -859,7 +856,6 @@ export function App() {
               onInteract={handleSplatInteract}
               onNpcApproach={handleNpcApproach}
               onNpcLeave={handleNpcLeave}
-              npcSpeech={npcSpeech}
               speechFeed={speechFeed}
               npcPlacementPending={pendingNpc !== null}
               onNpcPlace={(pos) => {                if (!pendingNpc || !scene) return;
