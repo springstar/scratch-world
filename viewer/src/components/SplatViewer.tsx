@@ -106,7 +106,10 @@ interface Props {
   onPlacementRequest?: (text: string) => void;
   onNpcApproach?: (objectId: string, name: string) => void;
   onNpcLeave?: () => void;
+  /** @deprecated use speechFeed instead */
   npcSpeech?: { npcId: string; npcName: string; text: string } | null;
+  /** Per-NPC speech entries shown as head-top bubbles, keyed by unique id, auto-expire in App.tsx */
+  speechFeed?: Array<{ id: string; npcId: string; npcName: string; text: string }>;
   npcPlacementPending?: boolean;
   onNpcPlace?: (pos: { x: number; y: number; z: number }) => void;
   onNpcPlaceCancel?: () => void;
@@ -130,7 +133,7 @@ interface Props {
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef, ghostModelUrl, ghostModelScale }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef, ghostModelUrl, ghostModelScale }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -156,6 +159,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const npcPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
   // NPC Three.js groups — populated by both the physics path and the no-physics fallback.
   const npcGroupsRef = useRef<Map<string, import("three").Group>>(new Map());
+  // Three.js camera — set once after camera creation, used for 3D→2D bubble projection.
+  const cameraRef = useRef<PerspectiveCamera | null>(null);
   // Prop world positions — keyed by objectId; used for prop proximity detection.
   const propPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
   const onPlacementRequestRef = useRef(onPlacementRequest);
@@ -194,6 +199,43 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   tvContainerRefRef.current = tvContainerRef;
   const nearPortalIdRef = useRef<string | null>(null);
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
+
+  // Projected screen positions of NPC heads, updated ~30fps via RAF for speech bubble rendering.
+  const [bubblePositions, setBubblePositions] = useState<Map<string, { x: number; y: number }>>(new Map());
+
+  useEffect(() => {
+    let raf = 0;
+    let lastTick = 0;
+    const TICK_INTERVAL = 33; // ~30fps
+    const pos3 = new Vector3();
+    const canvasEl = canvasRef.current;
+
+    function tick(now: number) {
+      raf = requestAnimationFrame(tick);
+      if (now - lastTick < TICK_INTERVAL) return;
+      lastTick = now;
+      const cam = cameraRef.current;
+      const groups = npcGroupsRef.current;
+      if (!cam || groups.size === 0 || !canvasEl) return;
+      const w = canvasEl.clientWidth;
+      const h = canvasEl.clientHeight;
+      const next = new Map<string, { x: number; y: number }>();
+      for (const [id, group] of groups) {
+        // Project head position: group world position + ~1.8m for head-top
+        pos3.setFromMatrixPosition(group.matrixWorld);
+        pos3.y += 1.8;
+        const ndc = pos3.clone().project(cam);
+        // Skip NPCs behind camera
+        if (ndc.z > 1) continue;
+        const sx = (ndc.x * 0.5 + 0.5) * w;
+        const sy = (-ndc.y * 0.5 + 0.5) * h;
+        next.set(id, { x: sx, y: sy });
+      }
+      setBubblePositions(next);
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // Ghost drag-to-place: when placement starts, begin loading the model immediately.
   // We track mouse position via a window-level listener (not canvas) so it works
@@ -312,6 +354,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     const camera = new PerspectiveCamera(65, canvas.clientWidth / canvas.clientHeight, 0.01, 1000);
     camera.position.set(0, 1.7, 0);
+    cameraRef.current = camera;
 
     // Calibration helper: stand in front of the TV and call window.__markTV() in the console.
     // Saves the estimated TV world position + screen dimensions to localStorage so the overlay
@@ -2138,25 +2181,49 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         </div>
       )}
 
-      {/* NPC speech bubble — shown for any NPC speech (player-triggered or NPC-to-NPC) */}
-      {npcSpeech && (
-        <div style={{
-          position: "absolute", bottom: 160, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(10,10,30,0.88)", backdropFilter: "blur(8px)",
-          border: "1px solid rgba(120,160,255,0.3)",
-          borderRadius: 12, padding: "12px 18px",
-          color: "rgba(200,220,255,0.95)",
-          fontFamily: "system-ui, -apple-system, sans-serif",
-          fontSize: 14, zIndex: 15,
-          maxWidth: 360, textAlign: "center", lineHeight: 1.6,
-          pointerEvents: "none",
-        }}>
-          <div style={{ fontSize: 12, color: "rgba(160,180,255,0.7)", marginBottom: 6 }}>
-            {npcSpeech.npcName}
+      {/* NPC head-top speech bubbles — one per NPC, anchored to projected head position */}
+      {speechFeed && speechFeed.map((entry) => {
+        const pos = bubblePositions.get(entry.npcId);
+        if (!pos) return null;
+        return (
+          <div
+            key={entry.id}
+            style={{
+              position: "absolute",
+              left: pos.x,
+              top: pos.y,
+              transform: "translate(-50%, -100%)",
+              background: "rgba(10,10,30,0.90)",
+              backdropFilter: "blur(8px)",
+              border: "1px solid rgba(120,160,255,0.35)",
+              borderRadius: 10,
+              padding: "7px 12px",
+              color: "rgba(200,220,255,0.95)",
+              fontFamily: "system-ui, -apple-system, sans-serif",
+              fontSize: 13,
+              zIndex: 15,
+              maxWidth: 220,
+              textAlign: "center",
+              lineHeight: 1.5,
+              pointerEvents: "none",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            <div style={{ fontSize: 11, color: "rgba(160,180,255,0.75)", marginBottom: 4, fontWeight: 600 }}>
+              {entry.npcName}
+            </div>
+            {entry.text}
+            {/* Tail pointing down */}
+            <div style={{
+              position: "absolute", bottom: -7, left: "50%", transform: "translateX(-50%)",
+              width: 0, height: 0,
+              borderLeft: "7px solid transparent",
+              borderRight: "7px solid transparent",
+              borderTop: "7px solid rgba(10,10,30,0.90)",
+            }} />
           </div>
-          {npcSpeech.text}
-        </div>
-      )}
+        );
+      })}
 
       {/* Crosshair — shown while walking (pointer-locked) */}
       {physicsReady && status === "ready" && isLocked && !placementMode && (

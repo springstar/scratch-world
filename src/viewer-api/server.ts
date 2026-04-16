@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
@@ -66,7 +68,22 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 
 	app.options("*", (c) => c.body(null, 204));
 
-	// Static file serving for uploaded panoramas and locally-cached splats
+	// Static file serving for uploaded panoramas and locally-cached splats.
+	// Rigged-model fallback: if a rigged GLB is missing (e.g. Blender not installed),
+	// redirect to the original unrigged file in uploads/generated/.
+	app.get("/uploads/rigged/:filename", async (c, next) => {
+		const filename = c.req.param("filename");
+		const riggedPath = join(projectRoot, "uploads", "rigged", filename);
+		try {
+			await access(riggedPath);
+			// File exists — let the static middleware handle it
+			return next();
+		} catch {
+			// File missing — redirect to unrigged equivalent
+			const unrigged = filename.replace(/_rigged\.glb$/, ".glb");
+			return c.redirect(`/uploads/generated/${unrigged}`, 302);
+		}
+	});
 	app.use("/uploads/*", serveStatic({ root: projectRoot }));
 
 	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus, sessionManager));

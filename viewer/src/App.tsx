@@ -569,8 +569,6 @@ export function App() {
       // Route NPC interactions to the dedicated NPC chat overlay
       const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
       if (obj?.type === "npc") {
-        // Release pointer lock so the user can type in the chat overlay
-        if (document.pointerLockElement) document.exitPointerLock();
         const npcName = obj.name;
         // Open overlay fresh; clear any previous history for this NPC
         setNpcChatTarget({ objectId, name: npcName });
@@ -787,7 +785,6 @@ export function App() {
       if (pendingProp !== null || pendingNpc !== null) return;
       const key = `${scene.sceneId}:${objectId}`;
       // Open chat overlay for any new NPC (even re-approaches after leaving)
-      if (document.pointerLockElement) document.exitPointerLock();
       setNpcChatTarget({ objectId, name });
       setNpcChatHistory([]);
       setNpcChatPending(false);
@@ -859,6 +856,7 @@ export function App() {
               onNpcApproach={handleNpcApproach}
               onNpcLeave={handleNpcLeave}
               npcSpeech={npcSpeech}
+              speechFeed={speechFeed}
               npcPlacementPending={pendingNpc !== null}
               onNpcPlace={(pos) => {                if (!pendingNpc || !scene) return;
                 const npcSnapshot = pendingNpc;
@@ -1011,32 +1009,6 @@ export function App() {
           <>
             <ViewpointBar viewpoints={scene.sceneData.viewpoints} onSelect={handleViewpointSelect} />
             <NarrativeOverlay lines={narrativeLines} isStreaming={isStreaming} />
-            {/* World speech feed — subtitles for NPC-to-NPC dialogue visible to the player */}
-            {speechFeed.length > 0 && (
-              <div style={{
-                position: "absolute", bottom: 72, left: "50%", transform: "translateX(-50%)",
-                display: "flex", flexDirection: "column", gap: 6, alignItems: "center",
-                pointerEvents: "none", zIndex: 90,
-                maxWidth: 480, width: "calc(100% - 32px)",
-              }}>
-                {speechFeed.map((entry) => (
-                  <div key={entry.id} style={{
-                    background: "rgba(8,6,20,0.82)",
-                    backdropFilter: "blur(10px)",
-                    border: "1px solid rgba(120,100,255,0.22)",
-                    borderRadius: 10,
-                    padding: "6px 14px",
-                    textAlign: "center",
-                    fontFamily: "system-ui, -apple-system, sans-serif",
-                  }}>
-                    <span style={{ fontSize: 11, color: "rgba(160,140,255,0.8)", fontWeight: 600, marginRight: 6 }}>
-                      {entry.npcName}
-                    </span>
-                    <span style={{ fontSize: 13, color: "rgba(210,220,255,0.92)" }}>{entry.text}</span>
-                  </div>
-                ))}
-              </div>
-            )}
             {selected && (
               <InteractionPrompt
                 objectName={selected.name}
