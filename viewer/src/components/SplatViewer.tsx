@@ -1357,53 +1357,78 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       (window as unknown as Record<string, unknown>).__loadSceneNpc = loadSceneNpc;
       (window as unknown as Record<string, unknown>).__removeSceneNpc = removeSceneNpc;
 
-      // Move an NPC's group to a new world position (interpolation via animateNpcMove)
-      (window as unknown as Record<string, unknown>).__moveNpc = (objectId: string, pos: { x: number; y: number; z: number }) => {
-        const group = npcGroups.get(objectId);
-        if (!group) return;
-        npcPositions.set(objectId, pos);
-        // Animate movement over ~1.5s by updating position each frame
-        const startPos = group.position.clone();
-        const endPos = { x: pos.x, y: group.position.y, z: pos.z };
-        const durationMs = 1500;
-        const startTime = performance.now();
-        const step = () => {
-          const t = Math.min((performance.now() - startTime) / durationMs, 1);
-          const newX = startPos.x + (endPos.x - startPos.x) * t;
-          const newZ = startPos.z + (endPos.z - startPos.z) * t;
-          group.position.set(newX, endPos.y, newZ);
-          // Keep contact shadow centred under the group as it moves
-          const shadow = group.userData.shadowPlane as Mesh | undefined;
-          if (shadow) { shadow.position.x = newX; shadow.position.z = newZ; }
-          if (t < 1) requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-      };
-
-      // Play an animation clip on the NPC's AnimationMixer (if the GLB has clips).
-      // Crossfades from the currently active action when the mixer is set up.
-      (window as unknown as Record<string, unknown>).__emoteNpc = (objectId: string, animation: string) => {
-        const group = npcGroups.get(objectId);
-        if (!group) return;
+      // Shared animation helper used by __moveNpc and __emoteNpc
+      const playNpcAnimation = (group: import("three").Group, animation: string) => {
         const mixer = group.userData.mixer as AnimationMixer | undefined;
         const clips = group.userData.animClips as import("three").AnimationClip[] | undefined;
-        if (!mixer || !clips) {
-          // Model not yet loaded or has no clips — store for when it becomes available
-          group.userData.pendingAnimation = animation;
-          return;
-        }
+        if (!mixer || !clips) { group.userData.pendingAnimation = animation; return; }
         const NAME_MAP: Record<string, string> = { idle: "Idle", walk: "Walk", wave: "Wave", bow: "Bow" };
         const clipName = NAME_MAP[animation.toLowerCase()] ?? animation;
         const clip = clips.find((c) => c.name.toLowerCase() === clipName.toLowerCase()) ?? clips[0];
         const prev = group.userData.activeAction as import("three").AnimationAction | undefined;
         const next = mixer.clipAction(clip);
-        if (prev && prev !== next) {
-          next.reset().fadeIn(0.3);
-          prev.fadeOut(0.3);
-        } else {
-          next.reset().play();
-        }
+        if (prev && prev !== next) { next.reset().fadeIn(0.3); prev.fadeOut(0.3); }
+        else { next.reset().play(); }
         group.userData.activeAction = next;
+      };
+
+      // Move an NPC to a new world position.
+      // Sequence: 1) turn to face target (0.3 s), 2) walk animation + translate, 3) idle on arrival.
+      // Speed: ~1.2 m/s (walking pace). Minimum distance: 0.1 m — skip if already close.
+      (window as unknown as Record<string, unknown>).__moveNpc = (objectId: string, pos: { x: number; y: number; z: number }) => {
+        const group = npcGroups.get(objectId);
+        if (!group) return;
+        npcPositions.set(objectId, pos);
+
+        const startPos = group.position.clone();
+        const dx = pos.x - startPos.x;
+        const dz = pos.z - startPos.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < 0.1) return;
+
+        // Target yaw: NPC models face -Z by default (standard glTF forward).
+        // atan2(dx, dz) gives the angle from +Z toward the target; negate for Y-up left-hand.
+        const targetYaw = Math.atan2(dx, dz);
+        const startYaw = group.rotation.y;
+
+        // Normalise angle delta to [-π, π]
+        let dyaw = ((targetYaw - startYaw) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+
+        const TURN_MS = 300;
+        const walkDurationMs = (dist / 1.2) * 1000;
+        const turnStart = performance.now();
+
+        // Phase 1: turn to face the target
+        const turn = () => {
+          const t = Math.min((performance.now() - turnStart) / TURN_MS, 1);
+          group.rotation.y = startYaw + dyaw * t;
+          if (t < 1) { requestAnimationFrame(turn); return; }
+          // Phase 2: walk toward target
+          group.rotation.y = targetYaw;
+          playNpcAnimation(group, "walk");
+          const walkStart = performance.now();
+          const step = () => {
+            const tw = Math.min((performance.now() - walkStart) / walkDurationMs, 1);
+            const newX = startPos.x + dx * tw;
+            const newZ = startPos.z + dz * tw;
+            group.position.set(newX, pos.y !== undefined ? pos.y : startPos.y, newZ);
+            const shadow = group.userData.shadowPlane as Mesh | undefined;
+            if (shadow) { shadow.position.x = newX; shadow.position.z = newZ; }
+            if (tw < 1) { requestAnimationFrame(step); return; }
+            // Phase 3: arrived — switch to idle
+            playNpcAnimation(group, "idle");
+          };
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(turn);
+      };
+
+      // Play an animation clip on the NPC's AnimationMixer (if the GLB has clips).
+      // Crossfades from the currently active action with a 0.3 s blend.
+      (window as unknown as Record<string, unknown>).__emoteNpc = (objectId: string, animation: string) => {
+        const group = npcGroups.get(objectId);
+        if (!group) return;
+        playNpcAnimation(group, animation);
       };
 
       // Load all NPCs that exist at physics init time.
