@@ -570,6 +570,7 @@ export function App() {
       const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
       if (obj?.type === "npc") {
         const npcName = obj.name;
+        if (document.pointerLockElement) document.exitPointerLock();
         // Open overlay fresh; clear any previous history for this NPC
         setNpcChatTarget({ objectId, name: npcName });
         setNpcChatHistory([]);
@@ -785,6 +786,9 @@ export function App() {
       if (pendingProp !== null || pendingNpc !== null) return;
       const key = `${scene.sceneId}:${objectId}`;
       // Open chat overlay for any new NPC (even re-approaches after leaving)
+      // Exit pointer lock so the chat input can receive focus — browser does not
+      // allow text input focus while pointer lock is active.
+      if (document.pointerLockElement) document.exitPointerLock();
       setNpcChatTarget({ objectId, name });
       setNpcChatHistory([]);
       setNpcChatPending(false);

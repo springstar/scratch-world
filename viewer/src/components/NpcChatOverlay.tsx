@@ -19,9 +19,9 @@ export function NpcChatOverlay({ npcName, history, pending, onSend, onClose }: P
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Auto-focus input on mount
+  // Auto-focus input on mount — delay slightly to let pointer lock fully release
   useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus(), 80);
+    const t = setTimeout(() => inputRef.current?.focus(), 150);
     return () => clearTimeout(t);
   }, []);
 
