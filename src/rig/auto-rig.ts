@@ -31,11 +31,11 @@ export async function autoRig(meshPath: string, outputPath: string): Promise<voi
 
 	const rigDir = fileURLToPath(new URL(".", import.meta.url));
 	const scriptPath = `${rigDir}rig_mesh.py`;
-	// Accept either .blend (preferred) or .glb as the template
-	const templateBlend = `${rigDir}base_humanoid.blend`;
+	// Prefer .glb (UAL2_Standard — has animation actions); fall back to .blend
 	const templateGlb = `${rigDir}base_humanoid.glb`;
+	const templateBlend = `${rigDir}base_humanoid.blend`;
 	const { existsSync } = await import("node:fs");
-	const templatePath = existsSync(templateBlend) ? templateBlend : templateGlb;
+	const templatePath = existsSync(templateGlb) ? templateGlb : templateBlend;
 
 	let lastError: unknown;
 	for (const bin of BLENDER_CANDIDATES) {
