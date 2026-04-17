@@ -1656,8 +1656,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
-        const bbox = new Box3().setFromObject(group);
-        const groundOffset = -bbox.min.y * effectiveScale;
+        // meshOnlyBoundingBox excludes Bone nodes; result is world space so groundOffset = -min.y directly.
+        const bbox = meshOnlyBoundingBox(group);
+        const groundOffset = -bbox.min.y;
         group.position.set(pos.x, pos.y + groundOffset, pos.z);
         propPositionsRef.current.set(obj.objectId, { x: group.position.x, y: group.position.y, z: group.position.z });
         // Auto-calibrate TV overlay: if this prop has a screen skill (video-player or code-gen),
@@ -1665,9 +1666,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         // Uses the bounding box width/height of the loaded model as the screen dimensions.
         const skillName = (obj.metadata.skill as { name?: string } | undefined)?.name;
         if (skillName === "video-player" || skillName === "code-gen") {
-          const bb = new Box3().setFromObject(group);
+          // Reuse the mesh-only bbox (already world space) so TV screen center tracks actual geometry.
           const size = new Vector3();
-          bb.getSize(size);
+          bbox.getSize(size);
           const tvCal = {
             pos: { x: group.position.x, y: group.position.y + size.y * 0.5, z: group.position.z },
             w: Math.max(size.x, size.z),
