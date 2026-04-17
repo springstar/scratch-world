@@ -97,11 +97,6 @@ export function App() {
   // Behavior skill overlay
   const [behaviorDisplay, setBehaviorDisplay] = useState<DisplayConfig | null>(null);
 
-  // TV in-world video overlay — iframe positioned over the TV screen in 3D space.
-  // tvDisplay holds the resolved URL; the container div is positioned by SplatViewer each frame.
-  const [tvDisplay, setTvDisplay] = useState<DisplayConfig | null>(null);
-  const tvContainerRef = useRef<HTMLDivElement>(null);
-
   // Proximity-triggered prop interaction panel (e.g. TV remote control)
   const [activePropPanel, setActivePropPanel] = useState<{
     objectId: string;
@@ -389,46 +384,6 @@ export function App() {
     return () => window.removeEventListener("world:display", handleDisplay);
   }, []);
 
-  // world:tv-content events fired by WorldAPI world.setTvContent(html)
-  // Renders HTML directly on the TV screen overlay (screen-space projected over the prop).
-  useEffect(() => {
-    const handleTvContent = (e: Event) => {
-      const { html } = (e as CustomEvent<{ html: string | null }>).detail;
-      if (html === null) {
-        setTvDisplay(null);
-        setScriptDisplay(null);
-      } else {
-        const sceneId = sceneRef.current?.sceneId ?? "";
-        const calKey = `tv_calibration_${sceneId}`;
-        // If calibration not yet written, try to derive it from sceneObjects on the fly
-        if (!localStorage.getItem(calKey) && sceneRef.current) {
-          const screenObj = sceneRef.current.sceneData.objects.find((o) => {
-            const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
-            if (skill !== "video-player" && skill !== "code-gen") return false;
-            if (o.metadata?.modelUrl) return false;
-            const p = o.position;
-            return p && (Math.abs(p.x) + Math.abs(p.y) + Math.abs(p.z)) > 0.01;
-          });
-          if (screenObj) {
-            const p = screenObj.position;
-            localStorage.setItem(calKey, JSON.stringify({ pos: { x: p.x, y: p.y, z: p.z }, w: 1.5, h: 0.85 }));
-          }
-        }
-        if (localStorage.getItem(calKey)) {
-          // Calibrated: render on the physical TV screen in 3D space
-          setTvDisplay({ type: "html", content: html });
-          setBehaviorDisplay(null);
-          setScriptDisplay(null);
-        } else {
-          // Not calibrated: fall back to centered panel
-          setScriptDisplay(html);
-        }
-      }
-    };
-    window.addEventListener("world:tv-content", handleTvContent);
-    return () => window.removeEventListener("world:tv-content", handleTvContent);
-  }, []);
-
   // Chat send
   const handleSend = useCallback(
     async (text: string, images?: PendingImage[]) => {
@@ -664,23 +619,7 @@ export function App() {
             playerPosition,
           });
           if (result.display?.type === "tv") {
-            const sceneId = scene.sceneId;
-            const calKey = `tv_calibration_${sceneId}`;
-            // Always refresh calibration from the current object position so corrections take effect
-            const screenObj = sceneRef.current?.sceneData.objects.find((o) => o.objectId === objectId)
-              ?? sceneRef.current?.sceneData.objects.find((o) => {
-                const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
-                if (skill !== "tv-display" && skill !== "video-player" && skill !== "code-gen") return false;
-                if (o.metadata?.modelUrl) return false;
-                const p = o.position;
-                return p && (Math.abs(p.x) + Math.abs(p.y) + Math.abs(p.z)) > 0.01;
-              });
-            if (screenObj) {
-              const p = screenObj.position;
-              localStorage.setItem(calKey, JSON.stringify({ pos: { x: p.x, y: p.y, z: p.z }, w: 1.5, h: 0.85 }));
-            }
-            setTvDisplay({ type: "html", content: result.display.content, title: result.display.title });
-            setBehaviorDisplay(null);
+            setBehaviorDisplay({ type: "html", content: result.display.content, title: result.display.title });
           } else if (result.display) {
             setBehaviorDisplay(result.display);
           }
@@ -735,16 +674,7 @@ export function App() {
       // video-player skill: resolve display client-side
       const title = skillConfig.title as string | undefined;
       const display = resolveVideoDisplay(value, title ?? name);
-      // If the TV has been calibrated (position saved in localStorage), show video
-      // directly on the TV screen in 3D space.  Otherwise fall back to the modal overlay.
-      const calKey = `tv_calibration_${scene.sceneId}`;
-      if (localStorage.getItem(calKey)) {
-        setTvDisplay(display);
-        setBehaviorDisplay(null);
-      } else {
-        setBehaviorDisplay(display);
-        setTvDisplay(null);
-      }
+      setBehaviorDisplay(display);
       setActivePropPanel(null);
     },
     [activePropPanel, scene, sessionId],
@@ -939,7 +869,6 @@ export function App() {
               onPortalLeave={handlePortalLeave}
               onPropApproach={handlePropApproach}
               onPropLeave={handlePropLeave}
-              tvContainerRef={tvContainerRef}
               ghostModelUrl={pendingNpc?.modelUrl ?? pendingProp?.modelUrl ?? undefined}
               ghostModelScale={pendingNpc?.scale ?? pendingProp?.scale ?? 1}
               onPlacementRequest={(text) => { void handleSend(text); }}
@@ -1163,80 +1092,8 @@ export function App() {
         <BehaviorOverlay display={behaviorDisplay} onClose={() => setBehaviorDisplay(null)} />
       )}
 
-      {/* TV in-world video overlay — SplatViewer sets position/size each frame via direct DOM.
-          Rendered always when tvDisplay is set; hidden by SplatViewer until TV is on screen. */}
-      {tvDisplay && (
-        <div
-          ref={tvContainerRef}
-          style={{
-            position: "fixed",
-            display: "none", // SplatViewer controls this
-            zIndex: 450,
-            background: "#000",
-            overflow: "hidden",
-            boxShadow: "0 0 0 2px rgba(120,80,255,0.5), 0 8px 32px rgba(0,0,0,0.8)",
-          }}
-        >
-          {tvDisplay.type === "iframe" && (
-            <iframe
-              src={tvDisplay.url}
-              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
-              allow="autoplay; fullscreen"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          )}
-          {tvDisplay.type === "html" && (
-            // eslint-disable-next-line react/no-danger
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "#0a0820",
-                color: "rgba(210,195,255,0.95)",
-                fontFamily: "system-ui, -apple-system, sans-serif",
-                fontSize: 18,
-                padding: 16,
-                boxSizing: "border-box",
-                textAlign: "center",
-              }}
-              dangerouslySetInnerHTML={{ __html: tvDisplay.content }}
-            />
-          )}
-          {tvDisplay.type === "video" && (
-            <video
-              src={tvDisplay.url}
-              controls
-              autoPlay
-              style={{ width: "100%", height: "100%", display: "block", background: "#000" }}
-            />
-          )}
-          <button
-            type="button"
-            onClick={() => { setTvDisplay(null); setActivePropPanel(null); }}
-            style={{
-              position: "absolute",
-              top: 4,
-              right: 4,
-              background: "rgba(0,0,0,0.7)",
-              border: "none",
-              color: "#fff",
-              fontSize: 16,
-              width: 24,
-              height: 24,
-              borderRadius: 4,
-              cursor: "pointer",
-              lineHeight: 1,
-              zIndex: 1,
-            }}
-          >×</button>
-        </div>
-      )}
-
-      {/* Proximity prop panel — shown when player approaches an interactive prop (e.g. TV) */}
-      {activePropPanel && !behaviorDisplay && !tvDisplay && (
+      {/* Proximity prop panel — shown when player approaches an interactive prop */}
+      {activePropPanel && !behaviorDisplay && (
         <PropInteractionPanel
           objectName={activePropPanel.name}
           skillName={activePropPanel.skillName}

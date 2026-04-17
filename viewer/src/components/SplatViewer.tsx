@@ -151,8 +151,6 @@ interface Props {
   onPortalLeave?: () => void;
   onPropApproach?: (objectId: string, name: string, skillName: string, skillConfig: Record<string, unknown>) => void;
   onPropLeave?: () => void;
-  /** Ref to the TV video overlay container div — SplatViewer updates its position/size each frame via direct DOM. */
-  tvContainerRef?: { current: HTMLDivElement | null };
   /** Model URL for drag-to-place ghost preview during NPC/prop placement. */
   ghostModelUrl?: string;
   ghostModelScale?: number;
@@ -161,7 +159,7 @@ interface Props {
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef, ghostModelUrl, ghostModelScale }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, ghostModelUrl, ghostModelScale }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -227,8 +225,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onPropApproachRef.current = onPropApproach;
   const onPropLeaveRef = useRef(onPropLeave);
   onPropLeaveRef.current = onPropLeave;
-  const tvContainerRefRef = useRef(tvContainerRef);
-  tvContainerRefRef.current = tvContainerRef;
   const nearPortalIdRef = useRef<string | null>(null);
   const isTouch = typeof window !== "undefined" && "ontouchstart" in window;
 
@@ -387,61 +383,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const camera = new PerspectiveCamera(65, canvas.clientWidth / canvas.clientHeight, 0.01, 1000);
     camera.position.set(0, 1.7, 0);
     cameraRef.current = camera;
-
-    // Calibration helper: stand in front of the TV and call window.__markTV() in the console.
-    // Saves the estimated TV world position + screen dimensions to localStorage so the overlay
-    // is projected onto the screen each frame.  Defaults: 1.5 m width, 0.85 m height.
-    const calKey = `tv_calibration_${sceneId ?? ""}`;
-    (window as unknown as Record<string, unknown>).__markTV = (w = 1.5, h = 0.85) => {
-      // Estimate TV center: 1.5 m ahead of the camera at eye height
-      const fwdTmp = new Vector3();
-      camera.getWorldDirection(fwdTmp);
-      fwdTmp.y = 0;
-      fwdTmp.normalize();
-      const tvCenter = camera.position.clone().add(fwdTmp.multiplyScalar(1.5));
-      tvCenter.y = camera.position.y - 0.1; // slight downward — TV screen center at eye level
-      const cal = { pos: { x: tvCenter.x, y: tvCenter.y, z: tvCenter.z }, w, h };
-      localStorage.setItem(calKey, JSON.stringify(cal));
-      console.log("[markTV] saved:", cal);
-    };
-    // Debug helper: call window.__tvDebug() to log current calibration and projected screen position.
-    (window as unknown as Record<string, unknown>).__tvDebug = () => {
-      const calStr = localStorage.getItem(calKey);
-      if (!calStr) { console.log("[tvDebug] no calibration stored"); return; }
-      const cal = JSON.parse(calStr) as { pos: { x: number; y: number; z: number }, w: number, h: number };
-      const fwdTmp = new Vector3();
-      camera.getWorldDirection(fwdTmp);
-      const toTV = new Vector3(cal.pos.x - camera.position.x, cal.pos.y - camera.position.y, cal.pos.z - camera.position.z);
-      const dot = toTV.dot(fwdTmp);
-      const ndc = new Vector3(cal.pos.x, cal.pos.y, cal.pos.z).project(camera);
-      const cw = canvas!.clientWidth; const ch = canvas!.clientHeight;
-      const px = (ndc.x + 1) / 2 * cw;
-      const py = (1 - ndc.y) / 2 * ch;
-      console.log("[tvDebug] cal:", cal, "\n  dot (>0.05 = visible):", dot.toFixed(3), "\n  NDC:", ndc.x.toFixed(3), ndc.y.toFixed(3), "\n  screen px:", Math.round(px), Math.round(py), "\n  viewport:", cw, "x", ch);
-      console.log("[tvDebug] camPos:", camera.position, "  camFwd:", fwdTmp);
-    };
-
-    // Auto-calibrate TV overlay from sceneObjects: find the first screen-skill object with a
-    // non-zero position (invisible marker placed by the agent). Always overwrite stale calibration.
-    // loadSceneProp covers the GLTF prop case; this handles invisible marker objects.
-    {
-      const screenObj = (sceneObjects ?? []).find((o) => {
-        const skill = (o.metadata?.skill as { name?: string } | undefined)?.name;
-        if (skill !== "video-player" && skill !== "code-gen") return false;
-        if (o.metadata?.modelUrl) return false;
-        // Must have a real (non-zero) position
-        const p = o.position;
-        return p && (Math.abs(p.x) + Math.abs(p.y) + Math.abs(p.z)) > 0.01;
-      });
-      if (screenObj) {
-        const p = screenObj.position;
-        localStorage.setItem(calKey, JSON.stringify({
-          pos: { x: p.x, y: p.y, z: p.z },
-          w: 1.5,
-          h: 0.85,
-        }));
-      }
-    }
 
     const clock = new Clock();
     const sparkRenderer = new SparkRenderer({ renderer, clock, enableLod: true, sortRadial: true });
@@ -1120,40 +1061,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const freeFlyFwd   = new Vector3();
     const freeFlyRight = new Vector3();
     const freeFlyMove  = new Vector3();
-    const tvFwd        = new Vector3(); // reused each frame for TV projection
     let freeFlyFrameCount = 0;
-
-    // Project TV world position onto screen and update the container div's CSS directly.
-    // Reads calibration from localStorage; no-ops if not calibrated or div not mounted.
-    function updateTVOverlay() {
-      const el = tvContainerRefRef.current?.current;
-      if (!el) return;
-      const calStr = localStorage.getItem(calKey);
-      if (!calStr) { el.style.display = "none"; return; }
-      try {
-        const cal = JSON.parse(calStr) as { pos: { x: number; y: number; z: number }, w: number, h: number };
-        // Check TV is in front of camera
-        camera.getWorldDirection(tvFwd);
-        const toTV = new Vector3(cal.pos.x - camera.position.x, cal.pos.y - camera.position.y, cal.pos.z - camera.position.z);
-        if (toTV.dot(tvFwd) <= 0.05) { el.style.display = "none"; return; }
-        const dist = toTV.length();
-        // Project TV center to NDC
-        const tvNDC = new Vector3(cal.pos.x, cal.pos.y, cal.pos.z).project(camera);
-        const cw = canvas!.clientWidth;
-        const ch = canvas!.clientHeight;
-        const cx = (tvNDC.x + 1) / 2 * cw;
-        const cy = (1 - tvNDC.y) / 2 * ch;
-        // Apparent pixel size from angular size
-        const ppm = (ch / 2) / Math.tan((65 * Math.PI / 180) / 2) / dist;
-        const pw = cal.w * ppm;
-        const ph = cal.h * ppm;
-        el.style.display = "block";
-        el.style.left   = `${Math.round(cx - pw / 2)}px`;
-        el.style.top    = `${Math.round(cy - ph / 2)}px`;
-        el.style.width  = `${Math.round(pw)}px`;
-        el.style.height = `${Math.round(ph)}px`;
-      } catch { el.style.display = "none"; }
-    }
 
     function freeFlyLoop() {
       if (!freeFlyActive) return;
@@ -1173,7 +1081,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       }
       tickPortals();
       renderer.render(scene, camera);
-      updateTVOverlay();
       // Update NPC animation mixers and script animate callbacks.
       // Both need a delta — compute once and share.
       const ffDelta = clock.getDelta();
@@ -1661,21 +1568,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const groundOffset = -bbox.min.y;
         group.position.set(pos.x, pos.y + groundOffset, pos.z);
         propPositionsRef.current.set(obj.objectId, { x: group.position.x, y: group.position.y, z: group.position.z });
-        // Auto-calibrate TV overlay: if this prop has a screen skill (video-player or code-gen),
-        // persist its world position as the TV calibration so setTvContent() works without __markTV().
-        // Uses the bounding box width/height of the loaded model as the screen dimensions.
-        const skillName = (obj.metadata.skill as { name?: string } | undefined)?.name;
-        if (skillName === "video-player" || skillName === "code-gen") {
-          // Reuse the mesh-only bbox (already world space) so TV screen center tracks actual geometry.
-          const size = new Vector3();
-          bbox.getSize(size);
-          const tvCal = {
-            pos: { x: group.position.x, y: group.position.y + size.y * 0.5, z: group.position.z },
-            w: Math.max(size.x, size.z),
-            h: size.y,
-          };
-          localStorage.setItem(calKey, JSON.stringify(tvCal));
-        }
         scene.add(group);
         group.updateMatrixWorld(true);
         const bboxWorld = new Box3().setFromObject(group);
@@ -1830,7 +1722,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
         tickPortals();
         renderer.render(scene, camera);
-        updateTVOverlay();
       }
 
       let hasEnteredScene = false;
@@ -1994,8 +1885,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         delete (window as unknown as Record<string, unknown>).__nearbyNpc;
         delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
         onPropLeaveRef.current?.();
-        const tvEl = tvContainerRefRef.current?.current;
-        if (tvEl) tvEl.style.display = "none";
         delete (window as unknown as Record<string, unknown>).__playerPosition;
         delete (window as unknown as Record<string, unknown>).__cameraForward;
         delete (window as unknown as Record<string, unknown>).__spawnProp;
@@ -2169,7 +2058,6 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       delete (window as unknown as Record<string, unknown>).__clickPosition;
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
       delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
-      delete (window as unknown as Record<string, unknown>).__markTV;
       delete (window as unknown as Record<string, unknown>).__worldAPI;
       // Clean up any objects spawned by code-gen scripts.
       for (const obj of scriptSpawnedObjects.values()) scene.remove(obj);

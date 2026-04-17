@@ -28,12 +28,12 @@ function worldToPano(pos: Vec3): { bx: number; by: number } {
 
 function panoToWorld(bx: number, by: number, baseDist = 3.0): Vec3 {
   const azimuth = (bx - 0.5) * 2 * Math.PI;
-  const elevation = (0.5 - by) * Math.PI;
-  const flatDist = baseDist * Math.cos(elevation);
-  const x = Math.sin(azimuth) * flatDist;
-  const z = -Math.cos(azimuth) * flatDist;
-  const y = EYE_HEIGHT + Math.sin(elevation) * baseDist;
-  return { x, y, z };
+  // Y is set to 0 (ground level) — the elevation angle cannot be trusted because
+  // the panorama camera origin does not match the splat world origin. The physics
+  // placement system (resolvePosition / Rapier raycast) resolves the actual height.
+  const x = Math.sin(azimuth) * baseDist;
+  const z = -Math.cos(azimuth) * baseDist;
+  return { x, y: 0, z };
 }
 
 export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, onSkip }: Props) {
