@@ -22,7 +22,7 @@
  */
 
 const KHRONOS = "https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Assets@main/Models";
-const THREEJS = "https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf";
+const THREEJS = "https://cdn.jsdelivr.net/gh/mrdoob/three.js@dev/examples/models/gltf";
 const PH = (id: string) =>
   `https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/${id}/${id}_1k.gltf`;
 

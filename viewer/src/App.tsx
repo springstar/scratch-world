@@ -566,13 +566,10 @@ export function App() {
       // Route NPC interactions to the dedicated NPC chat overlay
       const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
       if (obj?.type === "npc") {
-        const npcName = obj.name;
         if (document.pointerLockElement) document.exitPointerLock();
-        // Open overlay fresh; clear any previous history for this NPC
-        setNpcChatTarget({ objectId, name: npcName });
+        setNpcChatTarget({ objectId, name: obj.name });
         setNpcChatHistory([]);
         setNpcChatPending(false);
-        // action is the interactionHint or "你好" — skip auto-send so the user types first
         return;
       }
       setNarrativeLines([]);
@@ -777,19 +774,13 @@ export function App() {
   );
 
   const handleNpcApproach = useCallback(
-    (objectId: string, name: string) => {
+    (objectId: string, _name: string) => {
       if (!scene) return;
       // Mutual exclusion: suppress NPC approach while any placement is in progress
       if (pendingProp !== null || pendingNpc !== null) return;
       const key = `${scene.sceneId}:${objectId}`;
-      // Open chat overlay for any new NPC (even re-approaches after leaving)
-      // Exit pointer lock so the chat input can receive focus — browser does not
-      // allow text input focus while pointer lock is active.
-      if (document.pointerLockElement) document.exitPointerLock();
-      setNpcChatTarget({ objectId, name });
-      setNpcChatHistory([]);
-      setNpcChatPending(false);
-      // Trigger greeting only once per session
+      // Proximity only triggers a greeting speech bubble — no overlay, no pointer lock exit.
+      // Trigger greeting only once per session.
       if (greetedNpcsRef.current.has(key)) return;
       greetedNpcsRef.current.add(key);
       const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
@@ -802,9 +793,32 @@ export function App() {
     [scene, sessionId, pendingProp, pendingNpc],
   );
 
-  const handleNpcLeave = useCallback(() => {
-    setNpcChatTarget(null);
-  }, []);
+  const handleNpcClick = useCallback(
+    (objectId: string, name: string) => {
+      if (!scene) return;
+      if (pendingProp !== null || pendingNpc !== null) return;
+      // Exit pointer lock so the chat input can receive focus.
+      if (document.pointerLockElement) document.exitPointerLock();
+      setNpcChatTarget({ objectId, name });
+      setNpcChatHistory([]);
+      setNpcChatPending(false);
+    },
+    [scene, pendingProp, pendingNpc],
+  );
+
+  const handlePlayerMove = useCallback(() => {
+    if (npcChatTarget) {
+      setNpcChatTarget(null);
+      setNpcChatHistory([]);
+      setNpcChatPending(false);
+    }
+  }, [npcChatTarget]);
+
+  const handleNpcLeave = useCallback((objectId: string) => {
+    if (!scene) return;
+    const key = `${scene.sceneId}:${objectId}`;
+    greetedNpcsRef.current.delete(key);
+  }, [scene]);
 
   const handlePortalApproach = useCallback(
     (_objectId: string, targetSceneId: string | null, _targetSceneName: string | null) => {
@@ -856,6 +870,8 @@ export function App() {
               onInteract={handleSplatInteract}
               onNpcApproach={handleNpcApproach}
               onNpcLeave={handleNpcLeave}
+              onNpcClick={handleNpcClick}
+              onPlayerMove={handlePlayerMove}
               speechFeed={speechFeed}
               npcPlacementPending={pendingNpc !== null}
               onNpcPlace={(pos) => {                if (!pendingNpc || !scene) return;

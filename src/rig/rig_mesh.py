@@ -1,6 +1,6 @@
 """
 Auto-rig a static humanoid GLB by parenting it to a template armature using
-Blender Automatic Weights.
+Blender Envelope Weights.
 
 Usage (invoked by auto-rig.ts):
   blender --background --python rig_mesh.py -- \
@@ -10,6 +10,11 @@ Usage (invoked by auto-rig.ts):
 
 The template must be a GLB containing an Armature with animation actions.
 UAL2_Standard.glb (Quaternius Universal Animation Library 2) is the default.
+
+Note: ARMATURE_ENVELOPE is used instead of ARMATURE_AUTO because Blender's
+heat weighting algorithm (ARMATURE_AUTO) requires a 3D viewport context that
+is unavailable in headless --background mode. Envelope weighting works
+correctly headless and produces valid skin data for all vertices.
 """
 
 import sys
@@ -54,11 +59,18 @@ def find_meshes(objects: list) -> list:
     return [obj for obj in objects if obj.type == "MESH"]
 
 
-def delete_objects(objects: list) -> None:
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in objects:
-        obj.select_set(True)
-    bpy.ops.object.delete()
+def purge_non_armature_objects() -> None:
+    """Remove all MESH and EMPTY objects from the scene using data-level removal.
+
+    bpy.ops.object.delete() silently fails to remove mesh objects that are
+    referenced as bone custom shapes (e.g. the Icosphere in UAL2_Standard.glb
+    is used as the root bone's custom shape). Using bpy.data.objects.remove()
+    with do_unlink=True forcefully removes the object regardless of users.
+    """
+    for obj in list(bpy.data.objects):
+        if obj.type in ("MESH", "EMPTY"):
+            obj.user_clear()
+            bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def scale_and_center(mesh_objects: list, target_height: float = 1.8) -> None:
@@ -104,13 +116,21 @@ def scale_and_center(mesh_objects: list, target_height: float = 1.8) -> None:
     bpy.ops.object.transform_apply(location=True)
 
 
-def auto_weight_parent(armature, mesh_objects: list) -> None:
+def envelope_weight_parent(armature, mesh_objects: list) -> None:
+    """Parent mesh objects to armature using bone envelope weights.
+
+    Uses ARMATURE_ENVELOPE instead of ARMATURE_AUTO because the heat-weighting
+    algorithm used by ARMATURE_AUTO requires a 3D viewport context, which is
+    unavailable when Blender runs in --background (headless) mode. Envelope
+    weighting computes per-bone influence based on bone distance/radius and
+    works correctly without a display context.
+    """
     bpy.ops.object.select_all(action="DESELECT")
     for obj in mesh_objects:
         obj.select_set(True)
     armature.select_set(True)
     bpy.context.view_layer.objects.active = armature
-    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    bpy.ops.object.parent_set(type="ARMATURE_ENVELOPE")
 
 
 def export_glb(output_path: str) -> None:
@@ -138,14 +158,10 @@ def main() -> None:
         sys.exit(1)
     print(f"[rig_mesh] armature: {armature.name}, actions: {len(bpy.data.actions)}")
 
-    # Delete template character meshes and WGT-/control widgets — keep only the armature
-    junk = [
-        obj for obj in template_objects
-        if obj.type == "MESH" or (obj.type == "EMPTY" and obj.name.startswith("WGT-"))
-    ]
-    if junk:
-        delete_objects(junk)
-        print(f"[rig_mesh] deleted {len(junk)} template mesh/widget objects")
+    # Remove all mesh/empty objects from the template — including bone custom
+    # shapes that bpy.ops.object.delete() cannot remove (e.g. Icosphere).
+    purge_non_armature_objects()
+    print(f"[rig_mesh] scene after template cleanup: {[o.name for o in bpy.data.objects]}")
 
     # ── Step 2: import Hunyuan mesh ───────────────────────────────────────────
     mesh_objects_all = import_glb(args.mesh)
@@ -155,16 +171,22 @@ def main() -> None:
         sys.exit(1)
     print(f"[rig_mesh] imported {len(mesh_objects)} mesh objects from Hunyuan GLB")
 
-    # Delete any armature or empty that came with the mesh GLB (Hunyuan can include these)
-    mesh_junk = [obj for obj in mesh_objects_all if obj.type not in ("MESH",)]
-    if mesh_junk:
-        delete_objects(mesh_junk)
+    # Delete any non-mesh objects imported with the Hunyuan GLB
+    for obj in mesh_objects_all:
+        if obj.type not in ("MESH",):
+            obj.user_clear()
+            bpy.data.objects.remove(obj, do_unlink=True)
 
     # ── Step 3: normalise mesh (1.8 m, feet at origin, centred) ──────────────
     scale_and_center(mesh_objects, target_height=1.8)
 
-    # ── Step 4: auto-weight parent to armature ────────────────────────────────
-    auto_weight_parent(armature, mesh_objects)
+    # ── Step 4: envelope-weight parent to armature ────────────────────────────
+    envelope_weight_parent(armature, mesh_objects)
+
+    # Verify weights were assigned
+    for m in mesh_objects:
+        weighted = sum(1 for v in m.data.vertices if len(v.groups) > 0)
+        print(f"[rig_mesh] {m.name}: {len(m.data.vertices)} verts, {weighted} weighted")
 
     # ── Step 5: export ────────────────────────────────────────────────────────
     export_glb(args.output)

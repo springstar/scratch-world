@@ -26,6 +26,8 @@ import {
   Group,
   DoubleSide,
   AnimationMixer,
+  SkinnedMesh,
+  Bone,
 } from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
@@ -80,7 +82,7 @@ function orientUpright(group: Group): void {
   for (const [rx, rz] of candidates) {
     group.rotation.set(rx, 0, rz);
     group.updateMatrixWorld(true);
-    const bb = new Box3().setFromObject(group);
+    const bb = meshOnlyBoundingBox(group);
     const extY = bb.max.y - bb.min.y;
     const extZ = bb.max.z - bb.min.z;
     const score = extY - extZ;
@@ -91,6 +93,28 @@ function orientUpright(group: Group): void {
     }
   }
   group.rotation.set(bestRx, 0, bestRz);
+}
+
+/**
+ * Compute the bounding box of a group excluding Bone objects.
+ * Box3.setFromObject traverses the full scene graph including skeleton Bone nodes,
+ * which inflates the box well beyond the visible mesh for rigged characters.
+ * This helper only expands the box for Mesh / SkinnedMesh geometry.
+ */
+function meshOnlyBoundingBox(root: Group): Box3 {
+  const box = new Box3();
+  root.updateMatrixWorld(true);
+  root.traverse((obj) => {
+    if (obj instanceof Bone) return;
+    if (obj instanceof Mesh || obj instanceof SkinnedMesh) {
+      const geomBox = new Box3().setFromBufferAttribute(
+        (obj as Mesh).geometry.attributes.position,
+      );
+      geomBox.applyMatrix4(obj.matrixWorld);
+      box.union(geomBox);
+    }
+  });
+  return box;
 }
 
 interface Props {
@@ -105,7 +129,11 @@ interface Props {
   onAddProp?: (entry: AssetEntry, objectId: string) => void;
   onPlacementRequest?: (text: string) => void;
   onNpcApproach?: (objectId: string, name: string) => void;
-  onNpcLeave?: () => void;
+  onNpcLeave?: (objectId: string) => void;
+  /** Fired when player clicks an NPC mesh — opens the chat input overlay. */
+  onNpcClick?: (objectId: string, name: string) => void;
+  /** Fired when the player moves (WASD/joystick) while a chat overlay is open. */
+  onPlayerMove?: () => void;
   /** @deprecated use speechFeed instead */
   npcSpeech?: { npcId: string; npcName: string; text: string } | null;
   /** Per-NPC speech entries shown as head-top bubbles, keyed by unique id, auto-expire in App.tsx */
@@ -133,7 +161,7 @@ interface Props {
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef, ghostModelUrl, ghostModelScale }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, tvContainerRef, ghostModelUrl, ghostModelScale }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -187,6 +215,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onNpcApproachRef.current = onNpcApproach;
   const onNpcLeaveRef = useRef(onNpcLeave);
   onNpcLeaveRef.current = onNpcLeave;
+  const onNpcClickRef = useRef(onNpcClick);
+  onNpcClickRef.current = onNpcClick;
+  const onPlayerMoveRef = useRef(onPlayerMove);
+  onPlayerMoveRef.current = onPlayerMove;
   const onPortalApproachRef = useRef(onPortalApproach);
   onPortalApproachRef.current = onPortalApproach;
   const onPortalLeaveRef = useRef(onPortalLeave);
@@ -1265,7 +1297,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         splatGroundOffset,
         (name) => setPropLoadErrors((prev) => [...prev, name]),
       );
-      if (cancelled) { disposed.value = true; disposePhysicsProps(props, world, scene); world.free(); return; }
+      if (cancelled) { disposed.value = true; disposePhysicsProps(props, world, scene); try { world.free(); } catch { /* Rapier WASM panic guard */ } return; }
 
       // NPC position overrides — maps objectId → resolved world position.
       // SceneObjects start with position {0,0,0}; after a model loads its resolved
@@ -1350,13 +1382,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const targetHeight = typeof obj.metadata.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
         if (targetHeight !== undefined && scale === 1) {
           group.updateMatrixWorld(true);
-          const scaledBbox = new Box3().setFromObject(group);
+          // Use mesh-only bbox to avoid bone nodes inflating the measurement
+          const scaledBbox = meshOnlyBoundingBox(group);
           const modelHeight = scaledBbox.max.y - scaledBbox.min.y;
           if (modelHeight > 0.01) effectiveScale = Math.min(targetHeight / modelHeight, 10);
         }
         group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
-        const bbox = new Box3().setFromObject(group);
+        // Use mesh-only bbox so skeleton Bone nodes don't push min.y below ground
+        const bbox = meshOnlyBoundingBox(group);
         // bbox is in world space — negate min.y directly to sit model on ground.
         const groundOffset = -bbox.min.y;
         group.position.set(resolvedPos.x, resolvedPos.y + groundOffset, resolvedPos.z);
@@ -1428,6 +1462,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const dz = pos.z - startPos.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
         if (dist < 0.1) return;
+
+        // Dismiss chat overlay when the NPC being chatted with starts moving
+        onPlayerMoveRef.current?.();
 
         // Target yaw: NPC models face -Z by default (standard glTF forward).
         // atan2(dx, dz) gives the angle from +Z toward the target; negate for Y-up left-hand.
@@ -1706,6 +1743,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (keys.has("a") || keys.has("arrowleft"))  { dx -= right.x * spd; dz -= right.z * spd; }
         if (keys.has("d") || keys.has("arrowright")) { dx += right.x * spd; dz += right.z * spd; }
 
+        // Notify App when player moves so it can dismiss the chat overlay
+        if ((dx !== 0 || dz !== 0) && onPlayerMoveRef.current) {
+          onPlayerMoveRef.current();
+        }
+
         cc.move(world, { x: dx, z: dz }, delta);
         world.step();
 
@@ -1768,7 +1810,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             onNpcApproachRef.current?.(nearbyNpc.objectId, nearbyNpc.name);
           } else if (!nearbyNpc && prevNpcId !== null) {
             (window as unknown as Record<string, unknown>).__nearbyNpc = null;
-            onNpcLeaveRef.current?.();
+            onNpcLeaveRef.current?.(prevNpcId);
           }
         }
         physicsLoopFrame++;
@@ -1795,6 +1837,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const locked = document.pointerLockElement === cv;
         setIsLocked(locked);
         if (locked && !inPhysicsMode) {
+          // Re-entering walk mode — close any open chat overlay
+          onPlayerMoveRef.current?.();
           const wasAlreadyIn = hasEnteredScene;
           hasEnteredScene = true;
           stopFreeFly();
@@ -1854,7 +1898,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             const npcHits = npcRaycaster.intersectObjects(npcMeshList, false);
             if (npcHits.length > 0) {
               const hitMesh = npcHits[0].object;
-              onNpcApproachRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
+              onNpcClickRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
               return; // don't lock pointer
             }
           }
@@ -1896,7 +1940,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         // ESC: close NPC chat if open
         if (e.key === "Escape") {
-          onNpcLeaveRef.current?.();
+          onPlayerMoveRef.current?.();
           return;
         }
         if (k === "g" && document.pointerLockElement === cv) {
@@ -1921,7 +1965,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               const npcHits = npcRaycaster.intersectObjects(npcMeshList, false);
               if (npcHits.length > 0 && npcHits[0].distance < 8) {
                 const hitMesh = npcHits[0].object;
-                onNpcApproachRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
+                onNpcClickRef.current?.(hitMesh.userData.npcObjectId as string, hitMesh.userData.npcName as string);
                 return;
               }
             }
@@ -1987,7 +2031,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           disposePortal(entry);
         }
         portalMap.clear();
-        world.free();
+        try { world.free(); } catch { /* Rapier WASM may panic if a body JS ref is still live */ }
       };
     }
 
