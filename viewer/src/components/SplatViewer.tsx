@@ -1706,8 +1706,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       // Two-path spawn: outdoor vs. indoor (same discriminator as collision setup above).
       function findSpawnPosition(startX: number, startZ: number): { x: number; y: number; z: number } {
         if (!isIndoor) {
-          // PATH A: outdoor — body falls to terrain, camera already at good height.
-          return { x: startX, y: camera.position.y - 0.8, z: startZ };
+          // PATH A: outdoor — prefer viewpoints[0] XZ (guaranteed inside the splat),
+          // fall back to camera XZ only if no viewpoints are defined.
+          const vp = viewpoints?.[0];
+          const spawnX = vp ? vp.position.x : startX;
+          const spawnZ = vp ? vp.position.z : startZ;
+          return { x: spawnX, y: camera.position.y - 0.8, z: spawnZ };
         }
         // PATH B: indoor — only the synthetic floor at Y=-groundOffset exists.
         // Capsule bottom 0.1 m above it; KCC snaps down on frame 1.
