@@ -4,6 +4,8 @@
  */
 export interface WorldAPI {
   provider: "splat" | "threejs";
+  /** Full Three.js module — use world.THREE.PlaneGeometry, world.THREE.MeshBasicMaterial, etc. */
+  THREE: typeof import("three");
   scene: import("three").Scene;
   camera: import("three").Camera;
   animate(cb: (dt: number) => void): void;
@@ -11,15 +13,9 @@ export interface WorldAPI {
   despawn(objectId: string): void;
   setColor(objectId: string, color: string): void;
   showToast(text: string, durationMs?: number): void;
-  /** Render arbitrary HTML in the display overlay panel (centered). Pass null to dismiss. */
+  /** Render arbitrary HTML as a 2D overlay centered on screen (follows camera).
+   *  Pass null to dismiss. */
   setDisplay(html: string | null): void;
-  /**
-   * Render HTML directly on the TV/screen prop in 3D space (screen-space projected).
-   * If the TV position has been calibrated the content appears on the physical screen.
-   * Falls back to a centered panel if no calibration is present.
-   * Pass null to clear.
-   */
-  setTvContent(html: string | null): void;
 }
 
 export interface SpawnOpts {

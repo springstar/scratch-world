@@ -26,24 +26,25 @@ function worldToPano(pos: Vec3): { bx: number; by: number } {
   return { bx, by };
 }
 
-function panoToWorld(bx: number, by: number, baseDist = 3.0): Vec3 {
+function panoToWorld(bx: number, baseDist = 3.0, keepY = 0): Vec3 {
   const azimuth = (bx - 0.5) * 2 * Math.PI;
-  // Y is set to 0 (ground level) — the elevation angle cannot be trusted because
-  // the panorama camera origin does not match the splat world origin. The physics
-  // placement system (resolvePosition / Rapier raycast) resolves the actual height.
+  // Only horizontal azimuth is reliable — Y is passed through from estimatedPos
+  // because the panorama camera origin does not match the splat world origin.
   const x = Math.sin(azimuth) * baseDist;
   const z = -Math.cos(azimuth) * baseDist;
-  return { x, y: 0, z };
+  return { x, y: keepY, z };
 }
 
 export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, onSkip }: Props) {
   const imgRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Store click position as raw panorama fractions (bx, by) for accurate marker rendering.
+  // The world Vec3 is derived separately — converting back via worldToPano would lose the
+  // vertical click position since Y is fixed to estimatedPos.y.
+  const [pickedFrac, setPickedFrac] = useState<{ bx: number; by: number } | null>(null);
   const [pickedPos, setPickedPos] = useState<Vec3 | null>(null);
-  const [imgLoaded, setImgLoaded] = useState(false);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
 
-  // Draw markers on canvas whenever image or picked position changes
   const drawMarkers = useCallback(
     (w: number, h: number) => {
       const canvas = canvasRef.current;
@@ -56,7 +57,6 @@ export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, o
       const ex = ebx * w;
       const ey = eby * h;
 
-      // Draw estimated position — dashed red circle
       ctx.save();
       ctx.setLineDash([6, 4]);
       ctx.strokeStyle = "rgba(255,80,80,0.9)";
@@ -65,29 +65,24 @@ export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, o
       ctx.arc(ex, ey, 14, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
-      // Crosshair
       ctx.save();
       ctx.strokeStyle = "rgba(255,80,80,0.9)";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(ex - 18, ey);
-      ctx.lineTo(ex + 18, ey);
-      ctx.moveTo(ex, ey - 18);
-      ctx.lineTo(ex, ey + 18);
+      ctx.moveTo(ex - 18, ey); ctx.lineTo(ex + 18, ey);
+      ctx.moveTo(ex, ey - 18); ctx.lineTo(ex, ey + 18);
       ctx.stroke();
       ctx.restore();
-      // Label
       ctx.save();
       ctx.font = "12px system-ui";
       ctx.fillStyle = "rgba(255,80,80,0.9)";
       ctx.fillText("估计位置", ex + 16, ey - 8);
       ctx.restore();
 
-      if (pickedPos) {
-        const { bx: pbx, by: pby } = worldToPano(pickedPos);
-        const px = pbx * w;
-        const py = pby * h;
-        // Solid green circle
+      if (pickedFrac) {
+        // Draw at raw click coordinates — not re-projected through world space.
+        const px = pickedFrac.bx * w;
+        const py = pickedFrac.by * h;
         ctx.save();
         ctx.strokeStyle = "rgba(80,255,120,1)";
         ctx.lineWidth = 2.5;
@@ -99,10 +94,8 @@ export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, o
         ctx.strokeStyle = "rgba(80,255,120,1)";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(px - 18, py);
-        ctx.lineTo(px + 18, py);
-        ctx.moveTo(px, py - 18);
-        ctx.lineTo(px, py + 18);
+        ctx.moveTo(px - 18, py); ctx.lineTo(px + 18, py);
+        ctx.moveTo(px, py - 18); ctx.lineTo(px, py + 18);
         ctx.stroke();
         ctx.restore();
         ctx.save();
@@ -112,39 +105,43 @@ export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, o
         ctx.restore();
       }
     },
-    [estimatedPos, pickedPos],
+    [estimatedPos, pickedFrac],
   );
 
-  useEffect(() => {
-    if (imgLoaded && imgSize.w > 0) {
-      drawMarkers(imgSize.w, imgSize.h);
-    }
-  }, [imgLoaded, imgSize, drawMarkers]);
-
-  const handleImgLoad = useCallback(() => {
+  // Measure image after layout — getBoundingClientRect in onLoad can return 0 before paint.
+  const measureImg = useCallback(() => {
     const img = imgRef.current;
     if (!img) return;
     const rect = img.getBoundingClientRect();
-    setImgSize({ w: rect.width, h: rect.height });
-    setImgLoaded(true);
+    if (rect.width > 0 && rect.height > 0) {
+      setImgSize({ w: rect.width, h: rect.height });
+    }
   }, []);
+
+  useEffect(() => {
+    // Retry measurement after next paint in case onLoad fires before layout.
+    if (imgRef.current?.complete) {
+      requestAnimationFrame(measureImg);
+    }
+  }, [measureImg]);
+
+  useEffect(() => {
+    if (imgSize.w > 0) {
+      drawMarkers(imgSize.w, imgSize.h);
+    }
+  }, [imgSize, drawMarkers]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      const clickY = e.clientY - rect.top;
-      const bx = clickX / rect.width;
-      const by = clickY / rect.height;
-      // Preserve original distance from estimatedPos
-      const origDist = Math.sqrt(
-        estimatedPos.x * estimatedPos.x + estimatedPos.z * estimatedPos.z,
-      );
+      const bx = (e.clientX - rect.left) / rect.width;
+      const by = (e.clientY - rect.top) / rect.height;
+      const origDist = Math.sqrt(estimatedPos.x ** 2 + estimatedPos.z ** 2);
       const baseDist = origDist > 0.5 ? origDist : 3.0;
-      const newPos = panoToWorld(bx, by, baseDist);
-      setPickedPos(newPos);
+      setPickedFrac({ bx, by });
+      setPickedPos(panoToWorld(bx, baseDist, estimatedPos.y));
     },
     [estimatedPos],
   );
@@ -204,10 +201,10 @@ export function PositionPicker({ panoUrl, objectName, estimatedPos, onConfirm, o
             ref={imgRef}
             src={panoUrl}
             alt="panorama"
-            onLoad={handleImgLoad}
+            onLoad={() => requestAnimationFrame(measureImg)}
             style={{ display: "block", maxWidth: "80vw", maxHeight: "55vh", objectFit: "contain" }}
           />
-          {imgLoaded && (
+          {imgSize.w > 0 && (
             <canvas
               ref={canvasRef}
               width={imgSize.w}

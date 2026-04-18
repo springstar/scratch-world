@@ -1,7 +1,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { Viewpoint } from "../types.js";
 
-export type PlacementHint = "near_camera" | "near_entrance" | "scene_center" | "exact";
+export type PlacementHint = "near_camera" | "near_entrance" | "scene_center" | "exact" | "fixed";
 
 export interface ResolvedPosition {
   x: number;
@@ -96,6 +96,12 @@ export function resolvePosition(
   // Ray origin for non-exact placement: 2 m above the nominal floor so the ray is
   // always inside the room, not above the ceiling.
   const rayStartY = fallbackY + 2;
+
+  // "fixed": use the stored XYZ exactly as-is — no Rapier raycast, no terrain snapping.
+  // Use for wall-mounted objects (TVs, paintings, shelves) where Y must not be overridden.
+  if (hint === "fixed" && playerPosition) {
+    return { x: playerPosition.x, y: playerPosition.y, z: playerPosition.z };
+  }
 
   // "exact": use the stored XZ as-is, but still raycast to find the real terrain Y.
   // The stored Y comes from the position picker (panorama-formula estimate) which is

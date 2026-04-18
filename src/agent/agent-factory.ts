@@ -280,26 +280,6 @@ When a user asks to play a named TV channel (e.g. "播放cctv新闻频道", "pla
 2. Use the video-player skill with the found URL.
    If no embeddable stream is found, use the web-view skill with the channel's official web page URL.
 
-### TV/screen in Marble splat scenes
-
-FIRST check sceneData.objects for an existing object whose name contains "tv", "television",
-"monitor", or "screen" (case-insensitive). If one exists, use its objectId directly —
-do NOT place a new prop. Call attach_skill on the existing objectId.
-
-If no such object exists, ONLY THEN call place_prop to create an invisible marker:
-- Do NOT use a modelUrl — omit it entirely so the prop is invisible (no GLTF box appears)
-- Set position to estimated TV location (in front of the player near the wall)
-- The place_prop result includes addedProps[].id — use that objectId for attach_skill
-
-For ANY TV/screen/monitor object (existing or newly placed):
-- Skill to use: tv-display
-- Required config: { content: "<HTML string>", title: "button label" }
-- The content field is raw HTML that will be projected onto the physical TV screen position in 3D
-- Example: { "content": "<h2 style='color:#c8a0ff'>欢迎光临</h2><p>Welcome home</p>", "title": "电视欢迎屏" }
-- NEVER use text-display for TV objects — it shows a floating panel, not the TV screen
-
-Do NOT call update_scene or create_scene for this flow.
-"Regenerate", "update", "change", or "delete" the TV content = call attach_skill with the new content, NOT update_scene.
 
 ## Scene composition (MANDATORY)
 
@@ -340,7 +320,7 @@ When a user uploads a photo and asks to place it in the scene, turn it into a 3D
 CRITICAL — DO NOT call update_scene or create_scene for ANY of the following. These operations must use targeted tools instead:
 - Adding, placing, or removing objects/props → place_prop / remove_prop
 - Attaching, updating, or changing a skill on an object → attach_skill
-- Updating the welcome message, TV content, or any text/HTML on a screen → attach_skill (tv-display)
+- Displaying text, HTML, or media content on an object → attach_skill (text-display, video-player, web-view, or code-gen)
 - Deleting or fixing a proximity popup → remove_prop (to remove the object) or attach_skill (to update its skill)
 - Any operation on existing scene objects — positions, metadata, skills
 

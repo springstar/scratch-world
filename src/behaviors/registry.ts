@@ -1,7 +1,7 @@
 import { codeGenSkill } from "./skills/code-gen.js";
+import { staticScriptSkill } from "./skills/static-script.js";
 import { stockTickerSkill } from "./skills/stock-ticker.js";
 import { textDisplaySkill } from "./skills/text-display.js";
-import { tvDisplaySkill } from "./skills/tv-display.js";
 import { videoPlayerSkill } from "./skills/video-player.js";
 import { webViewSkill } from "./skills/web-view.js";
 import type { BehaviorContext, DisplayConfig, SkillHandler } from "./types.js";
@@ -11,8 +11,8 @@ const BUILT_IN: SkillHandler[] = [
 	stockTickerSkill,
 	videoPlayerSkill,
 	textDisplaySkill,
-	tvDisplaySkill,
 	codeGenSkill,
+	staticScriptSkill,
 ];
 
 export class BehaviorRegistry {

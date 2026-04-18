@@ -29,6 +29,7 @@ import {
   SkinnedMesh,
   Bone,
 } from "three";
+import * as THREE from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
@@ -154,12 +155,18 @@ interface Props {
   /** Model URL for drag-to-place ghost preview during NPC/prop placement. */
   ghostModelUrl?: string;
   ghostModelScale?: number;
+  /** Script mesh placement mode — mesh follows mouse until user clicks to confirm position. */
+  scriptMeshPlacementPending?: boolean;
+  /** The Three.js mesh(es) to reposition during scriptMeshPlacement. */
+  scriptMeshes?: Array<import("three").Object3D>;
+  onScriptMeshPlace?: (pos: { x: number; y: number; z: number }) => void;
+  onScriptMeshPlaceCancel?: () => void;
 }
 
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, ghostModelUrl, ghostModelScale }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, ghostModelUrl, ghostModelScale, scriptMeshPlacementPending, scriptMeshes, onScriptMeshPlace, onScriptMeshPlaceCancel }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -209,6 +216,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onPortalPlaceCancelRef.current = onPortalPlaceCancel;
   const portalPlacementPendingRef = useRef(portalPlacementPending);
   portalPlacementPendingRef.current = portalPlacementPending;
+  const scriptMeshPlacementPendingRef = useRef(false);
+  const scriptMeshesRef = useRef(scriptMeshes);
+  scriptMeshesRef.current = scriptMeshes;
+  const onScriptMeshPlaceRef = useRef(onScriptMeshPlace);
+  onScriptMeshPlaceRef.current = onScriptMeshPlace;
+  const onScriptMeshPlaceCancelRef = useRef(onScriptMeshPlaceCancel);
+  onScriptMeshPlaceCancelRef.current = onScriptMeshPlaceCancel;
   const onNpcApproachRef = useRef(onNpcApproach);
   onNpcApproachRef.current = onNpcApproach;
   const onNpcLeaveRef = useRef(onNpcLeave);
@@ -323,10 +337,17 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
   // Exit pointer lock when entering placement mode so clicks reach the free-fly handler.
   useEffect(() => {
+    // prop true = new placement started → arm the ref
+    if (scriptMeshPlacementPending) scriptMeshPlacementPendingRef.current = true;
+    // prop false = placement ended externally (cancel/confirm from UI) → disarm
+    else scriptMeshPlacementPendingRef.current = false;
+  }, [scriptMeshPlacementPending]);
+
+  useEffect(() => {
     if ((propPlacementPending || npcPlacementPending || portalPlacementPending) && document.pointerLockElement) {
       document.exitPointerLock();
     }
-  }, [propPlacementPending, npcPlacementPending, portalPlacementPending]);
+  }, [propPlacementPending, npcPlacementPending, portalPlacementPending, scriptMeshPlacementPending]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -782,6 +803,41 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       ghostGroup.position.set(tx, terrainY + ghostGroundOffset, tz);
     };
 
+    // Script mesh placement — place mesh at fixed distance along the look direction from screen center.
+    // This means WASD (camera translation) does NOT move the mesh; only mouse rotation does.
+    const SCRIPT_MESH_DIST = 3.0; // metres in front of camera
+
+    // Billboard + visibility: face camera, hide when viewing from >45° off-axis.
+    const _smFwd = new Vector3();
+    const _smToMesh = new Vector3();
+    function tickScriptMeshes() {
+      const meshes = scriptMeshesRef.current;
+      if (!meshes || meshes.length === 0) return;
+      camera.getWorldDirection(_smFwd);
+      for (const m of meshes) {
+        _smToMesh.subVectors(m.position, camera.position).normalize();
+        const dot = _smFwd.dot(_smToMesh); // 1 = looking straight at it, 0 = 90°
+        m.visible = dot > 0.7; // ~45° half-angle cone
+        if (m.visible) m.lookAt(camera.position);
+      }
+    }
+    const updateScriptMeshPosition = (clientX: number, clientY: number) => {
+      const meshes = scriptMeshesRef.current;
+      if (!meshes || meshes.length === 0) return;
+      const rect = canvas.getBoundingClientRect();
+      const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ny = -((clientY - rect.top) / rect.height) * 2 + 1;
+      const raycaster = new Raycaster();
+      raycaster.setFromCamera(new Vector2(nx, ny), camera);
+      const { origin, direction: dir } = raycaster.ray;
+      const tx = origin.x + dir.x * SCRIPT_MESH_DIST;
+      const ty = origin.y + dir.y * SCRIPT_MESH_DIST;
+      const tz = origin.z + dir.z * SCRIPT_MESH_DIST;
+      for (const m of meshes) {
+        m.position.set(tx, ty, tz);
+      }
+    };
+
     const onMouseDown = (e: MouseEvent) => {
       if (!freeFlyActive) return;
       if (e.button === 0) {
@@ -843,14 +899,25 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               onPortalPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
               return;
             }
+            // If script mesh placement is pending, confirm using mesh's current position (already updated by physicsLoop)
+            if (scriptMeshPlacementPendingRef.current) {
+              const meshes = scriptMeshesRef.current;
+              scriptMeshPlacementPendingRef.current = false;
+              if (meshes && meshes.length > 0) {
+                const m = meshes[0];
+                onScriptMeshPlaceRef.current?.({ x: m.position.x, y: m.position.y, z: m.position.z });
+              } else {
+                onScriptMeshPlaceRef.current?.({ x: pt.x, y: pt.y, z: pt.z });
+              }
+              return;
+            }
             // Show 2-second visual indicator dot at screen position
             if (clickIndicatorTimer !== null) clearTimeout(clickIndicatorTimer);
             setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top });
             clickIndicatorTimer = setTimeout(() => setClickIndicator(null), 2000);
           }
-        } else if (npcPlacementPendingRef.current || propPlacementPendingRef.current || portalPlacementPendingRef.current) {
+        } else if (npcPlacementPendingRef.current || propPlacementPendingRef.current || portalPlacementPendingRef.current || scriptMeshPlacementPendingRef.current) {
           // No physics world available — intersect camera ray with a horizontal ground plane.
-          // splatGroundOffset is the Marble ground_plane_offset — negate for Three.js world Y.
           const groundY = splatGroundOffset !== undefined ? -splatGroundOffset : (camera.position.y - 1.7);
           const rect = canvas.getBoundingClientRect();
           const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -871,6 +938,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
                 cleanupGhost();
               } else if (portalPlacementPendingRef.current) {
                 onPortalPlaceRef.current?.(pt);
+              } else if (scriptMeshPlacementPendingRef.current) {
+                const meshes = scriptMeshesRef.current;
+                const meshY = meshes && meshes.length > 0 ? meshes[0].position.y : pt.y;
+                scriptMeshPlacementPendingRef.current = false;
+                onScriptMeshPlaceRef.current?.({ x: pt.x, y: meshY, z: pt.z });
               } else {
                 onPropPlaceRef.current?.(pt);
                 cleanupGhost();
@@ -894,6 +966,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         flyEuler.x -= e.movementY * sens;
         flyEuler.x = Math.max(-Math.PI / 2.1, Math.min(Math.PI / 2.1, flyEuler.x));
         camera.rotation.copy(flyEuler);
+        if (scriptMeshPlacementPendingRef.current) updateScriptMeshPosition(e.clientX, e.clientY);
       }
       if (ghostGroup) updateGhostPosition(e.clientX, e.clientY);
     };
@@ -911,13 +984,19 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         scene.add(ghostGroup);
       }
       if (ghostGroup) updateGhostPosition(e.clientX, e.clientY);
+      if (scriptMeshPlacementPendingRef.current) {
+        const rect = canvas.getBoundingClientRect();
+        const cx = document.pointerLockElement === canvas ? rect.left + rect.width / 2 : e.clientX;
+        const cy = document.pointerLockElement === canvas ? rect.top + rect.height / 2 : e.clientY;
+        updateScriptMeshPosition(cx, cy);
+      }
     };
 
     // Window-level left-click handler for ghost placement — fires in both free-fly
     // and physics mode (canvas mousedown is removed by stopFreeFly in physics mode).
     const onWindowMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      if (!npcPlacementPendingRef.current && !propPlacementPendingRef.current) return;
+      if (!npcPlacementPendingRef.current && !propPlacementPendingRef.current && !scriptMeshPlacementPendingRef.current) return;
 
       const pw = physicsRef.world;
       const R = physicsRef.RAPIER;
@@ -970,6 +1049,16 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       } else if (propPlacementPendingRef.current) {
         onPropPlaceRef.current?.(pos);
         cleanupGhost();
+      } else if (scriptMeshPlacementPendingRef.current) {
+        // Use mesh's own position — it's already been updated every frame by physicsLoop
+        scriptMeshPlacementPendingRef.current = false;
+        const meshes = scriptMeshesRef.current;
+        if (meshes && meshes.length > 0) {
+          const m = meshes[0];
+          onScriptMeshPlaceRef.current?.({ x: m.position.x, y: m.position.y, z: m.position.z });
+        } else {
+          onScriptMeshPlaceRef.current?.(pos);
+        }
       }
     };
 
@@ -990,6 +1079,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     // initPhysics() no longer re-creates this object; it just uses window.__worldAPI.
     const worldAPI = {
       provider: "splat" as const,
+      THREE,
       scene,
       camera,
       animate(cb: (dt: number) => void) {
@@ -1040,18 +1130,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       showToast(text: string, durationMs = 3000) {
         window.dispatchEvent(new CustomEvent("world:toast", { detail: { text, durationMs } }));
       },
-      /** Render arbitrary HTML inside the TV overlay panel. Pass null to clear. */
       setDisplay(html: string | null) {
         window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
-      },
-      /**
-       * Render HTML on the TV/screen prop in 3D space via screen-space projection.
-       * Requires the TV to have been calibrated with __markTV() — the overlay div is
-       * positioned over the physical screen each frame by updateTVOverlay().
-       * Falls back to a centered panel if not calibrated.
-       */
-      setTvContent(html: string | null) {
-        window.dispatchEvent(new CustomEvent("world:tv-content", { detail: { html } }));
       },
     };
     (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
@@ -1080,6 +1160,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
       }
       tickPortals();
+      tickScriptMeshes();
       renderer.render(scene, camera);
       // Update NPC animation mixers and script animate callbacks.
       // Both need a delta — compute once and share.
@@ -1545,7 +1626,22 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
         let group: import("three").Group;
         try {
-          group = (await objectRendererRegistry.render(obj, { envMap: sceneEnvMap ?? undefined })) as import("three").Group;
+          const rendered = await objectRendererRegistry.render(obj, { envMap: sceneEnvMap ?? undefined });
+          if (rendered) {
+            group = rendered as import("three").Group;
+          } else {
+            // No model URL — create an invisible 0.5m placeholder so the prop is
+            // raycasted by the E key and skill interactions still work.
+            const placeholder = new Group();
+            const hitbox = new Mesh(
+              new BoxGeometry(0.5, 0.5, 0.5),
+              new MeshStandardMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+            );
+            hitbox.renderOrder = -1;
+            hitbox.userData.objectId = obj.objectId;
+            placeholder.add(hitbox);
+            group = placeholder;
+          }
         } catch (err) {
           console.warn("[loadSceneProp] failed to load", obj.metadata.modelUrl, err);
           setPropLoadErrors((prev) => [...prev, obj.name]);
@@ -1721,6 +1817,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
 
         tickPortals();
+        tickScriptMeshes();
         renderer.render(scene, camera);
       }
 
@@ -1766,11 +1863,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           // Transition: physics walking → free-fly (Escape key) or placement mode (F key)
           inPhysicsMode = false;
           cancelAnimationFrame(animId);
+          // Freeze script mesh placement — fires whether keydown or lockchange comes first.
+          if (scriptMeshPlacementPendingRef.current) {
+            scriptMeshPlacementPendingRef.current = false;
+            onScriptMeshPlaceCancelRef.current?.();
+          }
           if (!placementModeActiveRef.current) {
             syncEuler();
             restartFreeFly();
           }
-          // If placement mode is active: renderer stops; dialog is visible; free-fly restarts on submit/cancel
         }
       };
       document.addEventListener("pointerlockchange", onLockChange);
@@ -1779,7 +1880,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (document.pointerLockElement !== cv) {
           // While placement is pending, clicks are handled by onMouseDown (Rapier hit).
           // Don't request pointer lock — it would steal the placement click.
-          if (npcPlacementPendingRef.current || propPlacementPendingRef.current) return;
+          if (npcPlacementPendingRef.current || propPlacementPendingRef.current || scriptMeshPlacementPendingRef.current) return;
           // NPC click-to-talk: only after user has entered the scene at least once
           if (hasEnteredScene && npcMeshList.length > 0) {
             const rect = cv.getBoundingClientRect();
@@ -1830,6 +1931,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           onPortalPlaceCancelRef.current?.();
           return;
         }
+        // ESC during script mesh placement: freeze the mesh and show the confirm panel.
+        if (e.key === "Escape" && scriptMeshPlacementPendingRef.current) {
+          scriptMeshPlacementPendingRef.current = false;
+          onScriptMeshPlaceCancelRef.current?.();
+          return;
+        }
         // ESC: close NPC chat if open
         if (e.key === "Escape") {
           onPlayerMoveRef.current?.();
@@ -1863,6 +1970,24 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             }
             const propId = pickObject(camera, props.flatMap((p) => p.meshes), 4);
             if (propId) { onInteractRef.current?.(propId, "pick"); return; }
+            // Fallback: if no mesh was hit but a skill prop is nearby, interact with it directly
+            const nearbyPropId = (window as unknown as Record<string, unknown>).__nearbyInteractiveProp as string | null;
+            if (nearbyPropId) { onInteractRef.current?.(nearbyPropId, "pick"); return; }
+            // Last fallback: find the closest interactable prop in the scene (no distance limit)
+            {
+              const camPos = camera.position;
+              let bestId: string | null = null;
+              let bestDist2 = Infinity;
+              for (const obj of (sceneObjectsRef.current ?? [])) {
+                const skillMeta = obj.metadata?.skill;
+                if (!skillMeta || obj.type === "npc") continue;
+                const p = propPositionsRef.current.get(obj.objectId) ?? obj.position;
+                const dx = camPos.x - p.x; const dz = camPos.z - p.z;
+                const d2 = dx * dx + dz * dz;
+                if (d2 < bestDist2) { bestDist2 = d2; bestId = obj.objectId; }
+              }
+              if (bestId) { onInteractRef.current?.(bestId, "pick"); return; }
+            }
           }
         }
       };

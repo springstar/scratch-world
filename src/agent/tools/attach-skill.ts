@@ -102,56 +102,6 @@ export function attachSkillTool(
 			const scene = await sceneManager.getScene(params.sceneId);
 			const targetObj = scene?.sceneData.objects.find((o) => o.objectId === params.objectId);
 
-			// Guard: auto-convert text-display → tv-display for TV/monitor/screen objects
-			if (params.skillName === "text-display") {
-				if (targetObj) {
-					const nameLower = (targetObj.name ?? "").toLowerCase();
-					const tvKeywords = ["tv", "television", "monitor", "screen", "flatscreen", "flat-screen", "flat screen"];
-					if (tvKeywords.some((kw) => nameLower.includes(kw))) {
-						// Convert: preserve the text content, switch skill to tv-display
-						const content = String(config.content ?? "");
-						const title = String(config.title ?? targetObj.name);
-						// Wrap markdown text in styled HTML for TV rendering
-						const htmlLines = content
-							.split("\n")
-							.filter((l) => l.trim())
-							.map((l) => {
-								const clean = l
-									.replace(/^#+\s*/, "")
-									.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
-									.trim();
-								return `<p style="margin:5px 0">${clean}</p>`;
-							})
-							.join("");
-						const html =
-							`<div style="width:100%;height:100%;background:#0a0820;color:#e8d5ff;` +
-							`display:flex;flex-direction:column;align-items:center;justify-content:center;` +
-							`font-family:system-ui;padding:16px;box-sizing:border-box;overflow:hidden;text-align:center">` +
-							`<h3 style="color:#c8a0ff;margin:0 0 10px">${title}</h3>${htmlLines}</div>`;
-						const updatedObj = await sceneManager.updateSceneObject(params.sceneId, params.objectId, {
-							interactionHint: "按 E 查看",
-							metadata: { skill: { name: "tv-display", config: { content: html, title } } },
-						});
-						return {
-							content: [
-								{
-									type: "text",
-									text: JSON.stringify({
-										ok: true,
-										note: "text-display auto-converted to tv-display for TV/screen object",
-										sceneId: updatedObj.sceneId,
-										objectId: params.objectId,
-										skill: "tv-display",
-										version: updatedObj.version,
-									}),
-								},
-							],
-							details: { sceneId: updatedObj.sceneId, version: updatedObj.version, sceneChanged: true },
-						};
-					}
-				}
-			}
-
 			// Position picker: for VLM-detected objects with a known non-zero position,
 			// ask the viewer user to confirm/correct the position before saving.
 			if (bus && sessionId && targetObj) {

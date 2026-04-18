@@ -51,11 +51,26 @@ export function interactRoute(sessionManager: SessionManager, sceneManager: Scen
 								},
 							}
 						: skillMeta;
+					// displayY: calibrated mesh height stored in metadata, default 1.3 so mesh is visible on first run
+					const displayY = typeof obj?.metadata?.displayY === "number" ? obj.metadata.displayY : 1.3;
+					// displayHeight from targetHeight metadata; displayWidth derived from 16:9 if not explicit
+					const displayHeight =
+						typeof obj?.metadata?.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
+					const displayWidth =
+						typeof obj?.metadata?.targetWidth === "number"
+							? obj.metadata.targetWidth
+							: displayHeight
+								? Math.round(displayHeight * (16 / 9) * 100) / 100
+								: undefined;
 					const display = await behaviorRegistry.run({
 						objectId,
 						objectName: obj?.name ?? objectId,
 						sceneId,
 						playerPosition,
+						objectPosition: obj?.position,
+						displayY,
+						displayWidth,
+						displayHeight,
 						config: mergedConfig as Record<string, unknown>,
 					});
 					if (display) {

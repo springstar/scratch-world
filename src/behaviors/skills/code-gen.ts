@@ -30,33 +30,52 @@ world.animate(cb: (dt: number) => void): void
 // Show a temporary HUD toast message.
 world.showToast(text: string, durationMs?: number): void
 
-// Show an HTML panel in the center of the screen. Pass null to dismiss.
-// Use for text, formatted content, welcome messages, info panels, etc.
-// Supports any HTML tags: <h2>, <p>, <ul>, <b>, <span style="color:..."> etc.
+// Show a 2D HTML panel overlay in the center of the screen (follows the camera).
+// Use ONLY for menus, info panels, dialogs. Pass null to dismiss.
 world.setDisplay(html: string | null): void
 
-// Render HTML directly ON the TV/screen prop in the 3D scene.
-// The content is projected onto the physical screen surface using screen-space rendering.
-// Use this when the object is a TV, monitor, screen, display board, or any flat surface
-// that should show content. Pass null to clear.
-// Example: world.setTvContent('<h2 style="color:#fff">欢迎光临</h2>')
-world.setTvContent(html: string | null): void
-
-// Current scene provider type.
-world.provider: "splat" | "threejs"
-
-// THREE.js objects — use for advanced manipulation.
-// NOTE: world.scene and world.camera are only available when provider === "threejs"
-// or when you need to add custom Three.js objects alongside a splat.
+// The Three.js scene graph — add meshes here to place objects in 3D world space.
+// Objects added to world.scene stay fixed in the world, independent of camera movement.
+// Use this for: TV screen overlays, signs, floating text, particles, lights, any 3D content.
+//
+// TV screen / sign / wall display — use this EXACT template for ANY physical surface content:
+//   const canvas = document.createElement('canvas');
+//   canvas.width = 1280; canvas.height = 720;
+//   const ctx = canvas.getContext('2d');
+//   ctx.fillStyle = '#111'; ctx.fillRect(0, 0, 1280, 720);
+//   ctx.fillStyle = '#fff'; ctx.font = 'bold 80px sans-serif';
+//   ctx.textAlign = 'center'; ctx.fillText('Hello World', 640, 360);
+//   const tex = new world.THREE.CanvasTexture(canvas);
+//   const mesh = new world.THREE.Mesh(
+//     new world.THREE.PlaneGeometry(DISPLAY_W, DISPLAY_H),
+//     new world.THREE.MeshBasicMaterial({ map: tex, side: world.THREE.DoubleSide, depthTest: false, transparent: true })
+//   );
+//   // CRITICAL position rule: use objectPosition.x and objectPosition.z from Scene context,
+//   // use displayY (also from Scene context) as the Y coordinate.
+//   // Use displayWidth and displayHeight from Scene context for PlaneGeometry dimensions.
+//   mesh.position.set(OBJ_X, DISPLAY_Y, OBJ_Z);
+//   mesh.renderOrder = 1;   // REQUIRED: mesh transparent=true + renderOrder>0 renders on top of Gaussian Splat
+//   world.scene.add(mesh);
+//   // For animation: world.animate(() => { tex.needsUpdate = true; });
 world.scene: THREE.Scene
-world.camera: THREE.Camera
+world.camera: THREE.Camera  // read-only, for reference
+
+// Access the full Three.js module via world.THREE — do NOT use a bare THREE global.
+world.THREE: typeof import("three")
 \`\`\`
 
 Rules:
 - Only use the \`world\` API. Do NOT access \`window\`, \`document\`, \`fetch\`, \`eval\`, or any global.
+  Exception: \`document.createElement('canvas')\` is allowed when creating a CanvasTexture for world.scene.
 - Do NOT use \`import\` or \`require\`.
 - The script runs once. Use \`world.animate()\` for anything that needs to update every frame.
 - Keep generated objects small and well-positioned so they're visible and don't block navigation.
+- CRITICAL: For ANY content that should appear on a physical surface in the 3D world (TV, screen,
+  sign, board, wall display) — always use world.scene + world.THREE mesh with renderOrder=1.
+  NEVER use world.setDisplay() for 3D surface content.
+- CRITICAL: For mesh position — ALWAYS use objectPosition.x and objectPosition.z from Scene context,
+  and ALWAYS use displayY from Scene context as the Y coordinate. Never hardcode Y.
+- CRITICAL: For PlaneGeometry — ALWAYS use displayWidth and displayHeight from Scene context. Never hardcode these values.
 - Return only the raw JavaScript — no markdown fences, no explanation.
 `;
 
@@ -89,6 +108,12 @@ export const codeGenSkill: SkillHandler = {
 		},
 	},
 	async handle(ctx: BehaviorContext): Promise<DisplayConfig> {
+		// If calibrated code exists, use it directly — skip LLM call.
+		if (ctx.config.autoRun && ctx.config.cachedCode) {
+			const title = ctx.config.title ? String(ctx.config.title) : "代码生成";
+			return { type: "script", code: String(ctx.config.cachedCode), title };
+		}
+
 		// Support interactive mode: player provides the request at runtime via interactionData.
 		const userRequest = ctx.config.userRequest
 			? String(ctx.config.userRequest)
@@ -113,12 +138,18 @@ export const codeGenSkill: SkillHandler = {
 
 		let code: string;
 		try {
+			const posStr = ctx.objectPosition
+				? `x=${ctx.objectPosition.x.toFixed(3)}, z=${ctx.objectPosition.z.toFixed(3)}`
+				: "unknown";
+			const displayY = (ctx.displayY ?? 1.3).toFixed(3);
+			const displayW = ctx.displayWidth?.toFixed(3) ?? "1.600";
+			const displayH = ctx.displayHeight?.toFixed(3) ?? "0.900";
 			const response = await completeSimple(model, {
 				systemPrompt: SYSTEM_PROMPT,
 				messages: [
 					{
 						role: "user",
-						content: `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}"\n\nUser request: ${userRequest}`,
+						content: `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}\n\nUser request: ${userRequest}`,
 						timestamp: Date.now(),
 					},
 				],
@@ -142,6 +173,7 @@ export const codeGenSkill: SkillHandler = {
 			};
 		}
 
+		console.log(`[code-gen] generated code:\n${code}`);
 		return { type: "script", code, title };
 	},
 };

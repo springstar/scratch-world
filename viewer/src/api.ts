@@ -243,17 +243,18 @@ export async function patchSceneObjectPosition(
   sessionId: string,
   objectId: string,
   position: { x: number; y: number; z: number },
+  skillConfig?: Record<string, unknown>,
+  displayY?: number,
 ): Promise<void> {
   const res = await fetch(
     `${BASE}/scenes/${sceneId}/objects/${encodeURIComponent(objectId)}?session=${encodeURIComponent(sessionId)}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ placement: "exact", playerPosition: position }),
+      body: JSON.stringify({ placement: "fixed", playerPosition: position, skillConfig, ...(typeof displayY === "number" ? { displayY } : {}) }),
     },
   );
   if (!res.ok) {
-    // Non-fatal — log but don't throw
     console.warn(`patchSceneObjectPosition failed for ${objectId}: HTTP ${res.status}`);
   }
 }

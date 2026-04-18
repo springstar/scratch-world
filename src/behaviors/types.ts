@@ -5,6 +5,13 @@ export interface BehaviorContext {
 	objectName: string;
 	sceneId: string;
 	playerPosition?: { x: number; y: number; z: number };
+	objectPosition?: { x: number; y: number; z: number };
+	/** Calibrated display height for 3D mesh overlays (e.g. TV screen). Defaults to 1.3 if not set. */
+	displayY?: number;
+	/** Physical width of the display surface in metres (e.g. TV screen width). */
+	displayWidth?: number;
+	/** Physical height of the display surface in metres (e.g. TV screen height). */
+	displayHeight?: number;
 	config: Record<string, unknown>;
 }
 

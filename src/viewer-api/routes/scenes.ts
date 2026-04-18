@@ -351,15 +351,40 @@ export function scenesRoute(
 		const scene = await sceneManager.getScene(sceneId);
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
 
-		const body = await c.req.json<{ placement?: string; playerPosition?: { x: number; y: number; z: number } }>();
+		const body = await c.req.json<{
+			placement?: string;
+			playerPosition?: { x: number; y: number; z: number };
+			skillConfig?: Record<string, unknown>;
+			displayY?: number;
+		}>();
 		if (!body.placement || !body.playerPosition) {
 			return c.json({ error: "Missing required fields: placement, playerPosition" }, 400);
 		}
 
 		try {
+			const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+			const existingSkill = obj?.metadata?.skill as Record<string, unknown> | undefined;
+			const skillPatch: Record<string, unknown> | undefined =
+				body.skillConfig && existingSkill
+					? {
+							skill: {
+								...existingSkill,
+								config: { ...((existingSkill.config as Record<string, unknown>) ?? {}), ...body.skillConfig },
+							},
+						}
+					: undefined;
+
+			const displayYPatch: Record<string, unknown> =
+				typeof body.displayY === "number" ? { displayY: body.displayY } : {};
+
 			const updated = await sceneManager.updateSceneObject(sceneId, objectId, {
 				position: body.playerPosition,
-				metadata: { placement: body.placement, playerPosition: body.playerPosition },
+				metadata: {
+					placement: body.placement,
+					playerPosition: body.playerPosition,
+					...displayYPatch,
+					...skillPatch,
+				},
 			});
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
