@@ -172,6 +172,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const [errorMsg, setErrorMsg] = useState("");
   const [isLocked, setIsLocked] = useState(false);
   const [physicsReady, setPhysicsReady] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const editModeRef = useRef(false);
   const [showPicker, setShowPicker] = useState(false);
   const selectedPropRef = useRef<AssetEntry | null>(null);
   const onAddPropRef = useRef(onAddProp);
@@ -196,6 +198,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const cameraRef = useRef<PerspectiveCamera | null>(null);
   // Prop world positions — keyed by objectId; used for prop proximity detection.
   const propPositionsRef = useRef<Map<string, { x: number; y: number; z: number }>>(new Map());
+  // Prop groups — keyed by objectId; used for height-adjust drag in free-fly mode.
+  const propGroupsRef = useRef<Map<string, import("three").Group>>(new Map());
   const onPlacementRequestRef = useRef(onPlacementRequest);
   onPlacementRequestRef.current = onPlacementRequest;
   const onNpcPlaceRef = useRef(onNpcPlace);
@@ -445,6 +449,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const onKeyDown = (e: KeyboardEvent) => {
       const el = document.activeElement;
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      // Tab: handle here only when physics hasn't loaded yet (no onKeyAction registered).
+      // Once physics is ready, onKeyAction owns Tab to avoid double-firing.
+      if (e.key === "Tab" && physicsRef.world === null) {
+        e.preventDefault();
+        const entering = !editModeRef.current;
+        editModeRef.current = entering;
+        setEditMode(entering);
+        if (!entering) {
+          heightHovered = null;
+          heightDrag = null;
+          if (canvas) canvas.style.cursor = "";
+        }
+        return;
+      }
       const k = e.key.toLowerCase();
       keys.add(k);
     };
@@ -721,6 +739,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     let freeFlyActive = true;
     let ffDragging = false;
 
+    // Height-adjust drag: grab a prop or NPC in free-fly and drag up/down to reposition.
+    type HeightDragTarget = { objectId: string; group: Group; isNpc: boolean };
+    let heightHovered: HeightDragTarget | null = null;
+    let heightDrag: (HeightDragTarget & { startMouseY: number; startGroupY: number }) | null = null;
+
     // NPC meshes — populated by loadSceneNpc, used for click-to-talk raycasting.
     const npcMeshList: Mesh[] = [];
 
@@ -841,6 +864,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const onMouseDown = (e: MouseEvent) => {
       if (!freeFlyActive) return;
       if (e.button === 0) {
+        // Start height-adjust drag if in edit mode and hovering a prop or NPC
+        if (editModeRef.current && heightHovered) {
+          heightDrag = { ...heightHovered, startMouseY: e.clientY, startGroupY: heightHovered.group.position.y };
+          canvas.style.cursor = "grabbing";
+          e.preventDefault();
+          return;
+        }
         // Left-click: raycast against physics colliders to record click target
         const pw = physicsRef.world;
         const R = physicsRef.RAPIER;
@@ -956,9 +986,29 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       ffDragging = true;
       e.preventDefault();
     };
-    const onMouseUp = () => { ffDragging = false; };
+    const onMouseUp = () => {
+      ffDragging = false;
+      if (heightDrag) {
+        const { objectId, group, isNpc } = heightDrag;
+        const pos = { x: group.position.x, y: group.position.y, z: group.position.z };
+        if (sceneId && sessionId) {
+          patchSceneObjectPosition(sceneId, sessionId, objectId, pos).catch(console.warn);
+        }
+        if (!isNpc) propPositionsRef.current.set(objectId, pos);
+        heightDrag = null;
+        canvas.style.cursor = heightHovered ? "grab" : "";
+      }
+    };
     const onMouseMove = (e: MouseEvent) => {
       if (!freeFlyActive) return;
+
+      // Height-adjust drag: move group Y only
+      if (heightDrag) {
+        const dy = (heightDrag.startMouseY - e.clientY) * 0.01;
+        heightDrag.group.position.y = heightDrag.startGroupY + dy;
+        return;
+      }
+
       // Right-click drag: rotate camera
       if (ffDragging) {
         const sens = 0.003;
@@ -969,6 +1019,41 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (scriptMeshPlacementPendingRef.current) updateScriptMeshPosition(e.clientX, e.clientY);
       }
       if (ghostGroup) updateGhostPosition(e.clientX, e.clientY);
+
+      // Hover detection for height-adjust (only in edit mode, no ghost placement active)
+      if (editModeRef.current && !ghostGroup && !npcPlacementPendingRef.current && !propPlacementPendingRef.current) {
+        const rect = canvas.getBoundingClientRect();
+        const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        const ny = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        const ray = new Raycaster();
+        ray.setFromCamera(new Vector2(nx, ny), camera);
+
+        // Collect all hittable meshes from props and NPCs
+        const targets: { mesh: Mesh; objectId: string; group: Group; isNpc: boolean }[] = [];
+        for (const [oid, grp] of propGroupsRef.current) {
+          grp.traverse((c) => { if (c instanceof Mesh) targets.push({ mesh: c, objectId: oid, group: grp, isNpc: false }); });
+        }
+        for (const [oid, grp] of npcGroupsRef.current) {
+          grp.traverse((c) => { if (c instanceof Mesh) targets.push({ mesh: c, objectId: oid, group: grp, isNpc: true }); });
+        }
+
+        const meshes = targets.map((t) => t.mesh);
+        const hits = ray.intersectObjects(meshes, false);
+        if (hits.length > 0) {
+          const hitMesh = hits[0].object as Mesh;
+          const target = targets.find((t) => t.mesh === hitMesh);
+          if (target) {
+            heightHovered = { objectId: target.objectId, group: target.group, isNpc: target.isNpc };
+            canvas.style.cursor = "grab";
+          } else {
+            heightHovered = null;
+            canvas.style.cursor = "";
+          }
+        } else {
+          heightHovered = null;
+          canvas.style.cursor = "";
+        }
+      }
     };
 
     // Window-level ghost mouse tracker — fires even when cursor is outside canvas or
@@ -1218,6 +1303,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     function stopFreeFly() {
       freeFlyActive = false;
       ffDragging = false;
+      heightHovered = null;
+      heightDrag = null;
+      if (canvas) canvas.style.cursor = "";
       cancelAnimationFrame(animId);
       canvas!.removeEventListener("mousedown", onMouseDown);
       canvas!.removeEventListener("mouseup",   onMouseUp);
@@ -1252,7 +1340,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 }); // standard -Y gravity; after PI-bake the floor is at world Y < camera
 
       const groundOffset = splatGroundOffset ?? 2.0;
-      const isIndoor = groundOffset < 1.5;
+      const isIndoor = groundOffset < 1.8;
 
       if (!isIndoor) {
         // Outdoor scenes: load the full collision mesh (terrain, slopes, etc.).
@@ -1404,6 +1492,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           group.userData.activeAction = idleAction;
         }
         npcGroups.set(obj.objectId, group);
+        npcGroupsRef.current.set(obj.objectId, group);
       };
 
       const removeSceneNpc = (objectId: string): void => {
@@ -1417,6 +1506,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           disposeContactShadow(group);
           scene.remove(group);
           npcGroups.delete(objectId);
+          npcGroupsRef.current.delete(objectId);
         }
       };
       (window as unknown as Record<string, unknown>).__loadSceneNpc = loadSceneNpc;
@@ -1679,6 +1769,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           if (c instanceof Mesh) meshes.push(c);
         });
         props.push({ body, group, objectId: obj.objectId, meshes });
+        propGroupsRef.current.set(obj.objectId, group);
       };
       (window as unknown as Record<string, unknown>).__loadSceneProp = loadSceneProp;
 
@@ -1828,7 +1919,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       let hasEnteredScene = false;
       const onLockChange = () => {
         const locked = document.pointerLockElement === cv;
-        setIsLocked(locked);
+        // Don't update isLocked while in edit mode — it would re-show the "click to enter" overlay
+        if (!editModeRef.current) setIsLocked(locked);
         if (locked && !inPhysicsMode) {
           // Re-entering walk mode — close any open chat overlay
           onPlayerMoveRef.current?.();
@@ -1909,6 +2001,21 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
         const k = e.key.toLowerCase();
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const entering = !editModeRef.current;
+          editModeRef.current = entering;
+          setEditMode(entering);
+          if (entering && document.pointerLockElement === cv) {
+            document.exitPointerLock(); // releases pointer lock, onLockChange restarts free-fly
+          }
+          if (!entering) {
+            heightHovered = null;
+            heightDrag = null;
+            if (canvas) canvas.style.cursor = "";
+          }
+          return;
+        }
         if (k === "f") {
           placementModeActiveRef.current = true;
           setPlacementMode(true);
@@ -2238,7 +2345,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       />
 
       {/* Physics mode: "click to enter" overlay */}
-      {physicsReady && status === "ready" && !isLocked && !npcPlacementPending && !propPlacementPending && !portalPlacementPending && (
+      {physicsReady && status === "ready" && !isLocked && !editMode && !npcPlacementPending && !propPlacementPending && !portalPlacementPending && (
         <div style={{
           position: "absolute", inset: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
@@ -2250,7 +2357,24 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }}>
           {isTouch
             ? "Tap to enter · WASD to walk"
-            : "Click to enter · WASD to walk · F to place · P for props"}
+            : "Click to enter · WASD to walk · F to place · P for props · Tab to edit"}
+        </div>
+      )}
+
+      {/* Edit mode overlay */}
+      {editMode && (
+        <div style={{
+          position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
+          background: "rgba(10,10,30,0.85)", backdropFilter: "blur(6px)",
+          border: "1px solid rgba(120,160,255,0.4)",
+          borderRadius: 8, padding: "6px 16px",
+          color: "rgba(200,220,255,0.95)",
+          fontFamily: "system-ui, -apple-system, sans-serif",
+          fontSize: 13, letterSpacing: 0.3,
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+        }}>
+          编辑模式 · 拖动物件/NPC 调整高度 · Tab 退出
         </div>
       )}
 
