@@ -1517,9 +1517,19 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const mixer = group.userData.mixer as AnimationMixer | undefined;
         const clips = group.userData.animClips as import("three").AnimationClip[] | undefined;
         if (!mixer || !clips) { group.userData.pendingAnimation = animation; return; }
-        const NAME_MAP: Record<string, string> = { idle: "Idle", walk: "Walk", wave: "Wave", bow: "Bow" };
-        const clipName = NAME_MAP[animation.toLowerCase()] ?? animation;
-        const clip = clips.find((c) => c.name.toLowerCase() === clipName.toLowerCase()) ?? clips[0];
+        const key = animation.toLowerCase();
+        // First try exact match via NAME_MAP, then fuzzy substring match on clip names.
+        const NAME_MAP: Record<string, string> = {
+          idle: "Idle_FoldArms_Loop",
+          walk: "Walk_Carry_Loop",
+          wave: "Yes",
+          bow: "LayToIdle",
+        };
+        const mapped = (NAME_MAP[key] ?? animation).toLowerCase();
+        const clip =
+          clips.find((c) => c.name.toLowerCase() === mapped) ??
+          clips.find((c) => c.name.toLowerCase().includes(key)) ??
+          clips[0];
         const prev = group.userData.activeAction as import("three").AnimationAction | undefined;
         const next = mixer.clipAction(clip);
         if (prev && prev !== next) { next.reset().fadeIn(0.3); prev.fadeOut(0.3); }
