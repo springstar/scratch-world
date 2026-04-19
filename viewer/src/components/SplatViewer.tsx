@@ -1252,7 +1252,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 }); // standard -Y gravity; after PI-bake the floor is at world Y < camera
 
       const groundOffset = splatGroundOffset ?? 2.0;
-      const isIndoor = groundOffset < 1.9;
+      const isIndoor = groundOffset < 1.5;
 
       if (!isIndoor) {
         // Outdoor scenes: load the full collision mesh (terrain, slopes, etc.).
