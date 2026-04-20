@@ -1,4 +1,4 @@
-import type { DisplayConfig, SceneResponse, RealtimeEvent } from "./types.js";
+import type { DisplayConfig, SceneResponse, RealtimeEvent, ResourceOption } from "./types.js";
 
 const BASE = import.meta.env.DEV ? "" : (import.meta.env.VITE_API_BASE ?? "");
 
@@ -396,7 +396,56 @@ export async function deleteScene(sceneId: string, sessionId: string): Promise<v
   }
 }
 
-export function connectRealtime(  sessionId: string,
+export interface UserAsset {
+  id: string;
+  sessionId: string;
+  name: string;
+  url: string;
+  kind: "texture" | "model" | "audio" | "video";
+  mimeType: string;
+  createdAt: number;
+}
+
+export async function uploadUserAsset(
+  sessionId: string,
+  file: File,
+  name?: string,
+): Promise<UserAsset> {
+  const form = new FormData();
+  form.append("file", file);
+  if (name) form.append("name", name);
+  const res = await fetch(`${BASE}/user-assets?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const data = (await res.json()) as { asset: UserAsset };
+  return data.asset;
+}
+
+export async function fetchUserAssets(sessionId: string): Promise<UserAsset[]> {
+  const res = await fetch(`${BASE}/user-assets?session=${encodeURIComponent(sessionId)}`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { assets: UserAsset[] };
+  return data.assets;
+}
+
+/** Convert a UserAsset to a ResourceOption for use in ResourcePickerPanel */
+export function userAssetToOption(asset: UserAsset): ResourceOption {
+  return {
+    id: `upload_${asset.id}`,
+    name: asset.name,
+    url: asset.url,
+    thumbnail: asset.kind === "texture" ? asset.url : undefined,
+    source: "upload",
+  };
+}
+
+export function connectRealtime(
+  sessionId: string,
   onEvent: (event: RealtimeEvent) => void,
 ): () => void {
   const wsBase = BASE.replace(/^http/, "ws") || `ws://${location.host}`;

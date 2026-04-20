@@ -29,9 +29,21 @@ export function colliderProxyRoute(sceneManager: SceneManager, marbleApiKey: str
 			return c.json({ error: "No collider mesh available for this scene" }, 404);
 		}
 
-		const upstream = await fetch(colliderMeshUrl, {
-			headers: { "WLT-Api-Key": marbleApiKey },
-		});
+		const abort = new AbortController();
+		const timer = setTimeout(() => abort.abort(), 30_000);
+		let upstream: Response;
+		try {
+			upstream = await fetch(colliderMeshUrl, {
+				headers: { "WLT-Api-Key": marbleApiKey },
+				signal: abort.signal,
+			});
+		} catch (err) {
+			clearTimeout(timer);
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`[collider-proxy] fetch failed for ${sceneId}: ${msg}`);
+			return c.json({ error: `Failed to fetch collider mesh: ${msg}` }, 502);
+		}
+		clearTimeout(timer);
 
 		if (!upstream.ok) {
 			return c.json({ error: `Marble CDN returned ${upstream.status}` }, 502);

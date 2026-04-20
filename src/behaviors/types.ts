@@ -1,5 +1,39 @@
 /** Runtime behavior skill system — types shared across registry and skill handlers. */
 
+/** A resource the skill identified as needed for generation. */
+export interface ResourceNeed {
+	/** Machine-readable kind — informs which picker options to show. */
+	kind: "texture" | "model" | "audio" | "video";
+	/** Human-readable description, e.g. "particle texture for fireworks burst" */
+	label: string;
+	/** Pre-selected option from the builtin catalog, if any. */
+	suggested?: ResourceOption;
+	/** Additional CDN-sourced options to offer the user. */
+	options: ResourceOption[];
+}
+
+/** One selectable resource option. */
+export interface ResourceOption {
+	/** Unique identifier within this picker session. */
+	id: string;
+	/** Display name shown to user. */
+	name: string;
+	/** URL or path the generated code should use. */
+	url: string;
+	/** Optional thumbnail URL for preview. */
+	thumbnail?: string;
+	/** Where this resource comes from. */
+	source: "builtin" | "cdn" | "upload";
+}
+
+/** User-confirmed resource choices — sent back in interactionData.confirmedResources. */
+export interface ResourceChoice {
+	/** Matches ResourceNeed.label */
+	label: string;
+	/** The chosen option. */
+	option: ResourceOption;
+}
+
 export interface BehaviorContext {
 	objectId: string;
 	objectName: string;
@@ -27,7 +61,13 @@ export type DisplayConfig =
 	/** Client executes `code` in a WorldAPI sandbox — no overlay is shown. */
 	| { type: "script"; code: string; title?: string }
 	/** Render HTML directly on the TV screen via screen-space projection. */
-	| { type: "tv"; content: string; title?: string };
+	| { type: "tv"; content: string; title?: string }
+	/**
+	 * Skill needs external resources before it can generate.
+	 * Client shows a resource picker; user confirms then re-POSTs /interact with
+	 * interactionData.confirmedResources = ResourceChoice[].
+	 */
+	| { type: "resource-picker"; needs: ResourceNeed[]; title?: string };
 
 export interface SkillHandler {
 	/** Machine-readable name used in metadata.skill.name */

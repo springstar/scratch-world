@@ -1,4 +1,4 @@
-// Types mirroring src/scene/types.ts — kept in sync manually.
+// Types mirroring src/scene/types.ts and src/behaviors/types.ts — kept in sync manually.
 // The viewer never imports from the backend directly.
 
 /**
@@ -15,7 +15,38 @@ export type DisplayConfig =
   /** Arbitrary HTML rendered inside the TV/screen overlay (positioned over the prop in 3D space). */
   | { type: "html"; content: string; title?: string }
   /** tv-display skill: render HTML on the TV screen via screen-space projection. */
-  | { type: "tv"; content: string; title?: string };
+  | { type: "tv"; content: string; title?: string }
+  /**
+   * Skill needs external resources before it can generate.
+   * Client renders ResourcePickerPanel; user confirms then re-POSTs /interact with
+   * interactionData.confirmedResources = ResourceChoice[].
+   */
+  | { type: "resource-picker"; needs: ResourceNeed[]; title?: string };
+
+/** A resource the skill identified as needed for generation. */
+export interface ResourceNeed {
+  kind: "texture" | "model" | "audio" | "video";
+  /** Human-readable description, e.g. "particle texture for fireworks burst" */
+  label: string;
+  /** Pre-selected builtin option, if any. */
+  suggested?: ResourceOption;
+  options: ResourceOption[];
+}
+
+/** One selectable resource option. */
+export interface ResourceOption {
+  id: string;
+  name: string;
+  url: string;
+  thumbnail?: string;
+  source: "builtin" | "cdn" | "upload";
+}
+
+/** User-confirmed resource choices — sent back in interactionData.confirmedResources. */
+export interface ResourceChoice {
+  label: string;
+  option: ResourceOption;
+}
 
 export interface Vec3 {
   x: number;

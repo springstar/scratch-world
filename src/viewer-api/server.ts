@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import type Database from "better-sqlite3";
 import { Hono } from "hono";
 import type { IncomingMessage } from "http";
 import { WebSocketServer } from "ws";
@@ -24,9 +25,11 @@ import { npcInteractRoute } from "./routes/npc-interact.js";
 import { scenesRoute } from "./routes/scenes.js";
 import { screenshotsRoute } from "./routes/screenshots.js";
 import { splatProxyRoute } from "./routes/splat-proxy.js";
+import { createUserAssetsTable, userAssetsRoute } from "./routes/user-assets.js";
 
 export interface ViewerApiOptions {
 	port: number;
+	db: Database.Database;
 	sceneManager: SceneManager;
 	sessionManager: SessionManager;
 	skillLoader: SkillLoader;
@@ -46,6 +49,7 @@ export interface ViewerApiServer {
 export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	const {
 		port,
+		db,
 		sceneManager,
 		sessionManager,
 		skillLoader,
@@ -55,6 +59,9 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 		marbleApiKey,
 	} = opts;
 	const bus = opts.bus ?? new RealtimeBus();
+
+	// Ensure user_assets table exists
+	createUserAssetsTable(db);
 
 	const app = new Hono();
 
@@ -96,6 +103,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/collider", colliderProxyRoute(sceneManager, marbleApiKey));
 	app.route("/gltf-proxy", gltfProxyRoute());
 	app.route("/confirm-position", confirmPositionRoute());
+	app.route("/user-assets", userAssetsRoute(db, projectRoot));
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));

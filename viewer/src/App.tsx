@@ -12,13 +12,14 @@ import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition, addScenePortal } from "./api.js";
-import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject, DisplayConfig } from "./types.js";
+import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject, DisplayConfig, ResourceNeed, ResourceChoice } from "./types.js";
 import type { PendingNpc, GeneratedNpcModel } from "./components/NpcDrawer.js";
 import { PropDrawer } from "./components/PropDrawer.js";
 import type { PendingProp, GeneratedProp } from "./components/PropDrawer.js";
 import { PortalDrawer } from "./components/PortalDrawer.js";
 import { BehaviorOverlay } from "./components/BehaviorOverlay.js";
 import { PropInteractionPanel } from "./components/PropInteractionPanel.js";
+import { ResourcePickerPanel } from "./components/ResourcePickerPanel.js";
 import { PositionPicker } from "./components/PositionPicker.js";
 import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
 import { runScript } from "./behaviors/world-api.js";
@@ -96,6 +97,16 @@ export function App() {
 
   // Behavior skill overlay
   const [behaviorDisplay, setBehaviorDisplay] = useState<DisplayConfig | null>(null);
+
+  // Resource picker — shown when code-gen identifies needed textures/assets before generating
+  const [resourcePicker, setResourcePicker] = useState<{
+    needs: ResourceNeed[];
+    title: string;
+    // Context needed to re-fire the interact call after user confirms
+    objectId: string;
+    action: string;
+    skillMeta: Record<string, unknown>;
+  } | null>(null);
 
   // Proximity-triggered prop interaction panel (e.g. TV remote control)
   const [activePropPanel, setActivePropPanel] = useState<{
@@ -619,6 +630,11 @@ export function App() {
               }
               } // end no existing meshes
           }
+        } else if (result.display?.type === "resource-picker") {
+          setIsStreaming(false);
+          const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+          const skillMeta = (obj?.metadata.skill ?? {}) as Record<string, unknown>;
+          setResourcePicker({ needs: result.display.needs, title: result.display.title ?? "选择资源", objectId, action, skillMeta });
         } else if (result.display) {
           setIsStreaming(false);
           setBehaviorDisplay(result.display);
@@ -629,6 +645,121 @@ export function App() {
       }
     },
     [scene, sessionId],
+  );
+
+  // Re-fires interact with user-confirmed resources injected into interactionData
+  const handleResourceConfirm = useCallback(
+    async (choices: ResourceChoice[]) => {
+      if (!resourcePicker || !scene) return;
+      const { objectId, action, skillMeta } = resourcePicker;
+      setResourcePicker(null);
+      setIsStreaming(true);
+      streamingBuffer.current = "";
+      try {
+        const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+          | { x: number; y: number; z: number }
+          | undefined;
+        const result = await postInteract({
+          sessionId,
+          sceneId: scene.sceneId,
+          objectId,
+          action,
+          playerPosition,
+          interactionData: {
+            ...(((skillMeta.config ?? {}) as Record<string, unknown>)),
+            confirmedResources: choices,
+          },
+        });
+        setIsStreaming(false);
+        if (result.display?.type === "script") {
+          const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+          if (worldAPI) {
+            const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
+            const existingMeshes = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId && c.type === "Mesh");
+            if (existingMeshes.length > 0) {
+              setScriptMeshPlacement({ meshes: existingMeshes as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code, frozen: true });
+            } else {
+              const countBefore = api.scene.children.length;
+              const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1]);
+              if (!err) {
+                const newMeshes: Array<{ position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number } }> = [];
+                for (let i = countBefore; i < api.scene.children.length; i++) {
+                  const child = api.scene.children[i];
+                  if (child.type === "Mesh") {
+                    if (child.renderOrder === 0) child.renderOrder = 1;
+                    const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+                    for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
+                    newMeshes.push(child);
+                  }
+                  child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
+                }
+                if (newMeshes.length > 0) {
+                  setScriptMeshPlacement({ meshes: newMeshes as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code });
+                }
+              } else {
+                (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
+              }
+            }
+          }
+        } else if (result.display) {
+          setBehaviorDisplay(result.display);
+        }
+      } catch (err) {
+        setNarrativeLines([err instanceof Error ? err.message : "Interaction failed"]);
+        setIsStreaming(false);
+      }
+    },
+    [resourcePicker, scene, sessionId],
+  );
+
+  // Skip resource picker — re-fires with skipResourcePicker=true so code-gen generates without resources
+  const handleResourceSkip = useCallback(
+    async () => {
+      if (!resourcePicker || !scene) return;
+      const { objectId, action, skillMeta } = resourcePicker;
+      setResourcePicker(null);
+      setIsStreaming(true);
+      streamingBuffer.current = "";
+      try {
+        const playerPosition = (window as unknown as Record<string, unknown>).__playerPosition as
+          | { x: number; y: number; z: number }
+          | undefined;
+        const result = await postInteract({
+          sessionId,
+          sceneId: scene.sceneId,
+          objectId,
+          action,
+          playerPosition,
+          interactionData: {
+            ...((skillMeta.config ?? {}) as Record<string, unknown>),
+            skipResourcePicker: true,
+          },
+        });
+        setIsStreaming(false);
+        if (result.display?.type === "script") {
+          const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+          if (worldAPI) {
+            const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
+            const countBefore = api.scene.children.length;
+            const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1]);
+            if (!err) {
+              for (let i = countBefore; i < api.scene.children.length; i++) {
+                const child = api.scene.children[i];
+                child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
+              }
+            } else {
+              (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
+            }
+          }
+        } else if (result.display) {
+          setBehaviorDisplay(result.display);
+        }
+      } catch (err) {
+        setNarrativeLines([err instanceof Error ? err.message : "Interaction failed"]);
+        setIsStreaming(false);
+      }
+    },
+    [resourcePicker, scene, sessionId],
   );
 
   const handlePropApproach = useCallback(
@@ -1224,6 +1355,18 @@ export function App() {
       {/* Behavior skill overlay — shown when an interactive object with a skill is activated */}
       {behaviorDisplay && (
         <BehaviorOverlay display={behaviorDisplay} onClose={() => setBehaviorDisplay(null)} />
+      )}
+
+      {/* Resource picker — shown when code-gen needs texture/asset selection before generating */}
+      {resourcePicker && (
+        <ResourcePickerPanel
+          title={resourcePicker.title}
+          needs={resourcePicker.needs}
+          sessionId={sessionId}
+          onConfirm={handleResourceConfirm}
+          onSkip={handleResourceSkip}
+          onDismiss={() => setResourcePicker(null)}
+        />
       )}
 
       {/* Proximity prop panel — shown when player approaches an interactive prop */}

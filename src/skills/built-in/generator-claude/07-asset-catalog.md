@@ -117,6 +117,49 @@ stdlib.loadModel(treeUrl, { scale: 1, position: { x: -5, y: 0, z: -8 } });
 
 ---
 
+## Particle & Effects Texture Catalog
+
+Pre-built textures available at `/assets/particles/`. Use with `THREE.TextureLoader` in sceneCode or WorldAPI code.
+
+| path | description | best use |
+|------|-------------|----------|
+| `/assets/particles/disc.png` | Soft white circle, alpha-edged | Generic particle dot, snow, rain, bubbles |
+| `/assets/particles/spark1.png` | Star-shaped spark | Fireworks burst, magic sparkle, welding sparks |
+| `/assets/particles/snowflake1.png` | Six-arm snowflake | Snow particles, ice effects |
+| `/assets/particles/snowflake2.png` | Alternate snowflake | Snow blizzard variety |
+| `/assets/particles/lensflare0.png` | Large soft glow (512×512) | Sun flare, explosion center, portal glow |
+| `/assets/particles/lensflare3.png` | Small hexagonal flare | Secondary lens flare rings, bokeh |
+
+### Usage pattern (sceneCode / WorldAPI)
+
+```javascript
+// Always use Points + custom ShaderMaterial for best performance
+const tex = new THREE.TextureLoader().load('/assets/particles/spark1.png');
+const geo = new THREE.BufferGeometry();
+const count = 200;
+const pos = new Float32Array(count * 3);
+// ... fill positions ...
+geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+const mat = new THREE.PointsMaterial({
+  map: tex,
+  size: 0.3,
+  transparent: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  sizeAttenuation: true,
+});
+scene.add(new THREE.Points(geo, mat));
+```
+
+**Rules:**
+- Always set `depthWrite: false` and `blending: THREE.AdditiveBlending` for fire/glow/explosion effects.
+- Use `sizeAttenuation: true` so particles scale with distance.
+- For fireworks: use `spark1.png` for burst particles, `lensflare0.png` for the launch trail glow.
+- For snow/rain: use `disc.png` or `snowflake1.png`.
+- **Do not invent texture URLs.** Only use paths from this table or user-uploaded paths from scene context.
+
+---
+
 ## Physics Property Reference (for `place_prop` in Marble/splat scenes)
 
 Use this table when calling `place_prop` to set `physicsShape`, `mass`, and `scale` for interactive objects. Values are real-world estimates — prefer the nearest category.

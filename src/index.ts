@@ -101,6 +101,7 @@ async function main() {
 
 	startViewerApi({
 		port: viewerPort,
+		db,
 		sceneManager,
 		sessionManager,
 		skillLoader,
