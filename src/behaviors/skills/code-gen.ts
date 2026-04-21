@@ -7,6 +7,7 @@ import type {
 	ResourceOption,
 	SkillHandler,
 } from "../types.js";
+import { detectCodeCategory } from "./categories/index.js";
 import { detectEffect } from "./effects/index.js";
 
 /** WorldAPI surface documented for the LLM — must match viewer/src/behaviors/world-api.ts */
@@ -362,29 +363,17 @@ async function designEffect(userRequest: string): Promise<string> {
 	}
 }
 
-type EffectCategory = "PARTICLE" | "GEO_ANIM" | "LIGHT" | "UI_3D" | "COMPOSITE" | "UNKNOWN";
-
-const PARTICLE_KEYWORDS = /firework|snow|rain|fire|smoke|spark|explosion|confetti|magic|particle/i;
-const GEO_ANIM_KEYWORDS = /rotat|float|pulse|morph|wave|oscillat|spin|bounce|scale/i;
-const LIGHT_KEYWORDS = /light|flicker|glow|illuminate|spotlight|pointlight/i;
-const UI_3D_KEYWORDS = /sign|label|text|scoreboard|display|hud|billboard/i;
-
-function detectCategory(userRequest: string): EffectCategory {
-	if (PARTICLE_KEYWORDS.test(userRequest)) return "PARTICLE";
-	if (GEO_ANIM_KEYWORDS.test(userRequest)) return "GEO_ANIM";
-	if (LIGHT_KEYWORDS.test(userRequest)) return "LIGHT";
-	if (UI_3D_KEYWORDS.test(userRequest)) return "UI_3D";
-	return "UNKNOWN";
-}
-
-function reviewGeneratedCode(code: string, category: EffectCategory, userRequest: string): string[] {
+function reviewGeneratedCode(code: string, userRequest: string): string[] {
 	const violations: string[] = [];
+	const categoryDef = detectCodeCategory(code);
 
 	// Universal rules
 	if (/\bTHREE\./.test(code)) violations.push("Uses bare THREE global — must use world.THREE");
 	if (/\b(import|require)\b/.test(code)) violations.push("Contains import/require — not allowed in sandbox");
 	if (/\b(window|fetch|eval)\b/.test(code)) violations.push("Uses window/fetch/eval — not allowed in sandbox");
-	if (!/world\.animate\s*\(/.test(code)) violations.push("No world.animate() call — effect will be completely static");
+	if (!categoryDef?.skipAnimateCheck && !/world\.animate\s*\(/.test(code)) {
+		violations.push("No world.animate() call — effect will be completely static");
+	}
 	const hallucinated = code.match(/world\.(get\w+|getScene|getThreeScene|getRenderer|getCamera|getControls)\s*\(/g);
 	if (hallucinated) {
 		violations.push(
@@ -392,32 +381,16 @@ function reviewGeneratedCode(code: string, category: EffectCategory, userRequest
 		);
 	}
 
-	if (category === "PARTICLE") {
-		if (!/THREE\.Points/.test(code) && !/world\.THREE\.Points/.test(code)) {
-			violations.push("PARTICLE effect must use THREE.Points, not Mesh");
-		}
-		if (!/AdditiveBlending/.test(code)) {
-			violations.push("PARTICLE effect must set AdditiveBlending on material");
-		}
-		if (!/depthWrite\s*:\s*false/.test(code)) {
-			violations.push("PARTICLE effect must set depthWrite: false on material");
-		}
-		const countMatch = code.match(/(?:TOTAL|COUNT|count|total)\s*[=*]\s*(\d+)|new Float32Array\((\d+)\s*\*\s*3\)/);
-		if (countMatch) {
-			const count = Number(countMatch[1] ?? countMatch[2]);
-			if (!Number.isNaN(count) && count < 100) {
-				violations.push(`PARTICLE count too low (${count}) — minimum 200 for ambient, 500 for explosions`);
-			}
-		}
+	// Category-specific invariants from registry (detected from generated code, not user request)
+	for (const invariant of categoryDef?.invariants ?? []) {
+		if (invariant.test(code)) violations.push(invariant.message);
 	}
 
-	// Effect-specific invariants from registry
+	// Effect-specific invariants from registry (keyed on user request keywords)
 	const effectDef = detectEffect(userRequest);
 	if (effectDef) {
 		for (const invariant of effectDef.invariants) {
-			if (invariant.test(code)) {
-				violations.push(invariant.message);
-			}
+			if (invariant.test(code)) violations.push(invariant.message);
 		}
 	}
 
@@ -638,7 +611,6 @@ export const codeGenSkill: SkillHandler = {
 		// ── Code generation phase (Pass 2) ────────────────────────────────────
 		const resourceContext = confirmedResources ? buildResourceContext(confirmedResources) : "";
 		const model = getModel_(modelId);
-		const category = detectCategory(userRequest);
 
 		// Inject effect-specific reference implementation into system prompt
 		const effectDef = detectEffect(userRequest);
@@ -706,7 +678,7 @@ export const codeGenSkill: SkillHandler = {
 				return { type: "markdown", content: `**代码生成失败:** ${msg}`, title: "错误" };
 			}
 
-			const violations = reviewGeneratedCode(rawCode, category, userRequest);
+			const violations = reviewGeneratedCode(rawCode, userRequest);
 			if (violations.length === 0 || attempt === MAX_RETRIES) {
 				code = rawCode;
 				if (violations.length > 0) {
