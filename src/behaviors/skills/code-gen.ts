@@ -7,7 +7,7 @@ import type {
 	ResourceOption,
 	SkillHandler,
 } from "../types.js";
-import { detectCodeCategory } from "./categories/index.js";
+import { detectCategoryFromRequest, detectCodeCategory } from "./categories/index.js";
 import { detectEffect } from "./effects/index.js";
 
 /** WorldAPI surface documented for the LLM — must match viewer/src/behaviors/world-api.ts */
@@ -615,9 +615,11 @@ export const codeGenSkill: SkillHandler = {
 		// Inject effect-specific reference implementation into system prompt
 		const effectDef = detectEffect(userRequest);
 
+		// Scene environment — used by both the fast path (adaptImpl) and LLM path (sceneHints)
+		const env = ctx.environment ?? {};
+
 		// Fast path: skip LLM generation for effects with authoritative reference implementations
 		if (effectDef?.useReferenceDirectly) {
-			const env = ctx.environment ?? {};
 			const code = effectDef.adaptImpl ? effectDef.adaptImpl(effectDef.referenceImpl, env) : effectDef.referenceImpl;
 			console.log(
 				`[code-gen] using reference impl directly for: ${effectDef.keywords} (env: timeOfDay=${env.timeOfDay ?? "unknown"}, skybox=${env.skybox ?? "unknown"})`,
@@ -628,7 +630,17 @@ export const codeGenSkill: SkillHandler = {
 		const effectReference = effectDef
 			? `## Effect reference: ${effectDef.keywords.source ?? "matched effect"}\n\n${effectDef.designIntent}\n\n\`\`\`javascript\n${effectDef.referenceImpl}\n\`\`\``
 			: "";
-		const systemPrompt = SYSTEM_PROMPT.replace("{{EFFECT_REFERENCE}}", effectReference) + resourceContext;
+
+		// Scene hints from category registry — injected into system prompt for scene-aware generation
+		const categoryDef = detectCategoryFromRequest(userRequest);
+		const hints = categoryDef?.sceneHints(env) ?? [];
+		const sceneHintsSection =
+			hints.length > 0
+				? `\n\n## Scene adaptation rules (MUST follow for this scene)\n${hints.map((h) => `- ${h}`).join("\n")}`
+				: "";
+
+		const systemPrompt =
+			SYSTEM_PROMPT.replace("{{EFFECT_REFERENCE}}", effectReference) + sceneHintsSection + resourceContext;
 
 		// Extract design constraints for retry feedback — no extra LLM call needed
 		let designConstraints = "";
@@ -658,7 +670,6 @@ export const codeGenSkill: SkillHandler = {
 		const displayY = (ctx.displayY ?? 1.3).toFixed(3);
 		const displayW = ctx.displayWidth?.toFixed(3) ?? "1.600";
 		const displayH = ctx.displayHeight?.toFixed(3) ?? "0.900";
-		const env = ctx.environment;
 		const envStr = env
 			? [
 					env.timeOfDay && `timeOfDay="${env.timeOfDay}"`,

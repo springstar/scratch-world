@@ -1,17 +1,37 @@
+import type { EnvironmentConfig } from "../../../scene/types.js";
+
 /**
- * CategoryDef — validation rules for a generated code category.
+ * CategoryDef — rendering knowledge for a generated code category.
  *
- * reviewGeneratedCode iterates CATEGORY_REGISTRY; each CategoryDef owns its
- * detection logic and invariants. Adding a new category = new file here,
- * not a new if/else block in reviewGeneratedCode.
+ * Owns three responsibilities:
+ *   1. detectFromRequest — match user intent to category (pre-generation)
+ *   2. sceneHints        — inject scene-aware rendering rules into LLM prompt
+ *   3. detect + invariants — validate generated code (post-generation)
+ *
+ * Adding a new category = new file here, not changes to code-gen.ts.
  */
 export interface CategoryDef {
-	/** Short identifier used in log messages. */
+	/** Short identifier used in log messages and system prompt injection. */
 	name: string;
 
 	/**
-	 * Detect whether generated code belongs to this category.
-	 * Called against the generated code string (not the user request).
+	 * Detect whether the USER REQUEST belongs to this category.
+	 * Used before generation to select scene hints for the LLM prompt.
+	 * First match in registry wins.
+	 */
+	detectFromRequest: (userRequest: string) => boolean;
+
+	/**
+	 * Scene-aware rendering rules injected into the LLM system prompt.
+	 * Called with the actual scene environment; returns an array of directive
+	 * strings that tell the LLM how to adapt this category for the scene.
+	 * Return [] when no adaptation is needed.
+	 */
+	sceneHints: (env: EnvironmentConfig) => string[];
+
+	/**
+	 * Detect whether GENERATED CODE belongs to this category.
+	 * Called post-generation for invariant checking.
 	 * First match in registry wins.
 	 */
 	detect: (code: string) => boolean;
