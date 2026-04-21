@@ -25,7 +25,7 @@ const sparkTex = new THREE.TextureLoader().load('/assets/particles/spark1.png');
 const glowTex  = new THREE.TextureLoader().load('/assets/particles/lensflare0.png');
 
 const ROCKET_COUNT = 6;
-const BURST_PER    = 250;
+const BURST_PER    = 350;
 
 // ── Rockets ──────────────────────────────────────────────────────────────────
 const rocketGeo = new THREE.BufferGeometry();
@@ -34,8 +34,9 @@ const rVel  = new Float32Array(ROCKET_COUNT * 3);
 const rLife = new Float32Array(ROCKET_COUNT);
 rocketGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
 const rockets = new THREE.Points(rocketGeo, new THREE.PointsMaterial({
-  map: glowTex, size: 0.5, sizeAttenuation: true,
+  map: glowTex, size: 1.2, sizeAttenuation: true,
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  color: 0xffdd88,
 }));
 rockets.renderOrder = 3;
 world.scene.add(rockets);
@@ -48,31 +49,33 @@ const bVel  = new Float32Array(BTOTAL * 3);
 const bLife = new Float32Array(BTOTAL);
 const bMaxL = new Float32Array(BTOTAL);
 const bCol  = new Float32Array(BTOTAL * 3);
+const bBase = new Float32Array(BTOTAL * 3);
 bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3));
 bGeo.setAttribute('color',    new THREE.BufferAttribute(bCol, 3));
+// NormalBlending: burst particles are opaque, visible against any bright background
 const burst = new THREE.Points(bGeo, new THREE.PointsMaterial({
-  map: sparkTex, size: 0.3, sizeAttenuation: true,
+  map: sparkTex, size: 1.5, sizeAttenuation: true,
   transparent: true, depthWrite: false,
-  blending: THREE.AdditiveBlending, vertexColors: true,
+  blending: THREE.NormalBlending, vertexColors: true,
 }));
 burst.renderOrder = 2;
 world.scene.add(burst);
-for (let i = 0; i < BTOTAL; i++) bPos[i*3+1] = -9999; // hide until explode
+for (let i = 0; i < BTOTAL; i++) bPos[i*3+1] = -9999;
 
 const palette = [
-  [1.0, 0.2, 0.1], [1.0, 0.9, 0.1], [0.2, 0.5, 1.0],
-  [1.0, 0.1, 0.9], [0.2, 1.0, 0.4], [1.0, 0.5, 0.0],
+  [1.0, 0.15, 0.05], [1.0, 0.85, 0.05], [0.1, 0.4,  1.0],
+  [1.0, 0.05, 0.85], [0.1, 1.0,  0.3],  [1.0, 0.45, 0.0],
 ];
 
 function launchRocket(r) {
-  rPos[r*3]   = OX + (Math.random() - 0.5) * 8;
+  rPos[r*3]   = OX + (Math.random() - 0.5) * 10;
   rPos[r*3+1] = OY + 0.5;
-  rPos[r*3+2] = OZ + (Math.random() - 0.5) * 8;
-  rVel[r*3+1] = 14 + Math.random() * 6;           // vy ≥ 14
-  rLife[r]    = (6 + Math.random() * 4) / rVel[r*3+1];
+  rPos[r*3+2] = OZ + (Math.random() - 0.5) * 10;
+  rVel[r*3+1] = 16 + Math.random() * 6;
+  rLife[r]    = (5 + Math.random() * 4) / rVel[r*3+1];
 }
 
-// CRITICAL: burst particles spawned here at rocket's current position, not preset
+// CRITICAL: burst particles spawned at rocket's current position when it peaks
 function explode(r) {
   const ex = rPos[r*3], ey = rPos[r*3+1], ez = rPos[r*3+2];
   const col = palette[r % palette.length];
@@ -80,21 +83,24 @@ function explode(r) {
     const idx  = r * BURST_PER + i;
     const phi  = Math.acos(2 * Math.random() - 1);
     const th   = Math.random() * Math.PI * 2;
-    const spd  = 4 + Math.random() * 5;
+    const spd  = 5 + Math.random() * 8;
     bVel[idx*3]   = Math.sin(phi) * Math.cos(th) * spd;
     bVel[idx*3+1] = Math.cos(phi) * spd;
     bVel[idx*3+2] = Math.sin(phi) * Math.sin(th) * spd;
     bPos[idx*3]   = ex; bPos[idx*3+1] = ey; bPos[idx*3+2] = ez;
-    const life = 1.0 + Math.random() * 0.8;
+    const life = 1.5 + Math.random() * 1.0;
     bLife[idx] = life; bMaxL[idx] = life;
-    bCol[idx*3]   = col[0] * (0.85 + Math.random() * 0.15);
-    bCol[idx*3+1] = col[1] * (0.85 + Math.random() * 0.15);
-    bCol[idx*3+2] = col[2] * (0.85 + Math.random() * 0.15);
+    bBase[idx*3]   = col[0] * (0.8 + Math.random() * 0.2);
+    bBase[idx*3+1] = col[1] * (0.8 + Math.random() * 0.2);
+    bBase[idx*3+2] = col[2] * (0.8 + Math.random() * 0.2);
+    bCol[idx*3]   = bBase[idx*3];
+    bCol[idx*3+1] = bBase[idx*3+1];
+    bCol[idx*3+2] = bBase[idx*3+2];
   }
-  rPos[r*3+1] = -9999; // hide rocket
+  rPos[r*3+1] = -9999;
 }
 
-const launchAt = Array.from({length: ROCKET_COUNT}, (_, i) => i * 0.7);
+const launchAt = Array.from({length: ROCKET_COUNT}, (_, i) => i * 0.8);
 const exploded = new Array(ROCKET_COUNT).fill(true);
 let elapsed = 0;
 
@@ -119,14 +125,17 @@ world.animate((dt) => {
     bPos[i*3]   += bVel[i*3]   * dt;
     bPos[i*3+1] += bVel[i*3+1] * dt;
     bPos[i*3+2] += bVel[i*3+2] * dt;
+    // Linear fade using stored base color — framerate-independent
     const t = Math.max(0, bLife[i] / bMaxL[i]);
-    bCol[i*3] *= 0.96 + t * 0.03; bCol[i*3+1] *= 0.96 + t * 0.03; bCol[i*3+2] *= 0.96 + t * 0.03;
+    bCol[i*3]   = bBase[i*3]   * t;
+    bCol[i*3+1] = bBase[i*3+1] * t;
+    bCol[i*3+2] = bBase[i*3+2] * t;
   }
   bGeo.attributes.position.needsUpdate = true;
   bGeo.attributes.color.needsUpdate    = true;
-  if (elapsed > launchAt[ROCKET_COUNT-1] + 4.5) {
+  if (elapsed > launchAt[ROCKET_COUNT-1] + 5.5) {
     elapsed = 0;
-    for (let r = 0; r < ROCKET_COUNT; r++) { exploded[r] = true; launchAt[r] = r * 0.7 + Math.random() * 0.3; }
+    for (let r = 0; r < ROCKET_COUNT; r++) { exploded[r] = true; launchAt[r] = r * 0.8 + Math.random() * 0.4; }
     for (let i = 0; i < BTOTAL; i++) bLife[i] = 0;
   }
 });`,
