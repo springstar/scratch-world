@@ -430,8 +430,9 @@ Identify which category this request falls into:
 
 PARTICLE effects — non-negotiable rules:
 - ALWAYS use THREE.Points + THREE.BufferGeometry, never Mesh spheres as particles
-- ALWAYS set depthWrite: false and blending: world.THREE.AdditiveBlending on the material
+- ALWAYS set depthWrite: false AND depthTest: false on the material — Gaussian Splat depth buffer occludes particles even at higher renderOrder unless depthTest is explicitly disabled
 - ALWAYS set sizeAttenuation: true so particles scale with distance
+- ALWAYS set .frustumCulled = false on every THREE.Points object — particles initialized at y=-9999 (off-screen park) bake a bounding sphere at that position; Three.js frustum culling then permanently rejects the geometry even after positions update to valid world coordinates
 - Minimum particle count: 200 for ambient effects, 500 for explosions/fireworks
 - Particles MUST move: use world.animate() to update positions every frame
 - For fireworks: TWO separate particle systems — (1) rocket streaks rising fast (vy ≥ 14 units/s, ascent ~0.5s), then (2) explosion burst (200+ particles from peak in sphere spread). Never place burst particles at peak directly — they must be spawned by the rocket reaching peak height.

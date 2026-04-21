@@ -53,6 +53,18 @@ export const particleCategory: CategoryDef = {
 			message: "PARTICLE effect must set depthWrite: false on material",
 		},
 		{
+			test: (code) => !/depthTest\s*:\s*false/.test(code),
+			message:
+				"PARTICLE effect must set depthTest: false on material — Gaussian Splat depth buffer occludes particles " +
+				"even at higher renderOrder unless depthTest is disabled",
+		},
+		{
+			test: (code) => /new\s+(?:world\.)?THREE\.Points\s*\(/.test(code) && !/frustumCulled\s*=\s*false/.test(code),
+			message:
+				"THREE.Points must set .frustumCulled = false — particles initialized at y=-9999 bake a bounding sphere " +
+				"at that position; frustum culling then permanently discards the geometry even after positions are updated",
+		},
+		{
 			test: (code) => {
 				const m = code.match(/(?:TOTAL|COUNT|count|total)\s*[=*]\s*(\d+)|new Float32Array\((\d+)\s*\*\s*3\)/);
 				if (!m) return false;
