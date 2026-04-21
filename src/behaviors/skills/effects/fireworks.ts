@@ -14,20 +14,16 @@ export const fireworksEffect: EffectDef = {
 		let code = base;
 
 		if (isNight) {
-			// Night: AdditiveBlending pops against dark sky; smaller particles still vivid
-			code = code
-				.replace("blending: THREE.NormalBlending", "blending: THREE.AdditiveBlending")
-				.replace("size: 3.5,", "size: 2.0,")
-				.replace("size: 1.5,", "size: 1.0,");
+			// Night: smaller particles still vivid with AdditiveBlending against dark sky
+			code = code.replace("size: 4.0,", "size: 2.5,").replace("size: 2.0,", "size: 1.2,");
 		}
 
 		if (isIndoor) {
-			// Indoor: lower altitude, tighter spread, smaller particles
+			// Indoor: lower altitude, tighter spread
 			code = code
 				.replace("rVel[r*3+1] = 18 + Math.random() * 6;", "rVel[r*3+1] = 10 + Math.random() * 4;")
 				.replace("rLife[r]    = 0.85 + Math.random() * 0.35;", "rLife[r]    = 0.5 + Math.random() * 0.2;")
-				.replace("(Math.random() - 0.5) * 12", "(Math.random() - 0.5) * 6")
-				.replace("size: 3.5,", "size: 2.5,");
+				.replace("(Math.random() - 0.5) * 12", "(Math.random() - 0.5) * 6");
 		}
 
 		return code;
@@ -37,9 +33,9 @@ export const fireworksEffect: EffectDef = {
 Fireworks are a two-phase effect: a fast-rising rocket streak, then an explosion burst at peak height.
 The key insight is that burst particles must be SPAWNED at the rocket's position when it peaks — they
 must not exist before the explosion. Two separate THREE.Points systems are required (rockets + burst pool).
-Rockets rise fast (vy ≥ 14 units/s, ~0.5s ascent), then trigger explode() which copies rocket position
+Rockets rise fast (vy ≥ 14 units/s, ~1s flight), then trigger explode() which copies rocket position
 into burst particle positions and sets sphere-spread velocities. Burst particles use vertexColors with
-a vivid palette — white particles are invisible in daylit scenes. Gravity applies to both systems.
+a vivid palette. CRITICAL: renderOrder must be > 10 to render above the Gaussian Splat layer.
 `.trim(),
 
 	referenceImpl: `\
@@ -58,15 +54,14 @@ const rocketGeo = new THREE.BufferGeometry();
 const rPos  = new Float32Array(ROCKET_COUNT * 3);
 const rVel  = new Float32Array(ROCKET_COUNT * 3);
 const rLife = new Float32Array(ROCKET_COUNT);
-// Hide all rockets off-screen until they launch
 for (let r = 0; r < ROCKET_COUNT; r++) rPos[r*3+1] = -9999;
 rocketGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
 const rockets = new THREE.Points(rocketGeo, new THREE.PointsMaterial({
-  map: glowTex, size: 1.5, sizeAttenuation: true,
+  map: glowTex, size: 2.0, sizeAttenuation: true,
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  color: 0xffdd88,
+  color: 0xffee99,
 }));
-rockets.renderOrder = 3;
+rockets.renderOrder = 12;
 world.scene.add(rockets);
 
 // ── Burst pool ────────────────────────────────────────────────────────────────
@@ -80,19 +75,19 @@ const bCol  = new Float32Array(BTOTAL * 3);
 const bBase = new Float32Array(BTOTAL * 3);
 bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3));
 bGeo.setAttribute('color',    new THREE.BufferAttribute(bCol, 3));
-// NormalBlending: burst particles are opaque, visible against bright daylit sky
+// AdditiveBlending + renderOrder > splat(10): burst renders on top of Gaussian Splat
 const burst = new THREE.Points(bGeo, new THREE.PointsMaterial({
-  map: sparkTex, size: 3.5, sizeAttenuation: true,
+  map: sparkTex, size: 4.0, sizeAttenuation: true,
   transparent: true, depthWrite: false,
-  blending: THREE.NormalBlending, vertexColors: true,
+  blending: THREE.AdditiveBlending, vertexColors: true,
 }));
-burst.renderOrder = 2;
+burst.renderOrder = 11;
 world.scene.add(burst);
 for (let i = 0; i < BTOTAL; i++) bPos[i*3+1] = -9999;
 
 const palette = [
-  [1.0, 0.10, 0.05], [1.0, 0.80, 0.00], [0.05, 0.35, 1.0],
-  [1.0, 0.05, 0.80], [0.05, 1.0,  0.25], [1.0, 0.40, 0.0],
+  [1.0, 0.05, 0.0],  [1.0, 0.85, 0.0],  [0.0, 0.3,  1.0],
+  [1.0, 0.0,  0.85], [0.0, 1.0,  0.2],  [1.0, 0.4,  0.0],
 ];
 
 function launchRocket(r) {
@@ -100,11 +95,9 @@ function launchRocket(r) {
   rPos[r*3+1] = OY + 0.5;
   rPos[r*3+2] = OZ + (Math.random() - 0.5) * 12;
   rVel[r*3+1] = 18 + Math.random() * 6;
-  // Fixed flight time ~1s — ensures rockets reach 15-20 units altitude regardless of velocity
   rLife[r]    = 0.85 + Math.random() * 0.35;
 }
 
-// CRITICAL: burst particles spawned at rocket's current position when it peaks
 function explode(r) {
   const ex = rPos[r*3], ey = rPos[r*3+1], ez = rPos[r*3+2];
   const col = palette[r % palette.length];
@@ -119,12 +112,12 @@ function explode(r) {
     bPos[idx*3]   = ex; bPos[idx*3+1] = ey; bPos[idx*3+2] = ez;
     const life = 1.8 + Math.random() * 1.2;
     bLife[idx] = life; bMaxL[idx] = life;
-    bBase[idx*3]   = col[0] * (0.85 + Math.random() * 0.15);
-    bBase[idx*3+1] = col[1] * (0.85 + Math.random() * 0.15);
-    bBase[idx*3+2] = col[2] * (0.85 + Math.random() * 0.15);
-    bCol[idx*3]   = bBase[idx*3];
-    bCol[idx*3+1] = bBase[idx*3+1];
-    bCol[idx*3+2] = bBase[idx*3+2];
+    bBase[idx*3]   = col[0];
+    bBase[idx*3+1] = col[1];
+    bBase[idx*3+2] = col[2];
+    bCol[idx*3]   = col[0];
+    bCol[idx*3+1] = col[1];
+    bCol[idx*3+2] = col[2];
   }
   rPos[r*3+1] = -9999;
 }
@@ -154,7 +147,6 @@ world.animate((dt) => {
     bPos[i*3]   += bVel[i*3]   * dt;
     bPos[i*3+1] += bVel[i*3+1] * dt;
     bPos[i*3+2] += bVel[i*3+2] * dt;
-    // Linear fade using stored base color — framerate-independent
     const t = Math.max(0, bLife[i] / bMaxL[i]);
     bCol[i*3]   = bBase[i*3]   * t;
     bCol[i*3+1] = bBase[i*3+1] * t;
@@ -173,32 +165,25 @@ world.animate((dt) => {
 		{
 			test: (code) => (code.match(/new\s+(?:world\.)?THREE\.Points\s*\(/g) ?? []).length < 2,
 			message:
-				"Fireworks require TWO separate THREE.Points systems: one for rising rocket streaks, one for explosion burst particles. " +
-				"Found fewer than 2. The rocket Points shows the ascent; the burst Points shows the explosion.",
+				"Fireworks require TWO separate THREE.Points systems: rockets (renderOrder=12) and burst (renderOrder=11). " +
+				"Both must be > 10 to render above the Gaussian Splat layer.",
 		},
 		{
 			test: (code) => {
 				const m = code.match(/rVel\[.*?\]\s*=\s*([\d.]+)|vy\s*=\s*([\d.]+)/);
-				if (!m) return true; // no velocity found → violation
+				if (!m) return true;
 				const v = Number(m[1] ?? m[2]);
 				return !Number.isNaN(v) && v < 14;
 			},
-			message:
-				"Rocket upward velocity must be ≥ 14 units/s for a realistic fast ascent (~0.5s to peak). " +
-				"Slow rockets (< 14) look like floating balloons, not fireworks.",
+			message: "Rocket upward velocity must be ≥ 14 units/s for a realistic fast ascent.",
 		},
 		{
 			test: (code) => !/vertexColors\s*:\s*true/.test(code),
-			message:
-				"Burst particles must use vertexColors: true on PointsMaterial with a vivid multi-color palette " +
-				"(red, gold, blue, magenta, green, orange). Single-color or white particles are invisible in daylit scenes.",
+			message: "Burst particles must use vertexColors: true with a vivid multi-color palette.",
 		},
 		{
 			test: (code) => !/function\s+explode|const\s+explode\s*=/.test(code),
-			message:
-				"Missing explode() function. Burst particles must be spawned at the rocket's current position " +
-				"when it reaches peak height — not initialized at a fixed Y offset. " +
-				"explode(r) copies rPos[r] into bPos[] for all burst particles of rocket r.",
+			message: "Missing explode() function. Burst particles must be spawned at the rocket's peak position.",
 		},
 	],
 };

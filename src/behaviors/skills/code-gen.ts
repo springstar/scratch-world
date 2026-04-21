@@ -622,7 +622,7 @@ export const codeGenSkill: SkillHandler = {
 		if (effectDef?.useReferenceDirectly) {
 			const code = effectDef.adaptImpl ? effectDef.adaptImpl(effectDef.referenceImpl, env) : effectDef.referenceImpl;
 			console.log(
-				`[code-gen] using reference impl directly for: ${effectDef.keywords} (env: timeOfDay=${env.timeOfDay ?? "unknown"}, skybox=${env.skybox ?? "unknown"})`,
+				`[code-gen] reference impl (${effectDef.keywords}, env: timeOfDay=${env.timeOfDay ?? "unknown"}, skybox=${env.skybox ?? "unknown"}):\n${code}`,
 			);
 			return { type: "script", code, title };
 		}
