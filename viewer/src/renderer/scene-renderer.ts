@@ -415,7 +415,7 @@ export class SceneRenderer {
     let outputNode;
     if (tier >= 2) {
       // HIGH: SMAA + film grain + vignette
-      const withGrain = film(smaa(withBloom), 0.04);
+      const withGrain = film(smaa(withBloom), TSL.float(0.04));
       const vignette  = uv().sub(0.5).length().mul(1.55).smoothstep(0.8, 0.15).mul(0.24).add(0.76);
       outputNode = withGrain.mul(vignette);
     } else if (tier === 1) {

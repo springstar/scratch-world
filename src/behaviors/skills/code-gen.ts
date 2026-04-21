@@ -7,6 +7,7 @@ import type {
 	ResourceOption,
 	SkillHandler,
 } from "../types.js";
+import { detectEffect } from "./effects/index.js";
 
 /** WorldAPI surface documented for the LLM — must match viewer/src/behaviors/world-api.ts */
 const WORLD_API_DOCS = `\
@@ -69,12 +70,53 @@ world.camera: THREE.Camera  // read-only, for reference
 
 // Access the full Three.js module via world.THREE — do NOT use a bare THREE global.
 world.THREE: typeof import("three")
+
+// Spark 2.0 Gaussian Splat rendering — only available when world.provider === "splat".
+// Always guard with: if (world.spark) { ... }
+world.spark: {
+  // Add a SDF-based edit to the scene splat (deformation, colorization, displacement).
+  // Edits are applied in GPU shader — zero Three.js draw call cost.
+  addEdit(edit): void
+  removeEdit(edit): void
+
+  // Add a Spark SplatMesh (e.g. snowBox result) to the scene.
+  // Returns cleanup function: const cleanup = world.spark.addSplat(snow); world.animate(() => { if (done) cleanup(); });
+  addSplat(mesh): () => void
+
+  // Runtime depth-of-field on the scene splat.
+  // focalDistance: world-space distance from camera (e.g. 5.0 = focus 5m ahead)
+  // apertureAngle: 0 = off, 0.01 = subtle, 0.05 = cinematic, 0.15 = extreme
+  setDof(focalDistance: number, apertureAngle: number): void
+
+  // Constructor classes — use to build edits and generators:
+  Spark: {
+    // SDF edit container — attach SDFs to define the affected region
+    SplatEdit: class  // new world.spark.Spark.SplatEdit({ rgbaBlendMode, sdfSmooth, softEdge })
+    // Individual SDF shape within an edit
+    SplatEditSdf: class  // new world.spark.Spark.SplatEditSdf({ type, radius, opacity, color, displace })
+    // SDF type enum: "sphere" | "box" | "plane" | "ellipsoid" | "cylinder" | "capsule" | "infinite_cone"
+    SplatEditSdfType: { SPHERE, BOX, PLANE, ELLIPSOID, CYLINDER, CAPSULE, INFINITE_CONE }
+    // Blend mode: "multiply" (darken/fade) | "set_rgb" (recolor) | "add_rgba" (additive glow)
+    SplatEditRgbaBlendMode: { MULTIPLY, SET_RGB, ADD_RGBA }
+
+    // Built-in Gaussian snow/rain particle system (rendered as splats, not Three.js Points)
+    // Returns { snow: SplatMesh, fallVelocity, opacity, color1, color2, ... } — live DynoFloat params
+    snowBox(opts: { box?, density?, fallVelocity?, color1?, color2?, opacity?, anisoScale?, minScale?, maxScale? }): { snow, fallVelocity, opacity, ... }
+
+    // Convert image URL to splat cloud
+    imageSplats(opts: { url: string, dotRadius?, subXY?, forEachSplat? }): SplatMesh
+    // Render text as splat cloud
+    textSplats(opts: { text: string, fontSize?, color?, textAlign?, objectScale? }): SplatMesh
+  }
+}
 \`\`\`
 
 Rules:
 - Only use the \`world\` API. Do NOT access \`window\`, \`document\`, \`fetch\`, \`eval\`, or any global.
   Exception: \`document.createElement('canvas')\` is allowed when creating a CanvasTexture for world.scene.
 - Do NOT use \`import\` or \`require\`.
+- CRITICAL: \`world\` exposes DIRECT PROPERTIES only — \`world.scene\`, \`world.camera\`, \`world.THREE\`, \`world.spark\`.
+  There are NO getter methods. \`world.getThreeScene()\`, \`world.getScene()\`, \`world.getRenderer()\`, \`world.getCamera()\` do NOT exist and will throw.
 - The script runs once. Use \`world.animate()\` for anything that needs to update every frame.
 - Keep generated objects small and well-positioned so they're visible and don't block navigation.
 - CRITICAL: For ANY content that should appear on a physical surface in the 3D world (TV, screen,
@@ -257,6 +299,131 @@ async function analyzeResources(
 	}
 }
 
+const DESIGN_PROMPT = `You are a 3D effects technical designer. Given a user request for a visual effect in a Three.js scene, produce a concise technical design document that a code generator will use as a blueprint.
+
+Output a JSON object with this structure:
+{
+  "category": "PARTICLE" | "GEO_ANIM" | "LIGHT" | "UI_3D" | "COMPOSITE",
+  "summary": "one sentence description of the effect",
+  "phases": [
+    { "name": "phase name", "duration_s": number | null, "description": "what happens" }
+  ],
+  "particles": {
+    "systems": number,
+    "count_per_system": number,
+    "texture": "spark1 | snowflake1 | snowflake2 | lensflare0 | lensflare3 | disc",
+    "blending": "AdditiveBlending | NormalBlending",
+    "size_range": [min, max],
+    "lifetime_range_s": [min, max],
+    "initial_velocity": "description e.g. upward vy=14-20, sphere spread spd=4-9",
+    "gravity": number,
+    "color_palette": ["#rrggbb", ...]
+  } | null,
+  "geometry": {
+    "shapes": ["box|sphere|cylinder|plane"],
+    "animation": "description of transform animation"
+  } | null,
+  "lights": {
+    "types": ["PointLight|SpotLight"],
+    "intensity_range": [min, max],
+    "animation": "description"
+  } | null,
+  "key_constraints": ["list of must-have implementation details"],
+  "common_mistakes": ["list of mistakes to avoid for this specific effect"]
+}
+
+Rules:
+- Be specific with numbers (velocities, counts, durations) — the code generator will use them directly
+- For fireworks: phases must be [rocket_ascent, explosion, fade]. rocket_ascent vy must be 14-20 units/s. explosion spawns all burst particles at rocket peak position.
+- For snow: count ≥ 500, wrap-around when y < ground, continuous loop
+- common_mistakes must be specific to this effect, not generic
+- Output only the JSON, no prose`;
+
+async function designEffect(userRequest: string): Promise<string> {
+	const model = getModel_("claude-haiku-4-5-20251001");
+	try {
+		const response = await completeSimple(model, {
+			systemPrompt: DESIGN_PROMPT,
+			messages: [{ role: "user", content: userRequest, timestamp: Date.now() }],
+		});
+		const raw = response.content
+			.filter((c) => c.type === "text")
+			.map((c) => (c as { type: "text"; text: string }).text)
+			.join("")
+			.trim()
+			.replace(/^```[\w]*\n?/m, "")
+			.replace(/\n?```$/m, "")
+			.trim();
+		// Validate it's parseable JSON — if not, return empty string (non-fatal)
+		JSON.parse(raw);
+		return raw;
+	} catch {
+		return "";
+	}
+}
+
+type EffectCategory = "PARTICLE" | "GEO_ANIM" | "LIGHT" | "UI_3D" | "COMPOSITE" | "UNKNOWN";
+
+const PARTICLE_KEYWORDS = /firework|snow|rain|fire|smoke|spark|explosion|confetti|magic|particle/i;
+const GEO_ANIM_KEYWORDS = /rotat|float|pulse|morph|wave|oscillat|spin|bounce|scale/i;
+const LIGHT_KEYWORDS = /light|flicker|glow|illuminate|spotlight|pointlight/i;
+const UI_3D_KEYWORDS = /sign|label|text|scoreboard|display|hud|billboard/i;
+
+function detectCategory(userRequest: string): EffectCategory {
+	if (PARTICLE_KEYWORDS.test(userRequest)) return "PARTICLE";
+	if (GEO_ANIM_KEYWORDS.test(userRequest)) return "GEO_ANIM";
+	if (LIGHT_KEYWORDS.test(userRequest)) return "LIGHT";
+	if (UI_3D_KEYWORDS.test(userRequest)) return "UI_3D";
+	return "UNKNOWN";
+}
+
+function reviewGeneratedCode(code: string, category: EffectCategory, userRequest: string): string[] {
+	const violations: string[] = [];
+
+	// Universal rules
+	if (/\bTHREE\./.test(code)) violations.push("Uses bare THREE global — must use world.THREE");
+	if (/\b(import|require)\b/.test(code)) violations.push("Contains import/require — not allowed in sandbox");
+	if (/\b(window|fetch|eval)\b/.test(code)) violations.push("Uses window/fetch/eval — not allowed in sandbox");
+	if (!/world\.animate\s*\(/.test(code)) violations.push("No world.animate() call — effect will be completely static");
+	const hallucinated = code.match(/world\.(get\w+|getScene|getThreeScene|getRenderer|getCamera|getControls)\s*\(/g);
+	if (hallucinated) {
+		violations.push(
+			`world has no getter methods — use direct properties: world.scene, world.camera, world.THREE. Hallucinated: ${[...new Set(hallucinated)].join(", ")}`,
+		);
+	}
+
+	if (category === "PARTICLE") {
+		if (!/THREE\.Points/.test(code) && !/world\.THREE\.Points/.test(code)) {
+			violations.push("PARTICLE effect must use THREE.Points, not Mesh");
+		}
+		if (!/AdditiveBlending/.test(code)) {
+			violations.push("PARTICLE effect must set AdditiveBlending on material");
+		}
+		if (!/depthWrite\s*:\s*false/.test(code)) {
+			violations.push("PARTICLE effect must set depthWrite: false on material");
+		}
+		const countMatch = code.match(/(?:TOTAL|COUNT|count|total)\s*[=*]\s*(\d+)|new Float32Array\((\d+)\s*\*\s*3\)/);
+		if (countMatch) {
+			const count = Number(countMatch[1] ?? countMatch[2]);
+			if (!Number.isNaN(count) && count < 100) {
+				violations.push(`PARTICLE count too low (${count}) — minimum 200 for ambient, 500 for explosions`);
+			}
+		}
+	}
+
+	// Effect-specific invariants from registry
+	const effectDef = detectEffect(userRequest);
+	if (effectDef) {
+		for (const invariant of effectDef.invariants) {
+			if (invariant.test(code)) {
+				violations.push(invariant.message);
+			}
+		}
+	}
+
+	return violations;
+}
+
 function buildResourceContext(confirmedResources: ResourceChoice[]): string {
 	if (confirmedResources.length === 0) return "";
 	const lines = confirmedResources.map(
@@ -282,6 +449,8 @@ Identify which category this request falls into:
 - GEO_ANIM: rotating/floating/pulsing geometry, morphing shapes, wave effects
 - LIGHT: dynamic lights, color-changing illumination, flickering
 - UI_3D: text labels, signs, scoreboards, HUD elements attached to world space
+- SPLAT_EDIT: spatial deformation of the scene background (ripple, shockwave, warp, burn, color zone)
+- SPLAT_WEATHER: snow/rain/fog as high-quality Gaussian splat particles (prefer over THREE.Points for weather)
 - COMPOSITE: two or more of the above combined
 
 **Step 2 — Apply the mandatory technique for that category**
@@ -292,10 +461,47 @@ PARTICLE effects — non-negotiable rules:
 - ALWAYS set sizeAttenuation: true so particles scale with distance
 - Minimum particle count: 200 for ambient effects, 500 for explosions/fireworks
 - Particles MUST move: use world.animate() to update positions every frame
-- For fireworks: implement ballistic trajectory (gravity = -9.8, initial velocity upward + spread)
+- For fireworks: TWO separate particle systems — (1) rocket streaks rising fast (vy ≥ 14 units/s, ascent ~0.5s), then (2) explosion burst (200+ particles from peak in sphere spread). Never place burst particles at peak directly — they must be spawned by the rocket reaching peak height.
 - For fireworks: multi-burst pattern (launch 5-8 rockets at staggered intervals, each explodes)
-- For snow/rain: wrap-around when particles fall below ground (reset to top)
+- For fireworks: MUST use vivid vertex colors from a palette (red, gold, blue, magenta, green, orange) — white-only particles are invisible in bright daylit scenes. Use vertexColors: true on material and set bCol[] per particle.
+- For snow/rain: consider SPLAT_WEATHER instead — higher quality, lower CPU cost
 - Texture: load from /assets/particles/ catalog, never procedural-only for particle shape
+
+SPLAT_EDIT effects — use when deforming or colorizing the 3D scene background itself:
+\`\`\`javascript
+// Pattern: create SplatEdit with one or more SplatEditSdf shapes
+if (world.spark) {
+  const { SplatEdit, SplatEditSdf, SplatEditSdfType, SplatEditRgbaBlendMode } = world.spark.Spark;
+  const edit = new SplatEdit({ rgbaBlendMode: SplatEditRgbaBlendMode.SET_RGB, softEdge: 0.3 });
+  const sdf = new SplatEditSdf({ type: SplatEditSdfType.SPHERE, radius: 3.0, opacity: 0.8, color: new world.THREE.Color(1, 0.3, 0.1) });
+  edit.position.set(objectPosition.x, objectPosition.y + 1, objectPosition.z);
+  world.spark.addEdit(edit);
+  edit.addSdf(sdf);
+  // Animate: edit.position.y += dt * 2 etc., or edit.sdfs[0].radius changes
+  world.animate((dt) => { /* update edit.position or sdf properties */ });
+}
+\`\`\`
+
+SPLAT_WEATHER effects — use world.spark.Spark.snowBox for snow/rain:
+\`\`\`javascript
+if (world.spark) {
+  const THREE = world.THREE;
+  const { snowBox } = world.spark.Spark;
+  const result = snowBox({
+    box: new THREE.Box3(
+      new THREE.Vector3(objectPosition.x - 15, objectPosition.y, objectPosition.z - 15),
+      new THREE.Vector3(objectPosition.x + 15, objectPosition.y + 20, objectPosition.z + 15)
+    ),
+    density: 0.003,
+    fallVelocity: 1.5,    // slow for snow, 8+ for rain
+    color1: new THREE.Color(0.9, 0.95, 1.0),
+    color2: new THREE.Color(0.8, 0.85, 0.95),
+    opacity: 0.7,
+  });
+  const cleanup = world.spark.addSplat(result.snow);
+  // Cleanup when done: cleanup()
+}
+\`\`\`
 
 GEO_ANIM effects — rules:
 - Use world.animate(dt) for all motion — never setInterval/setTimeout
@@ -317,7 +523,7 @@ UI_3D effects — rules:
 **Step 3 — Write the implementation**
 
 Quality bar:
-- Fireworks must have: launch phase (rocket rising with trail), explosion phase (burst of 200+ particles spreading in sphere), fade-out (opacity/size decay over 1-2 seconds)
+- Fireworks must have: rocket phase (streak rising fast from ground, vy ≥ 14, ascent time ~0.5-0.7s), explosion phase (burst of 200+ particles spreading in sphere from peak position), fade-out (opacity/color decay + gravity over 1-2 seconds). Must NOT skip the rocket phase — a firework that just places particles at the peak is wrong.
 - Snow must have: 500+ flakes, randomized sizes and speeds, continuous loop
 - Effects must be immediately visible from default camera position (place near objectPosition)
 - Code must be under 120 lines — extract helpers if needed, but no bloat
@@ -335,116 +541,7 @@ Run through this checklist mentally:
 
 ---
 
-## Reference implementation: fireworks
-
-This shows the correct pattern. Use it as a template when generating fireworks or similar burst effects.
-
-\`\`\`javascript
-// Fireworks — reference implementation (adapt as needed)
-const THREE = world.THREE;
-const OX = objectPosition.x, OZ = objectPosition.z;
-
-const sparkTex = new THREE.TextureLoader().load('/assets/particles/spark1.png');
-const glowTex  = new THREE.TextureLoader().load('/assets/particles/lensflare0.png');
-
-const BURST_COUNT = 6;      // number of rockets
-const PER_BURST   = 300;    // particles per explosion
-const TOTAL       = BURST_COUNT * PER_BURST;
-
-// Geometry — all bursts share one Points object for performance
-const geo = new THREE.BufferGeometry();
-const positions = new Float32Array(TOTAL * 3);
-const velocities = new Float32Array(TOTAL * 3);
-const lifetimes  = new Float32Array(TOTAL);   // remaining life in seconds
-const maxLife    = new Float32Array(TOTAL);
-const colors     = new Float32Array(TOTAL * 3);
-
-geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-
-const mat = new THREE.PointsMaterial({
-  map: sparkTex, size: 0.35, sizeAttenuation: true,
-  transparent: true, depthWrite: false,
-  blending: THREE.AdditiveBlending,
-  vertexColors: true,
-});
-const points = new THREE.Points(geo, mat);
-points.renderOrder = 2;
-world.scene.add(points);
-
-// Burst palette
-const palette = [
-  [1.0, 0.3, 0.1], [1.0, 0.9, 0.1], [0.2, 0.6, 1.0],
-  [1.0, 0.2, 0.8], [0.3, 1.0, 0.4], [1.0, 0.5, 0.0],
-];
-
-function spawnBurst(burstIdx, hue) {
-  const base = burstIdx * PER_BURST;
-  // Random launch origin above object
-  const lx = OX + (Math.random() - 0.5) * 6;
-  const lz = OZ + (Math.random() - 0.5) * 6;
-  const peakY = 5 + Math.random() * 5;
-  const col = palette[burstIdx % palette.length];
-  for (let i = 0; i < PER_BURST; i++) {
-    const idx = base + i;
-    // Sphere spread
-    const theta = Math.random() * Math.PI * 2;
-    const phi   = Math.acos(2 * Math.random() - 1);
-    const speed = 3 + Math.random() * 4;
-    velocities[idx*3]   = Math.sin(phi) * Math.cos(theta) * speed;
-    velocities[idx*3+1] = Math.cos(phi) * speed * 0.6 + 1;
-    velocities[idx*3+2] = Math.sin(phi) * Math.sin(theta) * speed;
-    positions[idx*3]   = lx;
-    positions[idx*3+1] = peakY;
-    positions[idx*3+2] = lz;
-    const life = 1.2 + Math.random() * 0.8;
-    lifetimes[idx] = life; maxLife[idx] = life;
-    // Color with slight variation
-    colors[idx*3]   = col[0] * (0.8 + Math.random() * 0.2);
-    colors[idx*3+1] = col[1] * (0.8 + Math.random() * 0.2);
-    colors[idx*3+2] = col[2] * (0.8 + Math.random() * 0.2);
-  }
-}
-
-// Stagger burst launches
-const launchTimes = Array.from({length: BURST_COUNT}, (_, i) => i * 0.8);
-let elapsed = 0;
-const launched = new Array(BURST_COUNT).fill(false);
-
-world.animate((dt) => {
-  elapsed += dt;
-  // Launch rockets on schedule
-  for (let b = 0; b < BURST_COUNT; b++) {
-    if (!launched[b] && elapsed >= launchTimes[b]) {
-      launched[b] = true;
-      spawnBurst(b);
-    }
-  }
-  // Integrate particle physics
-  const gravity = -9.0;
-  for (let i = 0; i < TOTAL; i++) {
-    if (lifetimes[i] <= 0) { positions[i*3+1] = -9999; continue; }
-    lifetimes[i] -= dt;
-    velocities[i*3+1] += gravity * dt;
-    positions[i*3]   += velocities[i*3]   * dt;
-    positions[i*3+1] += velocities[i*3+1] * dt;
-    positions[i*3+2] += velocities[i*3+2] * dt;
-    // Fade to black as life expires
-    const t = lifetimes[i] / maxLife[i];
-    colors[i*3]   *= 0.97 + t * 0.02;
-    colors[i*3+1] *= 0.97 + t * 0.02;
-    colors[i*3+2] *= 0.97 + t * 0.02;
-  }
-  geo.attributes.position.needsUpdate = true;
-  geo.attributes.color.needsUpdate    = true;
-  // Loop after last burst completes
-  if (elapsed > launchTimes[BURST_COUNT-1] + 3.5) {
-    elapsed = 0;
-    launched.fill(false);
-  }
-});
-\`\`\`
-
+{{EFFECT_REFERENCE}}
 ---
 
 ## Anti-patterns (never do these)
@@ -527,45 +624,102 @@ export const codeGenSkill: SkillHandler = {
 			}
 		}
 
-		// ── Code generation phase ─────────────────────────────────────────────
+		// ── Design pass (Pass 1) ──────────────────────────────────────────────
+		// Run a lightweight design LLM call to produce a structured blueprint.
+		// The blueprint is injected into the codegen prompt as additional context.
+		const designDoc = await designEffect(userRequest);
+		const designContext = designDoc
+			? `\n\n## Effect design blueprint (follow this exactly)\n\`\`\`json\n${designDoc}\n\`\`\``
+			: "";
+		if (designDoc) {
+			console.log(`[code-gen] design pass:\n${designDoc}`);
+		}
+
+		// ── Code generation phase (Pass 2) ────────────────────────────────────
 		const resourceContext = confirmedResources ? buildResourceContext(confirmedResources) : "";
 		const model = getModel_(modelId);
+		const category = detectCategory(userRequest);
 
-		let code: string;
-		try {
-			const posStr = ctx.objectPosition
-				? `x=${ctx.objectPosition.x.toFixed(3)}, z=${ctx.objectPosition.z.toFixed(3)}`
-				: "unknown";
-			const displayY = (ctx.displayY ?? 1.3).toFixed(3);
-			const displayW = ctx.displayWidth?.toFixed(3) ?? "1.600";
-			const displayH = ctx.displayHeight?.toFixed(3) ?? "0.900";
-			const response = await completeSimple(model, {
-				systemPrompt: SYSTEM_PROMPT + resourceContext,
-				messages: [
-					{
-						role: "user",
-						content: `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}\n\nUser request: ${userRequest}`,
-						timestamp: Date.now(),
-					},
-				],
-			});
-			code = response.content
-				.filter((c) => c.type === "text")
-				.map((c) => (c as { type: "text"; text: string }).text)
-				.join("")
-				.trim();
-			// Strip any accidental markdown fences the model might add.
-			code = code
-				.replace(/^```[\w]*\n?/m, "")
-				.replace(/\n?```$/m, "")
-				.trim();
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			return {
-				type: "markdown",
-				content: `**代码生成失败:** ${msg}`,
-				title: "错误",
-			};
+		// Inject effect-specific reference implementation into system prompt
+		const effectDef = detectEffect(userRequest);
+		const effectReference = effectDef
+			? `## Effect reference: ${effectDef.keywords.source ?? "matched effect"}\n\n${effectDef.designIntent}\n\n\`\`\`javascript\n${effectDef.referenceImpl}\n\`\`\``
+			: "";
+		const systemPrompt = SYSTEM_PROMPT.replace("{{EFFECT_REFERENCE}}", effectReference) + resourceContext;
+
+		// Extract design constraints for retry feedback — no extra LLM call needed
+		let designConstraints = "";
+		if (designDoc) {
+			try {
+				const parsed = JSON.parse(designDoc) as {
+					key_constraints?: string[];
+					common_mistakes?: string[];
+				};
+				const parts: string[] = [];
+				if (parsed.key_constraints?.length) {
+					parts.push(`Key constraints:\n${parsed.key_constraints.map((c) => `- ${c}`).join("\n")}`);
+				}
+				if (parsed.common_mistakes?.length) {
+					parts.push(`Common mistakes to avoid:\n${parsed.common_mistakes.map((m) => `- ${m}`).join("\n")}`);
+				}
+				if (parts.length)
+					designConstraints = `\n\n## Design constraints (from effect blueprint)\n${parts.join("\n\n")}`;
+			} catch {
+				// non-fatal
+			}
+		}
+
+		const posStr = ctx.objectPosition
+			? `x=${ctx.objectPosition.x.toFixed(3)}, z=${ctx.objectPosition.z.toFixed(3)}`
+			: "unknown";
+		const displayY = (ctx.displayY ?? 1.3).toFixed(3);
+		const displayW = ctx.displayWidth?.toFixed(3) ?? "1.600";
+		const displayH = ctx.displayHeight?.toFixed(3) ?? "0.900";
+		const baseUserMessage = `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}\n\nUser request: ${userRequest}${designContext}`;
+
+		let code = "";
+		let lastErr: string | null = null;
+		const MAX_RETRIES = 2;
+
+		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+			const userMessage =
+				lastErr === null
+					? baseUserMessage
+					: `${baseUserMessage}${designConstraints}\n\n## Code review feedback (fix all issues before resubmitting)\n${lastErr}`;
+
+			let rawCode: string;
+			try {
+				const response = await completeSimple(model, {
+					systemPrompt: systemPrompt,
+					messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
+				});
+				rawCode = response.content
+					.filter((c) => c.type === "text")
+					.map((c) => (c as { type: "text"; text: string }).text)
+					.join("")
+					.trim()
+					.replace(/^```[\w]*\n?/m, "")
+					.replace(/\n?```$/m, "")
+					.trim();
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				return { type: "markdown", content: `**代码生成失败:** ${msg}`, title: "错误" };
+			}
+
+			const violations = reviewGeneratedCode(rawCode, category, userRequest);
+			if (violations.length === 0 || attempt === MAX_RETRIES) {
+				code = rawCode;
+				if (violations.length > 0) {
+					console.warn(
+						`[code-gen] static review violations (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
+						violations,
+					);
+				}
+				break;
+			}
+
+			lastErr = violations.map((v, i) => `${i + 1}. ${v}`).join("\n");
+			console.log(`[code-gen] retry ${attempt + 1} — violations:\n${lastErr}`);
 		}
 
 		console.log(`[code-gen] generated code:\n${code}`);

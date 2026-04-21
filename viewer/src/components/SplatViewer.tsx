@@ -28,11 +28,12 @@ import {
   AnimationMixer,
   SkinnedMesh,
   Bone,
+  BufferAttribute,
 } from "three";
 import * as THREE from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
-import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+import { SparkRenderer, SplatMesh, SplatEdit, SplatEditSdf, SplatEditSdfType, SplatEditRgbaBlendMode, imageSplats, textSplats, generators } from "@sparkjsdev/spark";
 import { getRapier } from "../physics/init-rapier.js";
 import { buildWorldColliders } from "../physics/build-world-colliders.js";
 import { createCharacterController } from "../physics/character-controller.js";
@@ -109,7 +110,7 @@ function meshOnlyBoundingBox(root: Group): Box3 {
     if (obj instanceof Bone) return;
     if (obj instanceof Mesh || obj instanceof SkinnedMesh) {
       const geomBox = new Box3().setFromBufferAttribute(
-        (obj as Mesh).geometry.attributes.position,
+        (obj as Mesh).geometry.attributes.position as BufferAttribute,
       );
       geomBox.applyMatrix4(obj.matrixWorld);
       box.union(geomBox);
@@ -1217,6 +1218,35 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       },
       setDisplay(html: string | null) {
         window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
+      },
+      spark: {
+        addEdit(edit: unknown) {
+          if (!splat.edits) splat.edits = [];
+          splat.edits.push(edit as SplatEdit);
+        },
+        removeEdit(edit: unknown) {
+          if (splat.edits) {
+            const idx = splat.edits.indexOf(edit as SplatEdit);
+            if (idx !== -1) splat.edits.splice(idx, 1);
+          }
+        },
+        addSplat(mesh: unknown) {
+          scene.add(mesh as SplatMesh);
+          return () => scene.remove(mesh as SplatMesh);
+        },
+        setDof(focalDistance: number, apertureAngle: number) {
+          sparkRenderer.focalDistance = focalDistance;
+          sparkRenderer.apertureAngle = apertureAngle;
+        },
+        Spark: {
+          SplatEdit,
+          SplatEditSdf,
+          SplatEditSdfType,
+          SplatEditRgbaBlendMode,
+          snowBox: generators.snowBox,
+          imageSplats,
+          textSplats,
+        },
       },
     };
     (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
