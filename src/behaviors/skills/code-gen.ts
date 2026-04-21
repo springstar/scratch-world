@@ -617,8 +617,12 @@ export const codeGenSkill: SkillHandler = {
 
 		// Fast path: skip LLM generation for effects with authoritative reference implementations
 		if (effectDef?.useReferenceDirectly) {
-			console.log(`[code-gen] using reference impl directly for: ${effectDef.keywords}`);
-			return { type: "script", code: effectDef.referenceImpl, title };
+			const env = ctx.environment ?? {};
+			const code = effectDef.adaptImpl ? effectDef.adaptImpl(effectDef.referenceImpl, env) : effectDef.referenceImpl;
+			console.log(
+				`[code-gen] using reference impl directly for: ${effectDef.keywords} (env: timeOfDay=${env.timeOfDay ?? "unknown"}, skybox=${env.skybox ?? "unknown"})`,
+			);
+			return { type: "script", code, title };
 		}
 
 		const effectReference = effectDef
@@ -654,7 +658,18 @@ export const codeGenSkill: SkillHandler = {
 		const displayY = (ctx.displayY ?? 1.3).toFixed(3);
 		const displayW = ctx.displayWidth?.toFixed(3) ?? "1.600";
 		const displayH = ctx.displayHeight?.toFixed(3) ?? "0.900";
-		const baseUserMessage = `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}\n\nUser request: ${userRequest}${designContext}`;
+		const env = ctx.environment;
+		const envStr = env
+			? [
+					env.timeOfDay && `timeOfDay="${env.timeOfDay}"`,
+					env.weather && `weather="${env.weather}"`,
+					env.skybox && `skybox="${env.skybox}"`,
+					env.ambientLight && `ambientLight="${env.ambientLight}"`,
+				]
+					.filter(Boolean)
+					.join(", ")
+			: null;
+		const baseUserMessage = `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}${envStr ? `, environment=(${envStr})` : ""}\n\nUser request: ${userRequest}${designContext}`;
 
 		let code = "";
 		let lastErr: string | null = null;

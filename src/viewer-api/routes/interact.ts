@@ -68,6 +68,7 @@ export function interactRoute(sessionManager: SessionManager, sceneManager: Scen
 						sceneId,
 						playerPosition,
 						objectPosition: obj?.position,
+						environment: scene.sceneData.environment,
 						displayY,
 						displayWidth,
 						displayHeight,

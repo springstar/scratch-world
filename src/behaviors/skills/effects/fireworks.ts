@@ -7,6 +7,32 @@ export const fireworksEffect: EffectDef = {
 	// fewer particles, washed-out colors, and missing rocket-phase mechanics.
 	useReferenceDirectly: true,
 
+	adaptImpl: (base, env) => {
+		const isNight = /night|evening|dusk|midnight/i.test(`${env.timeOfDay ?? ""} ${env.skybox ?? ""}`);
+		const isIndoor = /indoor|interior|room|hall|arena/i.test(env.skybox ?? "");
+
+		let code = base;
+
+		if (isNight) {
+			// Night: AdditiveBlending pops against dark sky; smaller particles still vivid
+			code = code
+				.replace("blending: THREE.NormalBlending", "blending: THREE.AdditiveBlending")
+				.replace("size: 3.5,", "size: 2.0,")
+				.replace("size: 1.5,", "size: 1.0,");
+		}
+
+		if (isIndoor) {
+			// Indoor: lower altitude, tighter spread, smaller particles
+			code = code
+				.replace("rVel[r*3+1] = 18 + Math.random() * 6;", "rVel[r*3+1] = 10 + Math.random() * 4;")
+				.replace("rLife[r]    = 0.85 + Math.random() * 0.35;", "rLife[r]    = 0.5 + Math.random() * 0.2;")
+				.replace("(Math.random() - 0.5) * 12", "(Math.random() - 0.5) * 6")
+				.replace("size: 3.5,", "size: 2.5,");
+		}
+
+		return code;
+	},
+
 	designIntent: `
 Fireworks are a two-phase effect: a fast-rising rocket streak, then an explosion burst at peak height.
 The key insight is that burst particles must be SPAWNED at the rocket's position when it peaks — they
