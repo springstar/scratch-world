@@ -554,12 +554,6 @@ export const codeGenSkill: SkillHandler = {
 		},
 	},
 	async handle(ctx: BehaviorContext): Promise<DisplayConfig> {
-		// If calibrated code exists, use it directly — skip LLM call.
-		if (ctx.config.autoRun && ctx.config.cachedCode) {
-			const title = ctx.config.title ? String(ctx.config.title) : "代码生成";
-			return { type: "script", code: String(ctx.config.cachedCode), title };
-		}
-
 		// Support interactive mode: player provides the request at runtime via interactionData.
 		const userRequest = ctx.config.userRequest
 			? String(ctx.config.userRequest)
@@ -577,6 +571,28 @@ export const codeGenSkill: SkillHandler = {
 
 		const title = ctx.config.title ? String(ctx.config.title) : "代码生成";
 		const modelId = ctx.config.model ? String(ctx.config.model) : "claude-sonnet-4-6";
+
+		// Scene environment — declared early, used by fast path and LLM path
+		const env = ctx.environment ?? {};
+
+		// Fast path: reference implementations always bypass cachedCode — they are deterministic
+		// and must reflect the latest referenceImpl/adaptImpl (cachedCode may be stale).
+		const effectDefEarly = detectEffect(userRequest);
+		if (effectDefEarly?.useReferenceDirectly) {
+			const code = effectDefEarly.adaptImpl
+				? effectDefEarly.adaptImpl(effectDefEarly.referenceImpl, env)
+				: effectDefEarly.referenceImpl;
+			console.log(
+				`[code-gen] reference impl (${effectDefEarly.keywords}, env: timeOfDay=${env.timeOfDay ?? "unknown"}, skybox=${env.skybox ?? "unknown"}):\n${code}`,
+			);
+			return { type: "script", code, title };
+		}
+
+		// If calibrated LLM code exists, use it directly — skip LLM call.
+		if (ctx.config.autoRun && ctx.config.cachedCode) {
+			console.log(`[code-gen] serving cachedCode for "${userRequest}"`);
+			return { type: "script", code: String(ctx.config.cachedCode), title };
+		}
 
 		// ── Resource analysis phase ───────────────────────────────────────────
 		// If user already confirmed resources, skip analysis and go straight to codegen.
@@ -614,18 +630,6 @@ export const codeGenSkill: SkillHandler = {
 
 		// Inject effect-specific reference implementation into system prompt
 		const effectDef = detectEffect(userRequest);
-
-		// Scene environment — used by both the fast path (adaptImpl) and LLM path (sceneHints)
-		const env = ctx.environment ?? {};
-
-		// Fast path: skip LLM generation for effects with authoritative reference implementations
-		if (effectDef?.useReferenceDirectly) {
-			const code = effectDef.adaptImpl ? effectDef.adaptImpl(effectDef.referenceImpl, env) : effectDef.referenceImpl;
-			console.log(
-				`[code-gen] reference impl (${effectDef.keywords}, env: timeOfDay=${env.timeOfDay ?? "unknown"}, skybox=${env.skybox ?? "unknown"}):\n${code}`,
-			);
-			return { type: "script", code, title };
-		}
 
 		const effectReference = effectDef
 			? `## Effect reference: ${effectDef.keywords.source ?? "matched effect"}\n\n${effectDef.designIntent}\n\n\`\`\`javascript\n${effectDef.referenceImpl}\n\`\`\``

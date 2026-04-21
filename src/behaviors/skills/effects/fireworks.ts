@@ -58,10 +58,11 @@ for (let r = 0; r < ROCKET_COUNT; r++) rPos[r*3+1] = -9999;
 rocketGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
 const rockets = new THREE.Points(rocketGeo, new THREE.PointsMaterial({
   map: glowTex, size: 2.0, sizeAttenuation: true,
-  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
   color: 0xffee99,
 }));
 rockets.renderOrder = 12;
+rockets.frustumCulled = false;
 world.scene.add(rockets);
 
 // ── Burst pool ────────────────────────────────────────────────────────────────
@@ -78,10 +79,11 @@ bGeo.setAttribute('color',    new THREE.BufferAttribute(bCol, 3));
 // AdditiveBlending + renderOrder > splat(10): burst renders on top of Gaussian Splat
 const burst = new THREE.Points(bGeo, new THREE.PointsMaterial({
   map: sparkTex, size: 4.0, sizeAttenuation: true,
-  transparent: true, depthWrite: false,
+  transparent: true, depthWrite: false, depthTest: false,
   blending: THREE.AdditiveBlending, vertexColors: true,
 }));
 burst.renderOrder = 11;
+burst.frustumCulled = false;
 world.scene.add(burst);
 for (let i = 0; i < BTOTAL; i++) bPos[i*3+1] = -9999;
 
@@ -100,6 +102,7 @@ function launchRocket(r) {
 
 function explode(r) {
   const ex = rPos[r*3], ey = rPos[r*3+1], ez = rPos[r*3+2];
+  console.log('[fireworks] explode r=' + r + ' at y=' + ey.toFixed(1) + ' renderOrder burst=' + burst.renderOrder);
   const col = palette[r % palette.length];
   for (let i = 0; i < BURST_PER; i++) {
     const idx  = r * BURST_PER + i;
@@ -125,6 +128,7 @@ function explode(r) {
 const launchAt = Array.from({length: ROCKET_COUNT}, (_, i) => i * 0.9);
 const exploded = new Array(ROCKET_COUNT).fill(true);
 let elapsed = 0;
+let _debugLogged = false;
 
 world.animate((dt) => {
   elapsed += dt;
@@ -151,11 +155,16 @@ world.animate((dt) => {
     bCol[i*3]   = bBase[i*3]   * t;
     bCol[i*3+1] = bBase[i*3+1] * t;
     bCol[i*3+2] = bBase[i*3+2] * t;
+    if (!_debugLogged && bLife[i] > 0) {
+      console.log('[fireworks] burst active: i=' + i + ' pos=(' + bPos[i*3].toFixed(1) + ',' + bPos[i*3+1].toFixed(1) + ',' + bPos[i*3+2].toFixed(1) + ') color=(' + bCol[i*3].toFixed(2) + ',' + bCol[i*3+1].toFixed(2) + ',' + bCol[i*3+2].toFixed(2) + ') renderOrder=' + burst.renderOrder);
+      _debugLogged = true;
+    }
   }
   bGeo.attributes.position.needsUpdate = true;
   bGeo.attributes.color.needsUpdate    = true;
   if (elapsed > launchAt[ROCKET_COUNT-1] + 6.0) {
     elapsed = 0;
+    _debugLogged = false;
     for (let r = 0; r < ROCKET_COUNT; r++) { exploded[r] = true; launchAt[r] = r * 0.9 + Math.random() * 0.4; }
     for (let i = 0; i < BTOTAL; i++) bLife[i] = 0;
   }

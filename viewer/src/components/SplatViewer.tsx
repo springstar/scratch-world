@@ -1946,9 +1946,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
 
         // Run script animate callbacks from code-gen sandbox.
+        // Reuse delta from physics getDelta() call — calling clock.getDelta() again
+        // would return near-zero (only the time to compute physics) and make all
+        // script animations run in near-slow-motion.
         if (scriptAnimCallbacks.length > 0) {
-          const dt = clock.getDelta();
-          for (const cb of scriptAnimCallbacks) { try { cb(dt); } catch { /* ignore */ } }
+          for (const cb of scriptAnimCallbacks) { try { cb(delta); } catch { /* ignore */ } }
         }
 
         tickPortals();
