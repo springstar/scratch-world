@@ -3,6 +3,10 @@ import type { EffectDef } from "./types.js";
 export const fireworksEffect: EffectDef = {
 	keywords: /firework|fireworks|烟花/i,
 
+	// Reference implementation is authoritative — LLM rewrites consistently produce
+	// fewer particles, washed-out colors, and missing rocket-phase mechanics.
+	useReferenceDirectly: true,
+
 	designIntent: `
 Fireworks are a two-phase effect: a fast-rising rocket streak, then an explosion burst at peak height.
 The key insight is that burst particles must be SPAWNED at the rocket's position when it peaks — they

@@ -614,6 +614,13 @@ export const codeGenSkill: SkillHandler = {
 
 		// Inject effect-specific reference implementation into system prompt
 		const effectDef = detectEffect(userRequest);
+
+		// Fast path: skip LLM generation for effects with authoritative reference implementations
+		if (effectDef?.useReferenceDirectly) {
+			console.log(`[code-gen] using reference impl directly for: ${effectDef.keywords}`);
+			return { type: "script", code: effectDef.referenceImpl, title };
+		}
+
 		const effectReference = effectDef
 			? `## Effect reference: ${effectDef.keywords.source ?? "matched effect"}\n\n${effectDef.designIntent}\n\n\`\`\`javascript\n${effectDef.referenceImpl}\n\`\`\``
 			: "";
