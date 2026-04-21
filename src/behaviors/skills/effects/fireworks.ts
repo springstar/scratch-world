@@ -25,16 +25,18 @@ const sparkTex = new THREE.TextureLoader().load('/assets/particles/spark1.png');
 const glowTex  = new THREE.TextureLoader().load('/assets/particles/lensflare0.png');
 
 const ROCKET_COUNT = 6;
-const BURST_PER    = 350;
+const BURST_PER    = 400;
 
 // ── Rockets ──────────────────────────────────────────────────────────────────
 const rocketGeo = new THREE.BufferGeometry();
 const rPos  = new Float32Array(ROCKET_COUNT * 3);
 const rVel  = new Float32Array(ROCKET_COUNT * 3);
 const rLife = new Float32Array(ROCKET_COUNT);
+// Hide all rockets off-screen until they launch
+for (let r = 0; r < ROCKET_COUNT; r++) rPos[r*3+1] = -9999;
 rocketGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
 const rockets = new THREE.Points(rocketGeo, new THREE.PointsMaterial({
-  map: glowTex, size: 1.2, sizeAttenuation: true,
+  map: glowTex, size: 1.5, sizeAttenuation: true,
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   color: 0xffdd88,
 }));
@@ -52,9 +54,9 @@ const bCol  = new Float32Array(BTOTAL * 3);
 const bBase = new Float32Array(BTOTAL * 3);
 bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3));
 bGeo.setAttribute('color',    new THREE.BufferAttribute(bCol, 3));
-// NormalBlending: burst particles are opaque, visible against any bright background
+// NormalBlending: burst particles are opaque, visible against bright daylit sky
 const burst = new THREE.Points(bGeo, new THREE.PointsMaterial({
-  map: sparkTex, size: 1.5, sizeAttenuation: true,
+  map: sparkTex, size: 3.5, sizeAttenuation: true,
   transparent: true, depthWrite: false,
   blending: THREE.NormalBlending, vertexColors: true,
 }));
@@ -63,16 +65,17 @@ world.scene.add(burst);
 for (let i = 0; i < BTOTAL; i++) bPos[i*3+1] = -9999;
 
 const palette = [
-  [1.0, 0.15, 0.05], [1.0, 0.85, 0.05], [0.1, 0.4,  1.0],
-  [1.0, 0.05, 0.85], [0.1, 1.0,  0.3],  [1.0, 0.45, 0.0],
+  [1.0, 0.10, 0.05], [1.0, 0.80, 0.00], [0.05, 0.35, 1.0],
+  [1.0, 0.05, 0.80], [0.05, 1.0,  0.25], [1.0, 0.40, 0.0],
 ];
 
 function launchRocket(r) {
-  rPos[r*3]   = OX + (Math.random() - 0.5) * 10;
+  rPos[r*3]   = OX + (Math.random() - 0.5) * 12;
   rPos[r*3+1] = OY + 0.5;
-  rPos[r*3+2] = OZ + (Math.random() - 0.5) * 10;
-  rVel[r*3+1] = 16 + Math.random() * 6;
-  rLife[r]    = (5 + Math.random() * 4) / rVel[r*3+1];
+  rPos[r*3+2] = OZ + (Math.random() - 0.5) * 12;
+  rVel[r*3+1] = 18 + Math.random() * 6;
+  // Fixed flight time ~1s — ensures rockets reach 15-20 units altitude regardless of velocity
+  rLife[r]    = 0.85 + Math.random() * 0.35;
 }
 
 // CRITICAL: burst particles spawned at rocket's current position when it peaks
@@ -83,16 +86,16 @@ function explode(r) {
     const idx  = r * BURST_PER + i;
     const phi  = Math.acos(2 * Math.random() - 1);
     const th   = Math.random() * Math.PI * 2;
-    const spd  = 5 + Math.random() * 8;
+    const spd  = 6 + Math.random() * 9;
     bVel[idx*3]   = Math.sin(phi) * Math.cos(th) * spd;
     bVel[idx*3+1] = Math.cos(phi) * spd;
     bVel[idx*3+2] = Math.sin(phi) * Math.sin(th) * spd;
     bPos[idx*3]   = ex; bPos[idx*3+1] = ey; bPos[idx*3+2] = ez;
-    const life = 1.5 + Math.random() * 1.0;
+    const life = 1.8 + Math.random() * 1.2;
     bLife[idx] = life; bMaxL[idx] = life;
-    bBase[idx*3]   = col[0] * (0.8 + Math.random() * 0.2);
-    bBase[idx*3+1] = col[1] * (0.8 + Math.random() * 0.2);
-    bBase[idx*3+2] = col[2] * (0.8 + Math.random() * 0.2);
+    bBase[idx*3]   = col[0] * (0.85 + Math.random() * 0.15);
+    bBase[idx*3+1] = col[1] * (0.85 + Math.random() * 0.15);
+    bBase[idx*3+2] = col[2] * (0.85 + Math.random() * 0.15);
     bCol[idx*3]   = bBase[idx*3];
     bCol[idx*3+1] = bBase[idx*3+1];
     bCol[idx*3+2] = bBase[idx*3+2];
@@ -100,7 +103,7 @@ function explode(r) {
   rPos[r*3+1] = -9999;
 }
 
-const launchAt = Array.from({length: ROCKET_COUNT}, (_, i) => i * 0.8);
+const launchAt = Array.from({length: ROCKET_COUNT}, (_, i) => i * 0.9);
 const exploded = new Array(ROCKET_COUNT).fill(true);
 let elapsed = 0;
 
@@ -113,7 +116,7 @@ world.animate((dt) => {
   for (let r = 0; r < ROCKET_COUNT; r++) {
     if (exploded[r]) continue;
     rLife[r] -= dt;
-    rVel[r*3+1] += G * dt * 0.3;
+    rVel[r*3+1] += G * dt * 0.25;
     rPos[r*3+1] += rVel[r*3+1] * dt;
     if (rLife[r] <= 0) { explode(r); exploded[r] = true; }
   }
@@ -133,9 +136,9 @@ world.animate((dt) => {
   }
   bGeo.attributes.position.needsUpdate = true;
   bGeo.attributes.color.needsUpdate    = true;
-  if (elapsed > launchAt[ROCKET_COUNT-1] + 5.5) {
+  if (elapsed > launchAt[ROCKET_COUNT-1] + 6.0) {
     elapsed = 0;
-    for (let r = 0; r < ROCKET_COUNT; r++) { exploded[r] = true; launchAt[r] = r * 0.8 + Math.random() * 0.4; }
+    for (let r = 0; r < ROCKET_COUNT; r++) { exploded[r] = true; launchAt[r] = r * 0.9 + Math.random() * 0.4; }
     for (let i = 0; i < BTOTAL; i++) bLife[i] = 0;
   }
 });`,
