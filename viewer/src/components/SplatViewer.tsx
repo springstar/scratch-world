@@ -162,12 +162,20 @@ interface Props {
   scriptMeshes?: Array<import("three").Object3D>;
   onScriptMeshPlace?: (pos: { x: number; y: number; z: number }) => void;
   onScriptMeshPlaceCancel?: () => void;
+  /** Called once renderer + camera are ready. API object lets camera tool capture frames and toggle selfie mode. */
+  onCameraReady?: (api: CameraAPI) => void;
+}
+
+export interface CameraAPI {
+  captureFrame: () => string;
+  setSelfieMode: (on: boolean) => void;
+  setFov: (fov: number) => void;
 }
 
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
-export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, ghostModelUrl, ghostModelScale, scriptMeshPlacementPending, scriptMeshes, onScriptMeshPlace, onScriptMeshPlaceCancel }: Props) {
+export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, ghostModelUrl, ghostModelScale, scriptMeshPlacementPending, scriptMeshes, onScriptMeshPlace, onScriptMeshPlaceCancel, onCameraReady }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
@@ -228,6 +236,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   onScriptMeshPlaceRef.current = onScriptMeshPlace;
   const onScriptMeshPlaceCancelRef = useRef(onScriptMeshPlaceCancel);
   onScriptMeshPlaceCancelRef.current = onScriptMeshPlaceCancel;
+  const selfieModeRef = useRef(false);
+  const onCameraReadyRef = useRef(onCameraReady);
+  onCameraReadyRef.current = onCameraReady;
   const onNpcApproachRef = useRef(onNpcApproach);
   onNpcApproachRef.current = onNpcApproach;
   const onNpcLeaveRef = useRef(onNpcLeave);
@@ -1251,6 +1262,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     };
     (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
 
+    onCameraReadyRef.current?.({
+      captureFrame: () => {
+        renderer.render(scene, camera);
+        return canvas.toDataURL("image/png", 1.0);
+      },
+      setSelfieMode: (on: boolean) => {
+        selfieModeRef.current = on;
+      },
+      setFov: (fov: number) => {
+        camera.fov = fov;
+        camera.updateProjectionMatrix();
+      },
+    });
+
     const syncEuler = () => { flyEuler.setFromQuaternion(camera.quaternion, "YXZ"); };
 
     const freeFlyFwd   = new Vector3();
@@ -1955,6 +1980,17 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
         tickPortals();
         tickScriptMeshes();
+        if (selfieModeRef.current) {
+          const bodyPos = cc.body.translation();
+          const forward = new Vector3();
+          camera.getWorldDirection(forward);
+          camera.position.set(
+            bodyPos.x - forward.x * 2.5,
+            bodyPos.y + 1.5,
+            bodyPos.z - forward.z * 2.5,
+          );
+          camera.lookAt(bodyPos.x, bodyPos.y + 1.0, bodyPos.z);
+        }
         renderer.render(scene, camera);
       }
 

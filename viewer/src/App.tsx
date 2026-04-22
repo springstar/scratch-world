@@ -4,6 +4,7 @@ import { NpcDrawer } from "./components/NpcDrawer.js";
 import { NpcChatOverlay } from "./components/NpcChatOverlay.js";
 import type { NpcChatMessage } from "./components/NpcChatOverlay.js";
 import { SplatViewer } from "./components/SplatViewer.js";
+import type { CameraAPI } from "./components/SplatViewer.js";
 import { NarrativeOverlay } from "./components/NarrativeOverlay.js";
 import { uploadScreenshot } from "./api.js";
 import { ViewpointBar } from "./components/ViewpointBar.js";
@@ -22,6 +23,7 @@ import { PropInteractionPanel } from "./components/PropInteractionPanel.js";
 import { ResourcePickerPanel } from "./components/ResourcePickerPanel.js";
 import { PositionPicker } from "./components/PositionPicker.js";
 import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
+import { CameraPanel } from "./components/CameraPanel.js";
 
 function buildScriptContext(scene: SceneResponse, objectId: string): ScriptContext {
   const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
@@ -156,6 +158,10 @@ export function App() {
     cachedCode: string;
     frozen?: boolean;
   } | null>(null);
+
+  // Camera tool
+  const [showCamera, setShowCamera] = useState(false);
+  const cameraAPIRef = useRef<CameraAPI | null>(null);
 
   // Prop library — persisted to localStorage so it survives page reloads
   const [generatedProps, setGeneratedProps] = useState<GeneratedProp[]>(() => {
@@ -444,6 +450,17 @@ export function App() {
     };
     window.addEventListener("world:toast", handleToast);
     return () => window.removeEventListener("world:toast", handleToast);
+  }, []);
+
+  // C key toggles camera panel
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      if (e.key === "c" || e.key === "C") setShowCamera((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   // world:display events fired by WorldAPI world.setDisplay(html)
@@ -1085,6 +1102,7 @@ export function App() {
               onPlayerMove={handlePlayerMove}
               speechFeed={speechFeed}
               npcPlacementPending={pendingNpc !== null}
+              onCameraReady={(api) => { cameraAPIRef.current = api; }}
               onNpcPlace={(pos) => {                if (!pendingNpc || !scene) return;
                 const npcSnapshot = pendingNpc;
                 setPendingNpc(null);
@@ -1254,6 +1272,20 @@ export function App() {
       {/* Toolbar buttons — top-right, shown when a scene is loaded */}
       {scene && (
         <div style={{ position: "fixed", top: 16, right: 16, display: "flex", gap: 8, zIndex: 105 }}>
+          <button
+            onClick={() => setShowCamera((v) => !v)}
+            style={{
+              background: showCamera ? "rgba(160,80,255,0.35)" : "rgba(20,15,40,0.75)",
+              border: "1px solid rgba(160,80,255,0.35)",
+              borderRadius: 8, padding: "7px 14px",
+              color: "rgba(230,200,255,0.9)", fontSize: 13,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              fontFamily: "system-ui, -apple-system, sans-serif",
+            }}
+          >
+            相机
+          </button>
           <button
             onClick={() => {
               setShowPropDrawer((v) => {
@@ -1588,6 +1620,14 @@ export function App() {
         >
           {scriptToast}
         </div>
+      )}
+
+      {/* Camera panel */}
+      {showCamera && (
+        <CameraPanel
+          cameraAPI={cameraAPIRef.current}
+          onClose={() => setShowCamera(false)}
+        />
       )}
     </div>
   );
