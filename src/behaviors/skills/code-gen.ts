@@ -644,8 +644,18 @@ export const codeGenSkill: SkillHandler = {
 				? `\n\n## Scene adaptation rules (MUST follow for this scene)\n${hints.map((h) => `- ${h}`).join("\n")}`
 				: "";
 
+		// Platform capability hints — inform LLM of available platform APIs that can enhance this category
+		const platformHints = categoryDef?.platformHints?.() ?? [];
+		const platformHintsSection =
+			platformHints.length > 0
+				? `\n\n## Platform enhancement opportunities (evaluate and use where appropriate)\n${platformHints.map((h) => `- ${h}`).join("\n")}`
+				: "";
+
 		const systemPrompt =
-			SYSTEM_PROMPT.replace("{{EFFECT_REFERENCE}}", effectReference) + sceneHintsSection + resourceContext;
+			SYSTEM_PROMPT.replace("{{EFFECT_REFERENCE}}", effectReference) +
+			sceneHintsSection +
+			platformHintsSection +
+			resourceContext;
 
 		// Extract design constraints for retry feedback — no extra LLM call needed
 		let designConstraints = "";

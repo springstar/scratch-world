@@ -38,6 +38,14 @@ export const particleCategory: CategoryDef = {
 
 	detect: (code) => /world\.THREE\.Points\b/.test(code) || /new\s+THREE\.Points\b/.test(code),
 
+	platformHints: () => [
+		"Platform has Spark 2.0 (world.spark). For PARTICLE effects, consider layering SplatEdit to enhance scene immersion:",
+		"• Explosion/burst: add an ADD_RGBA SplatEditSdf sphere at the burst origin, animate radius 0→8 then collapse in 0.3s — this illuminates scene geometry (ground, trees) with burst color, making the effect interact with the environment",
+		"• Fire/smoke: add a SET_RGB cylindrical SplatEdit above the source to tint the background with heat haze color",
+		"• Long-lived effects (snow, rain): SplatEdit is NOT needed — overhead cost not worth it for ambient loops",
+		"SplatEdit pattern (always guard with if (world.spark)): const edit = new world.spark.Spark.SplatEdit({ rgbaBlendMode: world.spark.Spark.SplatEditRgbaBlendMode.ADD_RGBA, softEdge: 0.4 }); edit.addSdf(new world.spark.Spark.SplatEditSdf({ type: world.spark.Spark.SplatEditSdfType.SPHERE, radius: 0, opacity: 0.9, color: new world.THREE.Color(r, g, b) })); world.spark.addEdit(edit);",
+	],
+
 	invariants: [
 		{
 			test: (code) => !/world\.THREE\.Points\b/.test(code) && !/new\s+THREE\.Points\b/.test(code),

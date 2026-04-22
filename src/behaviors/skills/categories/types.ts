@@ -3,10 +3,11 @@ import type { EnvironmentConfig } from "../../../scene/types.js";
 /**
  * CategoryDef — rendering knowledge for a generated code category.
  *
- * Owns three responsibilities:
+ * Owns four responsibilities:
  *   1. detectFromRequest — match user intent to category (pre-generation)
  *   2. sceneHints        — inject scene-aware rendering rules into LLM prompt
- *   3. detect + invariants — validate generated code (post-generation)
+ *   3. platformHints     — inject platform capability hints into LLM prompt
+ *   4. detect + invariants — validate generated code (post-generation)
  *
  * Adding a new category = new file here, not changes to code-gen.ts.
  */
@@ -28,6 +29,15 @@ export interface CategoryDef {
 	 * Return [] when no adaptation is needed.
 	 */
 	sceneHints: (env: EnvironmentConfig) => string[];
+
+	/**
+	 * Platform capability hints injected into the LLM system prompt.
+	 * Called once per generation; returns directive strings that tell the LLM
+	 * about platform APIs (Spark 2.0 etc.) that can ENHANCE this category.
+	 * Purpose: ensure LLM considers available platform features before generating.
+	 * Return [] when no platform enhancement is applicable.
+	 */
+	platformHints?: () => string[];
 
 	/**
 	 * Detect whether GENERATED CODE belongs to this category.
