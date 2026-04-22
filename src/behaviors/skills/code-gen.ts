@@ -118,6 +118,9 @@ Rules:
 - Do NOT use \`import\` or \`require\`.
 - CRITICAL: \`world\` exposes DIRECT PROPERTIES only — \`world.scene\`, \`world.camera\`, \`world.THREE\`, \`world.spark\`.
   There are NO getter methods. \`world.getThreeScene()\`, \`world.getScene()\`, \`world.getRenderer()\`, \`world.getCamera()\` do NOT exist and will throw.
+- CRITICAL: The ONLY world methods are: \`world.spawn()\`, \`world.despawn()\`, \`world.setColor()\`, \`world.animate()\`, \`world.showToast()\`, \`world.setDisplay()\`.
+  There is NO \`world.showPanel()\`, \`world.openPanel()\`, \`world.showPopup()\`, \`world.createPanel()\` — these do not exist and will throw.
+  To show a 2D HTML overlay, use \`world.setDisplay(htmlString)\`. To dismiss it, call \`world.setDisplay(null)\`.
 - The script runs once. Use \`world.animate()\` for anything that needs to update every frame.
 - Keep generated objects small and well-positioned so they're visible and don't block navigation.
 - CRITICAL: For ANY content that should appear on a physical surface in the 3D world (TV, screen,
@@ -378,6 +381,14 @@ function reviewGeneratedCode(code: string, userRequest: string): string[] {
 	if (hallucinated) {
 		violations.push(
 			`world has no getter methods — use direct properties: world.scene, world.camera, world.THREE. Hallucinated: ${[...new Set(hallucinated)].join(", ")}`,
+		);
+	}
+	const hallucinatedMethods = code.match(
+		/world\.(showPanel|openPanel|showPopup|createPanel|showDialog|openDialog|showWindow|openWindow|addPanel|showUI)\s*\(/g,
+	);
+	if (hallucinatedMethods) {
+		violations.push(
+			`world has no panel/popup methods — use world.setDisplay(html) for 2D overlay or world.scene for 3D. Hallucinated: ${[...new Set(hallucinatedMethods)].join(", ")}`,
 		);
 	}
 

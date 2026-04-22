@@ -604,6 +604,43 @@ export function App() {
     setActiveViewpoint(vp);
   }, []);
 
+  const runScriptAndCalibrate = useCallback(
+    (code: string, objectId: string, sceneId: string) => {
+      const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+      if (!worldAPI || !scene) return;
+      const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
+      // If meshes from this prop already exist, show calibrator in frozen mode
+      const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
+      if (existingObjs.length > 0) {
+        const meshes = existingObjs.filter((c) => c.type === "Mesh" || c.type === "Group");
+        if (meshes.length > 0) setScriptMeshPlacement({ meshes: meshes as Array<import("three").Object3D>, objectId, sceneId, cachedCode: code, frozen: true });
+        return;
+      }
+      const countBefore = api.scene.children.length;
+      const err = runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+      if (!err) {
+        const newObjs: Array<{ position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number } }> = [];
+        for (let i = countBefore; i < api.scene.children.length; i++) {
+          const child = api.scene.children[i];
+          if (child.type === "Mesh") {
+            if (child.renderOrder === 0) child.renderOrder = 1;
+            const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+            for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
+          }
+          // Tag all new objects (Mesh, Group, Points, etc.) with the prop's objectId
+          child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
+          if (child.type === "Mesh" || child.type === "Group") newObjs.push(child);
+        }
+        if (newObjs.length > 0) {
+          setScriptMeshPlacement({ meshes: newObjs as Array<import("three").Object3D>, objectId, sceneId, cachedCode: code });
+        }
+      } else {
+        (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
+      }
+    },
+    [scene],
+  );
+
   const handleSplatInteract = useCallback(
     async (objectId: string, action: string) => {
       if (!scene) return;
@@ -616,6 +653,13 @@ export function App() {
         setNpcChatPending(false);
         return;
       }
+      // If prop has cachedCode, execute it locally — no server round-trip needed
+      const skillMeta = (obj?.metadata?.skill ?? {}) as Record<string, unknown>;
+      const skillCfg = (skillMeta.config ?? {}) as Record<string, unknown>;
+      if ((skillMeta.name === "code-gen" || skillMeta.name === "static-script") && skillCfg.cachedCode) {
+        runScriptAndCalibrate(String(skillCfg.cachedCode), objectId, scene.sceneId);
+        return;
+      }
       setNarrativeLines([]);
       setIsStreaming(true);
       streamingBuffer.current = "";
@@ -626,36 +670,7 @@ export function App() {
         const result = await postInteract({ sessionId, sceneId: scene.sceneId, objectId, action, playerPosition });
         if (result.display?.type === "script") {
           setIsStreaming(false);
-          const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
-          if (worldAPI) {
-            const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-            // If this prop's meshes are already in the scene, show confirm panel (frozen) — don't re-enter drag
-              const existingMeshes = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId && c.type === "Mesh");
-              if (existingMeshes.length > 0) {
-                setScriptMeshPlacement({ meshes: existingMeshes as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code, frozen: true });
-              } else {
-              const countBefore = api.scene.children.length;
-              const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
-              if (!err) {
-                const newMeshes: Array<{ position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number } }> = [];
-                for (let i = countBefore; i < api.scene.children.length; i++) {
-                  const child = api.scene.children[i];
-                  if (child.type === "Mesh") {
-                    if (child.renderOrder === 0) child.renderOrder = 1;
-                    const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
-                    for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
-                    newMeshes.push(child);
-                  }
-                  child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
-                }
-                if (newMeshes.length > 0) {
-                  setScriptMeshPlacement({ meshes: newMeshes as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code });
-                }
-              } else {
-                (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
-              }
-              } // end no existing meshes
-          }
+          runScriptAndCalibrate(result.display.code, objectId, scene.sceneId);
         } else if (result.display?.type === "resource-picker") {
           setIsStreaming(false);
           const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
@@ -853,12 +868,12 @@ export function App() {
 
   const handlePropApproach = useCallback(
     (objectId: string, name: string, skillName: string, skillConfig: Record<string, unknown>) => {
-      // autoRun props execute immediately on approach — no panel needed
-      if ((skillName === "code-gen" || skillName === "static-script") && skillConfig.autoRun && skillConfig.cachedCode) {
+      // If cachedCode exists, auto-run it on approach (regardless of autoRun flag — code is ready)
+      if ((skillName === "code-gen" || skillName === "static-script") && skillConfig.cachedCode) {
         const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
         if (worldAPI) {
           const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-          // Don't re-run if meshes from this prop are already in the scene
+          // Don't re-run if objects from this prop are already in the scene
           const alreadyRan = api.scene.children.some((c) => c.userData?.scriptObjectId === objectId);
           if (alreadyRan) return;
           const countBefore = api.scene.children.length;
@@ -877,7 +892,7 @@ export function App() {
           return;
         }
       }
-      // preset code-gen: no panel needed — E key fires handleSplatInteract directly
+      // preset code-gen with no cachedCode: E key fires handleSplatInteract to generate
       if (skillName === "code-gen" && skillConfig.mode !== "interactive") return;
       setActivePropPanel({ objectId, name, skillName, skillConfig });
     },

@@ -133,6 +133,39 @@ export function attachSkillTool(
 				},
 			});
 
+			// Pre-generate code for code-gen skills so the mesh is ready when the prop is placed.
+			if (params.skillName === "code-gen" && config.prompt) {
+				const freshScene = await sceneManager.getScene(params.sceneId);
+				const freshObj = freshScene?.sceneData.objects.find((o) => o.objectId === params.objectId);
+				try {
+					const display = await behaviorRegistry.run({
+						objectId: params.objectId,
+						objectName: freshObj?.name ?? params.objectId,
+						sceneId: params.sceneId,
+						objectPosition: freshObj?.position ?? { x: 0, y: 0, z: 0 },
+						environment: freshScene?.sceneData.environment,
+						displayY:
+							typeof freshObj?.metadata?.displayY === "number" ? (freshObj.metadata.displayY as number) : 1.3,
+						displayWidth: 1.6,
+						displayHeight: 0.9,
+						config: { name: params.skillName, config },
+					});
+					if (display?.type === "script") {
+						await sceneManager.updateSceneObject(params.sceneId, params.objectId, {
+							metadata: {
+								skill: {
+									name: params.skillName,
+									config: { ...config, cachedCode: display.code, autoRun: true },
+								},
+							},
+						});
+						console.log(`[attach-skill] pre-generated code for ${params.skillName} on ${params.objectId}`);
+					}
+				} catch (err) {
+					console.error(`[attach-skill] code pre-generation failed (non-fatal):`, err);
+				}
+			}
+
 			return {
 				content: [
 					{
