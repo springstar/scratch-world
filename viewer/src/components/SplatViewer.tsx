@@ -421,6 +421,28 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     camera.position.set(0, 1.7, 0);
     cameraRef.current = camera;
 
+    // ── Player avatar — visible only in selfie mode ───────────────────────────
+    const avatarMat = new MeshStandardMaterial({
+      color: 0x8899ff,
+      roughness: 0.6,
+      metalness: 0.2,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.92,
+    });
+    const avatarGroup = new Group();
+    const avatarBody = new Mesh(new CylinderGeometry(0.22, 0.22, 1.0, 16), avatarMat);
+    avatarBody.position.y = 0.5;
+    avatarBody.renderOrder = 20;
+    const avatarHead = new Mesh(new SphereGeometry(0.25, 16, 12), avatarMat);
+    avatarHead.position.y = 1.35;
+    avatarHead.renderOrder = 20;
+    avatarGroup.add(avatarBody);
+    avatarGroup.add(avatarHead);
+    avatarGroup.visible = false;
+    scene.add(avatarGroup);
+
     const clock = new Clock();
     const sparkRenderer = new SparkRenderer({ renderer, clock, enableLod: true, sortRadial: true });
     (window as unknown as Record<string, unknown>).__sparkRenderer = sparkRenderer;
@@ -1021,8 +1043,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         return;
       }
 
-      // Right-click drag: rotate camera (suppressed in selfie mode — lookAt owns orientation)
-      if (ffDragging && !selfieModeRef.current) {
+      // Right-click drag: rotate camera (in selfie mode, updates orbit angle instead of directly rotating)
+      if (ffDragging) {
         const sens = 0.003;
         flyEuler.y -= e.movementX * sens;
         flyEuler.x -= e.movementY * sens;
@@ -1269,9 +1291,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       },
       setSelfieMode: (on: boolean) => {
         selfieModeRef.current = on;
-        // Exit pointer lock so free-fly takes over — lookAt works there without
-        // PointerLockControls fighting the orientation each mouse move.
-        if (on && document.pointerLockElement) document.exitPointerLock();
+        avatarGroup.visible = on;
+        if (on) {
+          // Exit pointer lock so free-fly (with lookAt + orbit) takes over.
+          if (document.pointerLockElement) document.exitPointerLock();
+          // Init pivot at current camera position so avatar appears where player stands.
+          selfiePivot.copy(camera.position);
+          selfiePivotInit = true;
+          // Start orbit facing the player: tilt slightly down, keep current y-angle.
+          flyEuler.x = 0.15;
+          // camera will be repositioned on next freeFlyLoop tick
+        } else {
+          selfiePivotInit = false;
+          syncEuler();
+        }
       },
       setFov: (fov: number) => {
         camera.fov = fov;
@@ -1305,21 +1338,26 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
         if (keys.size > 0) {
           const spd = (keys.has("shift") ? 5 : 1) * 0.05;
-          if (keys.has("w") || keys.has("arrowup"))    freeFlyMove.addScaledVector(freeFlyFwd,    spd);
-          if (keys.has("s") || keys.has("arrowdown"))  freeFlyMove.addScaledVector(freeFlyFwd,   -spd);
-          if (keys.has("a") || keys.has("arrowleft"))  freeFlyMove.addScaledVector(freeFlyRight,  -spd);
-          if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
-          selfiePivot.add(freeFlyMove);
+          // Move pivot along orbit forward (XZ direction from flyEuler.y angle)
+          const moveFwd = new Vector3(Math.sin(flyEuler.y), 0, Math.cos(flyEuler.y));
+          const moveRight = new Vector3(Math.cos(flyEuler.y), 0, -Math.sin(flyEuler.y));
+          if (keys.has("w") || keys.has("arrowup"))    selfiePivot.addScaledVector(moveFwd,   -spd);
+          if (keys.has("s") || keys.has("arrowdown"))  selfiePivot.addScaledVector(moveFwd,    spd);
+          if (keys.has("a") || keys.has("arrowleft"))  selfiePivot.addScaledVector(moveRight, -spd);
+          if (keys.has("d") || keys.has("arrowright")) selfiePivot.addScaledVector(moveRight,  spd);
         }
-        // Position camera 2.5m in front of pivot (selfie = camera faces the player from the front).
+
+        // Place avatar at pivot.
+        avatarGroup.position.set(selfiePivot.x, selfiePivot.y - 0.8, selfiePivot.z);
+
+        // Orbit camera around avatar: fly euler controls orbit angle, distance = 2.5m.
+        const orbitDist = 2.5;
         camera.position.set(
-          selfiePivot.x + freeFlyFwd.x * 2.5,
-          selfiePivot.y + 0.5,
-          selfiePivot.z + freeFlyFwd.z * 2.5,
+          selfiePivot.x + Math.sin(flyEuler.y) * orbitDist * Math.cos(flyEuler.x),
+          selfiePivot.y + Math.sin(flyEuler.x) * orbitDist + 0.5,
+          selfiePivot.z + Math.cos(flyEuler.y) * orbitDist * Math.cos(flyEuler.x),
         );
-        // Look back at pivot — mouse-drag rotation is suppressed while selfie is active.
-        camera.lookAt(selfiePivot.x, selfiePivot.y + 1.0, selfiePivot.z);
-        syncEuler();
+        camera.lookAt(selfiePivot.x, selfiePivot.y + 0.8, selfiePivot.z);
       } else {
         selfiePivotInit = false;
         if (keys.size > 0) {
@@ -2018,6 +2056,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           // every frame causes violent spinning each time the mouse moves.
           // fwd is already computed above (from camera world direction) and is valid here.
           const bodyPos = cc.body.translation();
+          avatarGroup.position.set(bodyPos.x, bodyPos.y - 0.8, bodyPos.z);
           camera.position.set(
             bodyPos.x - fwd.x * 2.5,
             bodyPos.y + 1.5,
@@ -2406,6 +2445,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
       delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
       delete (window as unknown as Record<string, unknown>).__worldAPI;
+      scene.remove(avatarGroup);
+      avatarMat.dispose();
       // Clean up any objects spawned by code-gen scripts.
       for (const obj of scriptSpawnedObjects.values()) scene.remove(obj);
       scriptSpawnedObjects.clear();
