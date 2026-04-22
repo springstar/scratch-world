@@ -170,6 +170,8 @@ export interface CameraAPI {
   captureFrame: () => string;
   setSelfieMode: (on: boolean) => void;
   setFov: (fov: number) => void;
+  startRecording: (fps?: number) => void;
+  stopRecording: () => Promise<Blob | null>;
 }
 
 // Module-level registry so it is constructed once and shared across mounts.
@@ -1284,6 +1286,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     };
     (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
 
+    // ── Recording state ───────────────────────────────────────────────────────
+    let mediaRecorder: MediaRecorder | null = null;
+    let recordedChunks: Blob[] = [];
+    let stopResolve: ((blob: Blob | null) => void) | null = null;
+
     onCameraReadyRef.current?.({
       captureFrame: () => {
         renderer.render(scene, camera);
@@ -1309,6 +1316,33 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       setFov: (fov: number) => {
         camera.fov = fov;
         camera.updateProjectionMatrix();
+      },
+      startRecording: (fps = 30) => {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") return;
+        recordedChunks = [];
+        const stream = (canvas as unknown as { captureStream(fps: number): MediaStream }).captureStream(fps);
+        const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+          ? "video/webm;codecs=vp9"
+          : MediaRecorder.isTypeSupported("video/webm")
+          ? "video/webm"
+          : "video/mp4";
+        mediaRecorder = new MediaRecorder(stream, { mimeType });
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const blob = recordedChunks.length > 0 ? new Blob(recordedChunks, { type: mimeType }) : null;
+          stopResolve?.(blob);
+          stopResolve = null;
+          mediaRecorder = null;
+          recordedChunks = [];
+        };
+        mediaRecorder.start(100); // collect chunks every 100ms
+      },
+      stopRecording: () => {
+        return new Promise<Blob | null>((resolve) => {
+          if (!mediaRecorder || mediaRecorder.state === "inactive") { resolve(null); return; }
+          stopResolve = resolve;
+          mediaRecorder.stop();
+        });
       },
     });
 
