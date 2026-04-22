@@ -1281,23 +1281,49 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const freeFlyFwd   = new Vector3();
     const freeFlyRight = new Vector3();
     const freeFlyMove  = new Vector3();
+    // Selfie mode pivot — tracks virtual player position in free-fly mode.
+    const selfiePivot = new Vector3();
+    let selfiePivotInit = false;
     let freeFlyFrameCount = 0;
 
     function freeFlyLoop() {
       if (!freeFlyActive) return;
       animId = requestAnimationFrame(freeFlyLoop);
-      if (keys.size > 0) {
-        const spd = (keys.has("shift") ? 5 : 1) * 0.05;
-        camera.getWorldDirection(freeFlyFwd);
-        freeFlyFwd.y = 0;
-        if (freeFlyFwd.lengthSq() > 0.0001) freeFlyFwd.normalize();
-        freeFlyRight.crossVectors(freeFlyFwd, worldUp).normalize();
-        freeFlyMove.set(0, 0, 0);
-        if (keys.has("w") || keys.has("arrowup"))    freeFlyMove.addScaledVector(freeFlyFwd,    spd);
-        if (keys.has("s") || keys.has("arrowdown"))  freeFlyMove.addScaledVector(freeFlyFwd,   -spd);
-        if (keys.has("a") || keys.has("arrowleft"))  freeFlyMove.addScaledVector(freeFlyRight,  -spd);
-        if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
-        if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
+
+      camera.getWorldDirection(freeFlyFwd);
+      freeFlyFwd.y = 0;
+      if (freeFlyFwd.lengthSq() > 0.0001) freeFlyFwd.normalize();
+      freeFlyRight.crossVectors(freeFlyFwd, worldUp).normalize();
+      freeFlyMove.set(0, 0, 0);
+
+      if (selfieModeRef.current) {
+        // Initialise pivot at current camera position first time selfie activates.
+        if (!selfiePivotInit) { selfiePivot.copy(camera.position); selfiePivotInit = true; }
+
+        if (keys.size > 0) {
+          const spd = (keys.has("shift") ? 5 : 1) * 0.05;
+          if (keys.has("w") || keys.has("arrowup"))    freeFlyMove.addScaledVector(freeFlyFwd,    spd);
+          if (keys.has("s") || keys.has("arrowdown"))  freeFlyMove.addScaledVector(freeFlyFwd,   -spd);
+          if (keys.has("a") || keys.has("arrowleft"))  freeFlyMove.addScaledVector(freeFlyRight,  -spd);
+          if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
+          selfiePivot.add(freeFlyMove);
+        }
+        // Position camera 2.5m behind pivot along look direction; no lookAt so mouse-look still works.
+        camera.position.set(
+          selfiePivot.x - freeFlyFwd.x * 2.5,
+          selfiePivot.y + 1.5,
+          selfiePivot.z - freeFlyFwd.z * 2.5,
+        );
+      } else {
+        selfiePivotInit = false;
+        if (keys.size > 0) {
+          const spd = (keys.has("shift") ? 5 : 1) * 0.05;
+          if (keys.has("w") || keys.has("arrowup"))    freeFlyMove.addScaledVector(freeFlyFwd,    spd);
+          if (keys.has("s") || keys.has("arrowdown"))  freeFlyMove.addScaledVector(freeFlyFwd,   -spd);
+          if (keys.has("a") || keys.has("arrowleft"))  freeFlyMove.addScaledVector(freeFlyRight,  -spd);
+          if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
+          if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
+        }
       }
       tickPortals();
       tickScriptMeshes();
@@ -1981,15 +2007,16 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         tickPortals();
         tickScriptMeshes();
         if (selfieModeRef.current) {
+          // Third-person selfie: reposition camera 2.5m behind player body, same look direction.
+          // Do NOT call lookAt — PointerLockControls owns camera orientation and calling lookAt
+          // every frame causes violent spinning each time the mouse moves.
+          // fwd is already computed above (from camera world direction) and is valid here.
           const bodyPos = cc.body.translation();
-          const forward = new Vector3();
-          camera.getWorldDirection(forward);
           camera.position.set(
-            bodyPos.x - forward.x * 2.5,
+            bodyPos.x - fwd.x * 2.5,
             bodyPos.y + 1.5,
-            bodyPos.z - forward.z * 2.5,
+            bodyPos.z - fwd.z * 2.5,
           );
-          camera.lookAt(bodyPos.x, bodyPos.y + 1.0, bodyPos.z);
         }
         renderer.render(scene, camera);
       }
