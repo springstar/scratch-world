@@ -16,6 +16,8 @@ export interface WorldAPI {
   /** Render arbitrary HTML as a 2D overlay centered on screen (follows camera).
    *  Pass null to dismiss. */
   setDisplay(html: string | null): void;
+  /** @deprecated alias for setDisplay — only exists to handle legacy generated code */
+  showPanel(html: string | null): void;
   /** Spark 2.0 Gaussian Splat rendering capabilities.
    *  Only available when provider === "splat". */
   spark?: SparkAPI;

@@ -1254,6 +1254,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       setDisplay(html: string | null) {
         window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
       },
+      // Alias for legacy generated code that hallucinated showPanel
+      showPanel(html: string | null) {
+        window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
+      },
       spark: {
         addEdit(edit: unknown) {
           if (!splat.edits) splat.edits = [];
