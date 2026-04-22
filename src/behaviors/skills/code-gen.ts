@@ -590,7 +590,8 @@ export const codeGenSkill: SkillHandler = {
 		}
 
 		// If calibrated LLM code exists, use it directly — skip LLM call.
-		if (ctx.config.autoRun && ctx.config.cachedCode) {
+		// autoRun controls when the script fires (on approach vs manual E), not whether to cache.
+		if (ctx.config.cachedCode) {
 			console.log(`[code-gen] serving cachedCode for "${userRequest}"`);
 			return { type: "script", code: String(ctx.config.cachedCode), title };
 		}
