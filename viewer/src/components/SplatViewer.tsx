@@ -1021,8 +1021,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         return;
       }
 
-      // Right-click drag: rotate camera
-      if (ffDragging) {
+      // Right-click drag: rotate camera (suppressed in selfie mode — lookAt owns orientation)
+      if (ffDragging && !selfieModeRef.current) {
         const sens = 0.003;
         flyEuler.y -= e.movementX * sens;
         flyEuler.x -= e.movementY * sens;
@@ -1269,6 +1269,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       },
       setSelfieMode: (on: boolean) => {
         selfieModeRef.current = on;
+        // Exit pointer lock so free-fly takes over — lookAt works there without
+        // PointerLockControls fighting the orientation each mouse move.
+        if (on && document.pointerLockElement) document.exitPointerLock();
       },
       setFov: (fov: number) => {
         camera.fov = fov;
@@ -1308,12 +1311,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           if (keys.has("d") || keys.has("arrowright")) freeFlyMove.addScaledVector(freeFlyRight,   spd);
           selfiePivot.add(freeFlyMove);
         }
-        // Position camera 2.5m behind pivot along look direction; no lookAt so mouse-look still works.
+        // Position camera 2.5m in front of pivot (selfie = camera faces the player from the front).
         camera.position.set(
-          selfiePivot.x - freeFlyFwd.x * 2.5,
-          selfiePivot.y + 1.5,
-          selfiePivot.z - freeFlyFwd.z * 2.5,
+          selfiePivot.x + freeFlyFwd.x * 2.5,
+          selfiePivot.y + 0.5,
+          selfiePivot.z + freeFlyFwd.z * 2.5,
         );
+        // Look back at pivot — mouse-drag rotation is suppressed while selfie is active.
+        camera.lookAt(selfiePivot.x, selfiePivot.y + 1.0, selfiePivot.z);
+        syncEuler();
       } else {
         selfiePivotInit = false;
         if (keys.size > 0) {
