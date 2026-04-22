@@ -609,11 +609,11 @@ export function App() {
       const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
       if (!worldAPI || !scene) return;
       const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-      // If meshes from this prop already exist, show calibrator in frozen mode
+      // If objects from this prop already exist, just re-run the script for interactive behavior
+      // (e.g. world.setDisplay / showPanel). Don't show calibrator — position is already set.
       const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
       if (existingObjs.length > 0) {
-        const meshes = existingObjs.filter((c) => c.type === "Mesh" || c.type === "Group");
-        if (meshes.length > 0) setScriptMeshPlacement({ meshes: meshes as Array<import("three").Object3D>, objectId, sceneId, cachedCode: code, frozen: true });
+        runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
         return;
       }
       const countBefore = api.scene.children.length;
