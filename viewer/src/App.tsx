@@ -609,12 +609,12 @@ export function App() {
       const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
       if (!worldAPI || !scene) return;
       const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-      // If objects from this prop already exist, just re-run the script for interactive behavior
-      // (e.g. world.setDisplay / showPanel). Don't show calibrator — position is already set.
+      // If objects from this prop already exist, remove them then re-run fresh.
+      // This avoids duplicate world.animate() callbacks and gives a clean toggle/refresh.
       const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
       if (existingObjs.length > 0) {
-        runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
-        return;
+        const wapi = worldAPI as { scene: { remove(o: object): void } };
+        for (const o of existingObjs) wapi.scene.remove(o as object);
       }
       const countBefore = api.scene.children.length;
       const err = runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
@@ -868,8 +868,8 @@ export function App() {
 
   const handlePropApproach = useCallback(
     (objectId: string, name: string, skillName: string, skillConfig: Record<string, unknown>) => {
-      // If cachedCode exists, auto-run it on approach (regardless of autoRun flag — code is ready)
-      if ((skillName === "code-gen" || skillName === "static-script") && skillConfig.cachedCode) {
+      // autoRun=true props execute immediately on approach (ambient effects, clocks, etc.)
+      if ((skillName === "code-gen" || skillName === "static-script") && skillConfig.autoRun && skillConfig.cachedCode) {
         const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
         if (worldAPI) {
           const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
@@ -892,7 +892,7 @@ export function App() {
           return;
         }
       }
-      // preset code-gen with no cachedCode: E key fires handleSplatInteract to generate
+      // preset code-gen with no cachedCode or autoRun=false: E key fires handleSplatInteract
       if (skillName === "code-gen" && skillConfig.mode !== "interactive") return;
       setActivePropPanel({ objectId, name, skillName, skillConfig });
     },
