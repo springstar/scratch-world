@@ -433,6 +433,28 @@ export async function fetchUserAssets(sessionId: string): Promise<UserAsset[]> {
   return data.assets;
 }
 
+export async function regenSkill(sceneId: string, objectId: string, prompt: string, sessionId: string): Promise<void> {
+  await fetch(`${BASE}/scenes/${sceneId}/objects/${objectId}/regen-skill?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+}
+
+export async function fixSkill(sceneId: string, objectId: string, error: string, sessionId: string): Promise<void> {
+  await fetch(`${BASE}/scenes/${sceneId}/objects/${objectId}/fix-skill?session=${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ error }),
+  });
+}
+
+export async function deleteSkill(sceneId: string, objectId: string, sessionId: string): Promise<void> {
+  await fetch(`${BASE}/scenes/${sceneId}/objects/${objectId}/skill?session=${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+}
+
 /** Convert a UserAsset to a ResourceOption for use in ResourcePickerPanel */
 export function userAssetToOption(asset: UserAsset): ResourceOption {
   return {

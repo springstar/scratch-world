@@ -135,4 +135,6 @@ export type RealtimeEvent =
       estimatedPos: { x: number; y: number; z: number };
       objectName: string;
       sceneId: string;
-    };
+    }
+  | { type: "skill_generating"; objectId: string; objectName: string; sceneId: string; skillName: string }
+  | { type: "skill_ready"; objectId: string; sceneId: string };

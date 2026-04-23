@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { behaviorRegistry } from "../../behaviors/registry.js";
+import { fixGeneratedCode } from "../../behaviors/skills/code-gen.js";
 import { applyEvolutionDelta, type EvolutionLogEntry } from "../../npcs/npc-evolution.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SessionManager } from "../../session/session-manager.js";
@@ -508,6 +510,151 @@ export function scenesRoute(
 
 	// Mount prop generation sub-router
 	app.route("/:sceneId/generate-prop", generatePropRoute(join(projectRoot, "uploads")));
+
+	// POST /scenes/:sceneId/objects/:objectId/fix-skill — patch syntax/runtime error in cached code
+	// Single Haiku call: fix only the error, keep all existing logic intact.
+	app.post("/:sceneId/objects/:objectId/fix-skill", async (c) => {
+		const { sceneId, objectId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const body = await c.req.json<{ error: string }>().catch(() => ({ error: "" }));
+		if (!body.error) return c.json({ error: "Missing error field" }, 400);
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+		if (!obj) return c.json({ error: "Object not found" }, 404);
+
+		const existingSkill = obj.metadata?.skill as Record<string, unknown> | undefined;
+		if (!existingSkill || existingSkill.name !== "code-gen")
+			return c.json({ error: "Object has no code-gen skill" }, 400);
+		const existingConfig = (existingSkill.config ?? {}) as Record<string, unknown>;
+		const brokenCode = typeof existingConfig.cachedCode === "string" ? existingConfig.cachedCode : null;
+		if (!brokenCode) return c.json({ error: "No cached code to fix" }, 400);
+
+		if (sessionParam) {
+			bus.publish(sessionParam, {
+				type: "skill_generating",
+				objectId,
+				objectName: obj.name,
+				sceneId,
+				skillName: "code-gen",
+			});
+		}
+
+		(async () => {
+			try {
+				const fixedCode = await fixGeneratedCode(brokenCode, body.error);
+				const saved = await sceneManager.updateSceneObject(sceneId, objectId, {
+					metadata: { skill: { name: "code-gen", config: { ...existingConfig, cachedCode: fixedCode } } },
+				});
+				if (sessionParam) {
+					bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+					bus.publish(sessionParam, { type: "scene_updated", sceneId, version: saved.version });
+				}
+				console.log(`[fix-skill] patched ${objectId}: ${body.error}`);
+			} catch (err) {
+				console.error(`[fix-skill] failed for ${objectId}:`, err);
+				if (sessionParam) bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+			}
+		})();
+
+		return c.json({ ok: true });
+	});
+
+	// POST /scenes/:sceneId/objects/:objectId/regen-skill — update prompt and re-run code-gen in background
+	app.post("/:sceneId/objects/:objectId/regen-skill", async (c) => {
+		const { sceneId, objectId } = c.req.param();
+		const sessionParam = c.req.query("session");
+		const body = await c.req.json<{ prompt?: string }>().catch(() => ({ prompt: undefined }));
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+		if (!obj) return c.json({ error: "Object not found" }, 404);
+
+		const existingSkill = obj.metadata?.skill as Record<string, unknown> | undefined;
+		if (!existingSkill || existingSkill.name !== "code-gen")
+			return c.json({ error: "Object has no code-gen skill" }, 400);
+
+		const existingConfig = (existingSkill.config ?? {}) as Record<string, unknown>;
+		const newPrompt = body.prompt ?? (existingConfig.prompt as string | undefined) ?? "";
+
+		// Clear cachedCode and update prompt, then kick off background generation
+		const updatedConfig = { ...existingConfig, prompt: newPrompt, cachedCode: undefined, autoRun: true };
+		delete updatedConfig.cachedCode;
+		const updated = await sceneManager.updateSceneObject(sceneId, objectId, {
+			metadata: { skill: { name: "code-gen", config: updatedConfig } },
+		});
+
+		if (sessionParam) {
+			bus.publish(sessionParam, {
+				type: "skill_generating",
+				objectId,
+				objectName: obj.name,
+				sceneId,
+				skillName: "code-gen",
+			});
+			bus.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
+		}
+
+		// Background generation
+		(async () => {
+			const freshScene = await sceneManager.getScene(sceneId);
+			const freshObj = freshScene?.sceneData.objects.find((o) => o.objectId === objectId);
+			try {
+				const display = await behaviorRegistry.run({
+					objectId,
+					objectName: freshObj?.name ?? objectId,
+					sceneId,
+					objectPosition: freshObj?.position ?? { x: 0, y: 0, z: 0 },
+					environment: freshScene?.sceneData.environment,
+					displayY:
+						typeof freshObj?.metadata?.displayY === "number" ? (freshObj.metadata.displayY as number) : 1.3,
+					displayWidth: 1.6,
+					displayHeight: 0.9,
+					config: { name: "code-gen", config: updatedConfig },
+				});
+				if (display?.type === "script") {
+					const saved = await sceneManager.updateSceneObject(sceneId, objectId, {
+						metadata: { skill: { name: "code-gen", config: { ...updatedConfig, cachedCode: display.code } } },
+					});
+					if (sessionParam) {
+						bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+						bus.publish(sessionParam, { type: "scene_updated", sceneId, version: saved.version });
+					}
+					console.log(`[regen-skill] done for ${objectId}`);
+				}
+			} catch (err) {
+				console.error(`[regen-skill] failed for ${objectId}:`, err);
+				if (sessionParam) bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+			}
+		})();
+
+		return c.json({ ok: true, version: updated.version });
+	});
+
+	// DELETE /scenes/:sceneId/objects/:objectId/skill — remove code-gen skill from object
+	app.delete("/:sceneId/objects/:objectId/skill", async (c) => {
+		const { sceneId, objectId } = c.req.param();
+		const sessionParam = c.req.query("session");
+
+		const scene = await sceneManager.getScene(sceneId);
+		if (!scene) return c.json({ error: "Scene not found" }, 404);
+		const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+		if (!obj) return c.json({ error: "Object not found" }, 404);
+
+		// Strip skill and interactionHint from metadata
+		const { skill: _skill, ...restMeta } = (obj.metadata ?? {}) as Record<string, unknown>;
+		const updated = await sceneManager.updateSceneObject(sceneId, objectId, {
+			interactionHint: undefined as unknown as string,
+			metadata: { ...restMeta, skill: null },
+		});
+
+		if (sessionParam) {
+			bus.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
+		}
+		return c.json({ ok: true, version: updated.version });
+	});
 
 	return app;
 }

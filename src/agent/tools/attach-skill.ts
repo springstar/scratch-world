@@ -133,8 +133,56 @@ export function attachSkillTool(
 				},
 			});
 
-			// Pre-generate code for code-gen skills so the mesh is ready when the prop is placed.
-			if (params.skillName === "code-gen" && config.prompt) {
+			// Fire code pre-generation in the background so attach_skill returns immediately.
+			// The viewer receives skill_generating now and skill_ready + scene_updated when done.
+			if (params.skillName === "code-gen" && config.prompt && bus && sessionId) {
+				bus.publish(sessionId, {
+					type: "skill_generating",
+					objectId: params.objectId,
+					objectName: targetObj?.name ?? params.objectId,
+					sceneId: params.sceneId,
+					skillName: params.skillName,
+				});
+				(async () => {
+					const freshScene = await sceneManager.getScene(params.sceneId);
+					const freshObj = freshScene?.sceneData.objects.find((o) => o.objectId === params.objectId);
+					try {
+						const display = await behaviorRegistry.run({
+							objectId: params.objectId,
+							objectName: freshObj?.name ?? params.objectId,
+							sceneId: params.sceneId,
+							objectPosition: freshObj?.position ?? { x: 0, y: 0, z: 0 },
+							environment: freshScene?.sceneData.environment,
+							displayY:
+								typeof freshObj?.metadata?.displayY === "number" ? (freshObj.metadata.displayY as number) : 1.3,
+							displayWidth: 1.6,
+							displayHeight: 0.9,
+							config: { name: params.skillName, config },
+						});
+						if (display?.type === "script") {
+							const saved = await sceneManager.updateSceneObject(params.sceneId, params.objectId, {
+								metadata: {
+									skill: {
+										name: params.skillName,
+										config: { ...config, cachedCode: display.code, autoRun: true },
+									},
+								},
+							});
+							bus.publish(sessionId, {
+								type: "skill_ready",
+								objectId: params.objectId,
+								sceneId: params.sceneId,
+							});
+							bus.publish(sessionId, { type: "scene_updated", sceneId: params.sceneId, version: saved.version });
+							console.log(`[attach-skill] background code-gen done for ${params.objectId}`);
+						}
+					} catch (err) {
+						console.error(`[attach-skill] background code-gen failed:`, err);
+						bus.publish(sessionId, { type: "skill_ready", objectId: params.objectId, sceneId: params.sceneId });
+					}
+				})();
+			} else if (params.skillName === "code-gen" && config.prompt) {
+				// No bus — fall back to synchronous generation (non-interactive context)
 				const freshScene = await sceneManager.getScene(params.sceneId);
 				const freshObj = freshScene?.sceneData.objects.find((o) => o.objectId === params.objectId);
 				try {
@@ -159,10 +207,10 @@ export function attachSkillTool(
 								},
 							},
 						});
-						console.log(`[attach-skill] pre-generated code for ${params.skillName} on ${params.objectId}`);
+						console.log(`[attach-skill] sync code-gen done for ${params.objectId}`);
 					}
 				} catch (err) {
-					console.error(`[attach-skill] code pre-generation failed (non-fatal):`, err);
+					console.error(`[attach-skill] sync code-gen failed (non-fatal):`, err);
 				}
 			}
 

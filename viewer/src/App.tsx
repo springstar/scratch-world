@@ -22,6 +22,7 @@ import { BehaviorOverlay } from "./components/BehaviorOverlay.js";
 import { PropInteractionPanel } from "./components/PropInteractionPanel.js";
 import { ResourcePickerPanel } from "./components/ResourcePickerPanel.js";
 import { PositionPicker } from "./components/PositionPicker.js";
+import { ScriptPanel } from "./components/ScriptPanel.js";
 import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
 import { CameraPanel } from "./components/CameraPanel.js";
 
@@ -36,6 +37,29 @@ function buildScriptContext(scene: SceneResponse, objectId: string): ScriptConte
   return { objectPosition: { x: pos.x, y: pos.y, z: pos.z }, displayY, displayWidth, displayHeight };
 }
 import { runScript, type ScriptContext } from "./behaviors/world-api.js";
+
+/** Wrap a WorldAPI so setDisplay/showPanel are no-ops.
+ *  Used for autoRun execution — the script creates 3D objects but must not pop up overlays. */
+function silenceDisplay(api: unknown): unknown {
+  const noop = () => {};
+  return Object.assign(Object.create(Object.getPrototypeOf(api as object)), api as object, {
+    setDisplay: noop,
+    showPanel: noop,
+  }) as unknown;
+}
+
+// Recursively set renderOrder=1 and transparent=true on all Mesh descendants.
+// Required for Three.js objects added via code-gen to render above the Gaussian splat.
+type AnyObj = { type?: string; renderOrder?: number; material?: unknown; children?: AnyObj[]; userData?: Record<string, unknown> };
+function fixScriptMeshRendering(obj: AnyObj, scriptObjectId: string): void {
+  obj.userData = { ...(obj.userData ?? {}), scriptObjectId };
+  if (obj.type === "Mesh") {
+    if ((obj.renderOrder ?? 0) === 0) obj.renderOrder = 1;
+    const mats = Array.isArray(obj.material) ? obj.material as { transparent?: boolean; needsUpdate?: boolean }[] : obj.material ? [obj.material as { transparent?: boolean; needsUpdate?: boolean }] : [];
+    for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
+  }
+  for (const child of obj.children ?? []) fixScriptMeshRendering(child, scriptObjectId);
+}
 
 // ── Session identity ──────────────────────────────────────────────────────────
 function getOrCreateUserId(): string {
@@ -108,6 +132,8 @@ export function App() {
   const [pendingPortal, setPendingPortal] = useState<{ name?: string; targetSceneId?: string; targetSceneName?: string } | null>(null);
   const [portalScenePicker, setPortalScenePicker] = useState(false);
 
+  const [showScriptPanel, setShowScriptPanel] = useState(false);
+
   // Behavior skill overlay
   const [behaviorDisplay, setBehaviorDisplay] = useState<DisplayConfig | null>(null);
 
@@ -146,8 +172,16 @@ export function App() {
 
   // Toast from WorldAPI scripts
   const [scriptToast, setScriptToast] = useState<string | null>(null);
+  // Persistent indicator shown while server-side code-gen is running in background
+  const [skillGenerating, setSkillGenerating] = useState<{ objectId: string; objectName: string } | null>(null);
+  const skillGeneratingRef = useRef<{ objectId: string; objectName: string } | null>(null);
+  skillGeneratingRef.current = skillGenerating;
+  // objectId → last script error message
+  const [scriptErrors, setScriptErrors] = useState<Record<string, string>>({});
   // HTML display panel from WorldAPI world.setDisplay(html)
   const [scriptDisplay, setScriptDisplay] = useState<string | null>(null);
+  // Track objectIds whose autoRun/approach scripts have already executed this session (within same scene)
+  const autoRanScriptsRef = useRef<Set<string>>(new Set());
 
   // Script mesh drag-to-place — active while user drags to position new meshes.
   // frozen=true: mesh is placed (ESC pressed), panel visible for confirm, tracking stopped.
@@ -218,6 +252,7 @@ export function App() {
           sceneRef.current = s;
           setActiveViewpoint(s.sceneData.viewpoints[0] ?? null);
           greetedNpcsRef.current.clear();
+          autoRanScriptsRef.current.clear();
           history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
 
           // Inject newly added objects into the live physics world so a full
@@ -276,18 +311,15 @@ export function App() {
       for (const obj of autoRunProps) {
         const cfg = (obj.metadata.skill as Record<string, unknown>).config as Record<string, unknown>;
         const code = String(cfg.cachedCode);
-        // Skip if already ran for this prop
-        const alreadyRan = api.scene.children.some((c) => c.userData?.scriptObjectId === obj.objectId);
+        // Skip if already ran for this prop (scene objects check OR session-level tracking)
+        const alreadyRan = autoRanScriptsRef.current.has(obj.objectId) ||
+          api.scene.children.some((c) => c.userData?.scriptObjectId === obj.objectId);
         if (alreadyRan) continue;
+        autoRanScriptsRef.current.add(obj.objectId);
         const countBefore = api.scene.children.length;
-        runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, obj.objectId));        for (let i = countBefore; i < api.scene.children.length; i++) {
-          const child = api.scene.children[i];
-          if (child.type === "Mesh") {
-            if (child.renderOrder === 0) child.renderOrder = 1;
-            const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
-            for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
-          }
-          child.userData = { ...(child.userData ?? {}), scriptObjectId: obj.objectId };
+        runScript(code, silenceDisplay(worldAPI) as Parameters<typeof runScript>[1], buildScriptContext(scene, obj.objectId));
+        for (let i = countBefore; i < api.scene.children.length; i++) {
+          fixScriptMeshRendering(api.scene.children[i] as AnyObj, obj.objectId);
         }
       }
     }, 500);
@@ -429,6 +461,8 @@ export function App() {
         setChatMessages((prev) => [...prev, { id: nextId(), role: "agent", text: `Error: ${event.message}` }]);
 
       } else if (event.type === "position_picker") {
+        // Only show picker for the scene currently open in this tab
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
         setPositionPicker({
           pickerId: event.pickerId,
           panoUrl: event.panoUrl,
@@ -436,6 +470,11 @@ export function App() {
           objectName: event.objectName,
           sceneId: event.sceneId,
         });
+      } else if (event.type === "skill_generating") {
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        setSkillGenerating({ objectId: event.objectId, objectName: event.objectName });
+      } else if (event.type === "skill_ready") {
+        setSkillGenerating((prev) => (prev?.objectId === event.objectId ? null : prev));
       }
     });
     return disconnect;
@@ -619,22 +658,43 @@ export function App() {
       const countBefore = api.scene.children.length;
       const err = runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
       if (!err) {
-        const newObjs: Array<{ position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number } }> = [];
+        const newObjs: Array<import("three").Object3D> = [];
         for (let i = countBefore; i < api.scene.children.length; i++) {
-          const child = api.scene.children[i];
-          if (child.type === "Mesh") {
-            if (child.renderOrder === 0) child.renderOrder = 1;
-            const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
-            for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
-          }
-          // Tag all new objects (Mesh, Group, Points, etc.) with the prop's objectId
-          child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
-          if (child.type === "Mesh" || child.type === "Group") newObjs.push(child);
+          const child = api.scene.children[i] as AnyObj;
+          fixScriptMeshRendering(child, objectId);
+          if (child.type === "Mesh" || child.type === "Group" || child.type === "Points") newObjs.push(child as unknown as import("three").Object3D);
         }
         if (newObjs.length > 0) {
-          setScriptMeshPlacement({ meshes: newObjs as Array<import("three").Object3D>, objectId, sceneId, cachedCode: code });
+          setScriptMeshPlacement({ meshes: newObjs, objectId, sceneId, cachedCode: code });
         }
       } else {
+        (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
+      }
+    },
+    [scene],
+  );
+
+  const handleScriptRun = useCallback(
+    (objectId: string) => {
+      if (!scene) return;
+      const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+      const skillCfg = ((obj?.metadata?.skill as Record<string, unknown> | undefined)?.config ?? {}) as Record<string, unknown>;
+      if (typeof skillCfg.cachedCode !== "string") return;
+      const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+      if (!worldAPI) return;
+      const api = worldAPI as { scene: { remove(o: object): void; children: AnyObj[] } };
+      const existing = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
+      for (const o of existing) api.scene.remove(o as object);
+      const countBefore = api.scene.children.length;
+      const err = runScript(skillCfg.cachedCode, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+      if (!err) {
+        setScriptErrors((prev) => { const next = { ...prev }; delete next[objectId]; return next; });
+        for (let i = countBefore; i < api.scene.children.length; i++) {
+          fixScriptMeshRendering(api.scene.children[i], objectId);
+        }
+      } else {
+        setScriptErrors((prev) => ({ ...prev, [objectId]: String(err) }));
+        setShowScriptPanel(true);
         (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
       }
     },
@@ -653,11 +713,53 @@ export function App() {
         setNpcChatPending(false);
         return;
       }
-      // If prop has cachedCode, execute it locally — no server round-trip needed
+      // If prop has cachedCode, execute it locally — no server round-trip
       const skillMeta = (obj?.metadata?.skill ?? {}) as Record<string, unknown>;
       const skillCfg = (skillMeta.config ?? {}) as Record<string, unknown>;
-      if ((skillMeta.name === "code-gen" || skillMeta.name === "static-script") && skillCfg.cachedCode) {
-        runScriptAndCalibrate(String(skillCfg.cachedCode), objectId, scene.sceneId);
+      if (skillMeta.name === "code-gen") {
+        const wapi = (window as unknown as Record<string, unknown>).__worldAPI as { showToast: (t: string, d?: number) => void } | undefined;
+        if (!skillCfg.cachedCode) {
+          if (skillGeneratingRef.current?.objectId === objectId) {
+            wapi?.showToast("代码正在生成中，完成后会自动提示，请稍候...", 4000);
+          } else {
+            wapi?.showToast("暂无可执行代码，请在聊天中描述需求后重试", 4000);
+          }
+          return;
+        }
+        const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+        if (!worldAPI) return;
+        const api = worldAPI as { scene: { remove(o: object): void; children: Array<{ type?: string; renderOrder?: number; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
+        const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
+        for (const o of existingObjs) api.scene.remove(o as object);
+        const countBefore = api.scene.children.length;
+        const err = runScript(String(skillCfg.cachedCode), worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+        if (!err) {
+          setScriptErrors((prev) => { const next = { ...prev }; delete next[objectId]; return next; });
+          for (let i = countBefore; i < api.scene.children.length; i++) {
+            fixScriptMeshRendering(api.scene.children[i] as AnyObj, objectId);
+          }
+        } else {
+          setScriptErrors((prev) => ({ ...prev, [objectId]: String(err) }));
+          setShowScriptPanel(true);
+          wapi?.showToast(`脚本错误: ${err}`, 5000);
+        }
+        return;
+      }
+      if (skillMeta.name === "static-script" && skillCfg.cachedCode) {
+        const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
+        if (!worldAPI) return;
+        const api = worldAPI as { scene: { remove(o: object): void; children: Array<{ type?: string; renderOrder?: number; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
+        const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
+        for (const o of existingObjs) api.scene.remove(o as object);
+        const countBefore = api.scene.children.length;
+        const err = runScript(String(skillCfg.cachedCode), worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+        if (!err) {
+          for (let i = countBefore; i < api.scene.children.length; i++) {
+            fixScriptMeshRendering(api.scene.children[i] as AnyObj, objectId);
+          }
+        } else {
+          (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
+        }
         return;
       }
       setNarrativeLines([]);
@@ -715,27 +817,22 @@ export function App() {
         if (result.display?.type === "script") {
           const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
           if (worldAPI) {
-            const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-            const existingMeshes = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId && c.type === "Mesh");
-            if (existingMeshes.length > 0) {
-              setScriptMeshPlacement({ meshes: existingMeshes as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code, frozen: true });
+            const api = worldAPI as { scene: { children: AnyObj[] } };
+            const existing = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
+            if (existing.length > 0) {
+              setScriptMeshPlacement({ meshes: existing as unknown as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code, frozen: true });
             } else {
               const countBefore = api.scene.children.length;
               const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
               if (!err) {
-                const newMeshes: Array<{ position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number } }> = [];
+                const newObjs: Array<import("three").Object3D> = [];
                 for (let i = countBefore; i < api.scene.children.length; i++) {
                   const child = api.scene.children[i];
-                  if (child.type === "Mesh") {
-                    if (child.renderOrder === 0) child.renderOrder = 1;
-                    const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
-                    for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
-                    newMeshes.push(child);
-                  }
-                  child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
+                  fixScriptMeshRendering(child, objectId);
+                  if (child.type === "Mesh" || child.type === "Group" || child.type === "Points") newObjs.push(child as unknown as import("three").Object3D);
                 }
-                if (newMeshes.length > 0) {
-                  setScriptMeshPlacement({ meshes: newMeshes as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code });
+                if (newObjs.length > 0) {
+                  setScriptMeshPlacement({ meshes: newObjs, objectId, sceneId: scene.sceneId, cachedCode: result.display.code });
                 }
               } else {
                 (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
@@ -821,27 +918,22 @@ export function App() {
         if (result.display?.type === "script") {
           const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
           if (worldAPI) {
-            const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-            const existingMeshes = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId && c.type === "Mesh");
-            if (existingMeshes.length > 0) {
-              setScriptMeshPlacement({ meshes: existingMeshes as Array<import("three").Object3D>, objectId, sceneId, cachedCode: result.display.code, frozen: true });
+            const api = worldAPI as { scene: { children: AnyObj[] } };
+            const existing = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
+            if (existing.length > 0) {
+              setScriptMeshPlacement({ meshes: existing as unknown as Array<import("three").Object3D>, objectId, sceneId, cachedCode: result.display.code, frozen: true });
             } else {
               const countBefore = api.scene.children.length;
               const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
               if (!err) {
-                const newMeshes: Array<import("three").Object3D> = [];
+                const newObjs: Array<import("three").Object3D> = [];
                 for (let i = countBefore; i < api.scene.children.length; i++) {
                   const child = api.scene.children[i];
-                  if (child.type === "Mesh") {
-                    if (child.renderOrder === 0) child.renderOrder = 1;
-                    const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
-                    for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
-                    newMeshes.push(child as unknown as import("three").Object3D);
-                  }
-                  child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
+                  fixScriptMeshRendering(child, objectId);
+                  if (child.type === "Mesh" || child.type === "Group" || child.type === "Points") newObjs.push(child as unknown as import("three").Object3D);
                 }
-                if (newMeshes.length > 0) {
-                  setScriptMeshPlacement({ meshes: newMeshes, objectId, sceneId, cachedCode: result.display.code });
+                if (newObjs.length > 0) {
+                  setScriptMeshPlacement({ meshes: newObjs, objectId, sceneId, cachedCode: result.display.code });
                 }
               } else {
                 (worldAPI as { showToast: (t: string, d?: number) => void }).showToast(`脚本错误: ${err}`, 5000);
@@ -872,21 +964,17 @@ export function App() {
       if ((skillName === "code-gen" || skillName === "static-script") && skillConfig.autoRun && skillConfig.cachedCode) {
         const worldAPI = (window as unknown as Record<string, unknown>).__worldAPI;
         if (worldAPI) {
-          const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
-          // Don't re-run if objects from this prop are already in the scene
-          const alreadyRan = api.scene.children.some((c) => c.userData?.scriptObjectId === objectId);
+          const api = worldAPI as { scene: { children: AnyObj[] } };
+          // Don't re-run if already executed this session or objects exist in scene
+          const alreadyRan = autoRanScriptsRef.current.has(objectId) ||
+            api.scene.children.some((c) => c.userData?.scriptObjectId === objectId);
           if (alreadyRan) return;
+          autoRanScriptsRef.current.add(objectId);
           const countBefore = api.scene.children.length;
-          const err = runScript(String(skillConfig.cachedCode), worldAPI as Parameters<typeof runScript>[1], sceneRef.current ? buildScriptContext(sceneRef.current, objectId) : undefined);
+          const err = runScript(String(skillConfig.cachedCode), silenceDisplay(worldAPI) as Parameters<typeof runScript>[1], sceneRef.current ? buildScriptContext(sceneRef.current, objectId) : undefined);
           if (!err) {
             for (let i = countBefore; i < api.scene.children.length; i++) {
-              const child = api.scene.children[i];
-              if (child.type === "Mesh") {
-                if (child.renderOrder === 0) child.renderOrder = 1;
-                const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
-                for (const m of mats) { if (!m.transparent) { m.transparent = true; m.needsUpdate = true; } }
-              }
-              child.userData = { ...(child.userData ?? {}), scriptObjectId: objectId };
+              fixScriptMeshRendering(api.scene.children[i] as AnyObj, objectId);
             }
           }
           return;
@@ -1358,6 +1446,20 @@ export function App() {
           >
             传送门
           </button>
+          <button
+            onClick={() => setShowScriptPanel((v) => !v)}
+            style={{
+              background: showScriptPanel ? "rgba(80,160,255,0.35)" : "rgba(20,15,40,0.75)",
+              border: "1px solid rgba(80,160,255,0.35)",
+              borderRadius: 8, padding: "7px 14px",
+              color: "rgba(190,220,255,0.9)", fontSize: 13,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              fontFamily: "system-ui, -apple-system, sans-serif",
+            }}
+          >
+            脚本
+          </button>
         </div>
       )}
 
@@ -1423,6 +1525,17 @@ export function App() {
       {behaviorDisplay && (
         <BehaviorOverlay display={behaviorDisplay} onClose={() => setBehaviorDisplay(null)} />
       )}
+
+      <ScriptPanel
+        open={showScriptPanel}
+        onClose={() => setShowScriptPanel(false)}
+        scene={scene}
+        sessionId={sessionId}
+        generatingObjectId={skillGenerating?.objectId ?? null}
+        scriptErrors={scriptErrors}
+        onErrorCleared={(objectId) => setScriptErrors((prev) => { const next = { ...prev }; delete next[objectId]; return next; })}
+        onRun={handleScriptRun}
+      />
 
       {/* Resource picker — shown when code-gen needs texture/asset selection before generating */}
       {resourcePicker && (
@@ -1499,13 +1612,11 @@ export function App() {
             left: "50%",
             transform: "translate(-50%, -50%)",
             zIndex: 400,
-            minWidth: 280,
-            maxWidth: 480,
+            width: "min(90vw, 520px)",
             background: "rgba(8,6,20,0.94)",
             border: "1px solid rgba(120,80,255,0.35)",
             borderRadius: 12,
             boxShadow: "0 8px 40px rgba(0,0,0,0.7)",
-            fontFamily: "system-ui, -apple-system, sans-serif",
             backdropFilter: "blur(10px)",
             overflow: "hidden",
           }}
@@ -1517,10 +1628,11 @@ export function App() {
               style={{ background: "none", border: "none", color: "rgba(160,140,220,0.7)", fontSize: 18, cursor: "pointer", lineHeight: 1 }}
             >×</button>
           </div>
-          {/* eslint-disable-next-line react/no-danger */}
-          <div
-            style={{ padding: "4px 18px 18px", color: "rgba(210,195,255,0.92)", fontSize: 15, lineHeight: 1.6 }}
-            dangerouslySetInnerHTML={{ __html: scriptDisplay }}
+          {/* Sandboxed iframe: scripts run isolated, CSS scoped, can't touch parent DOM */}
+          <iframe
+            sandbox="allow-scripts"
+            style={{ display: "block", width: "100%", height: "60vh", maxHeight: 520, border: "none" }}
+            srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box;margin:0;padding:0}body{background:transparent;color:rgba(210,195,255,0.92);font-family:system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.6;padding:4px 18px 18px}</style></head><body>${scriptDisplay}</body></html>`}
           />
         </div>
       )}
@@ -1611,6 +1723,29 @@ export function App() {
               setScriptMeshPlacement(null);
             }}
           >取消</button>
+        </div>
+      )}
+
+      {/* Persistent indicator while background code-gen is running */}
+      {skillGenerating && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 120,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 600,
+            background: "rgba(8,6,20,0.90)",
+            border: "1px solid rgba(120,80,255,0.4)",
+            borderRadius: 8,
+            color: "rgba(210,195,255,0.95)",
+            fontSize: 13,
+            padding: "8px 16px",
+            pointerEvents: "none",
+            backdropFilter: "blur(6px)",
+          }}
+        >
+          正在生成「{skillGenerating.objectName}」代码，完成后按 E 启动...
         </div>
       )}
 

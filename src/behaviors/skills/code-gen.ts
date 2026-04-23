@@ -243,9 +243,9 @@ function getModel_(modelId: string) {
 
 async function analyzeResources(
 	userRequest: string,
-	modelId: string,
+	_modelId: string,
 ): Promise<{ needsResources: boolean; needs: ResourceNeed[] }> {
-	const model = getModel_(modelId);
+	const model = getModel_("claude-haiku-4-5-20251001");
 	const response = await completeSimple(model, {
 		systemPrompt: RESOURCE_ANALYSIS_PROMPT,
 		messages: [{ role: "user", content: userRequest, timestamp: Date.now() }],
@@ -343,8 +343,8 @@ Rules:
 - common_mistakes must be specific to this effect, not generic
 - Output only the JSON, no prose`;
 
-async function designEffect(userRequest: string): Promise<string> {
-	const model = getModel_("claude-haiku-4-5-20251001");
+async function designEffect(userRequest: string, modelId: string): Promise<string> {
+	const model = getModel_(modelId);
 	try {
 		const response = await completeSimple(model, {
 			systemPrompt: DESIGN_PROMPT,
@@ -543,6 +543,33 @@ Run through this checklist mentally:
 
 Output raw JavaScript only — no markdown fences, no comments explaining what you did, no preamble.`;
 
+/**
+ * Fix a syntax or runtime error in existing generated code without full regeneration.
+ * Uses Haiku for speed — this is a targeted patch, not a creative task.
+ */
+export async function fixGeneratedCode(brokenCode: string, errorMessage: string): Promise<string> {
+	const model = getModel_("claude-haiku-4-5-20251001");
+	const systemPrompt = `You are a JavaScript debugger. Fix the error in the provided code.
+Rules:
+- Fix ONLY the reported error — do not rewrite or restructure the code
+- Keep all logic, variable names, and structure intact
+- Output raw JavaScript only — no markdown fences, no explanation`;
+
+	const userMessage = `Error: ${errorMessage}\n\nCode:\n${brokenCode}`;
+	const response = await completeSimple(model, {
+		systemPrompt,
+		messages: [{ role: "user", content: userMessage, timestamp: Date.now() }],
+	});
+	return response.content
+		.filter((c) => c.type === "text")
+		.map((c) => (c as { type: "text"; text: string }).text)
+		.join("")
+		.trim()
+		.replace(/^```[\w]*\n?/m, "")
+		.replace(/\n?```$/m, "")
+		.trim();
+}
+
 export const codeGenSkill: SkillHandler = {
 	name: "code-gen",
 	description:
@@ -607,29 +634,35 @@ export const codeGenSkill: SkillHandler = {
 			return { type: "script", code: String(ctx.config.cachedCode), title };
 		}
 
-		// ── Resource analysis phase ───────────────────────────────────────────
-		// If user already confirmed resources, skip analysis and go straight to codegen.
-		// If skipResourcePicker is set (user chose to skip), also go straight to codegen.
+		// ── Resource analysis + design pass — run in parallel ────────────────
+		// Both are independent: analyzeResources decides if we need user asset picks;
+		// designEffect produces the LLM blueprint for code generation.
 		const confirmedResources = Array.isArray(ctx.config.confirmedResources)
 			? (ctx.config.confirmedResources as ResourceChoice[])
 			: null;
 		const skipResourcePicker = Boolean(ctx.config.skipResourcePicker);
 
-		if (!confirmedResources && !skipResourcePicker) {
-			try {
-				const analysis = await analyzeResources(userRequest, modelId);
-				if (analysis.needsResources && analysis.needs.length > 0) {
-					return { type: "resource-picker", needs: analysis.needs, title };
-				}
-			} catch {
-				// Analysis failure is non-fatal — fall through to codegen without resources
-			}
-		}
+		let analysisResult: { needsResources: boolean; needs: ResourceNeed[] } = { needsResources: false, needs: [] };
+		let designDoc = "";
 
-		// ── Design pass (Pass 1) ──────────────────────────────────────────────
-		// Run a lightweight design LLM call to produce a structured blueprint.
-		// The blueprint is injected into the codegen prompt as additional context.
-		const designDoc = await designEffect(userRequest);
+		if (!confirmedResources && !skipResourcePicker) {
+			const [analysis, design] = await Promise.all([
+				analyzeResources(userRequest, modelId).catch(() => ({
+					needsResources: false,
+					needs: [] as ResourceNeed[],
+				})),
+				designEffect(userRequest, modelId),
+			]);
+			analysisResult = analysis;
+			designDoc = design;
+
+			if (analysisResult.needsResources && analysisResult.needs.length > 0) {
+				return { type: "resource-picker", needs: analysisResult.needs, title };
+			}
+		} else {
+			// Resources already confirmed/skipped — only need the design pass
+			designDoc = await designEffect(userRequest, modelId);
+		}
 		const designContext = designDoc
 			? `\n\n## Effect design blueprint (follow this exactly)\n\`\`\`json\n${designDoc}\n\`\`\``
 			: "";

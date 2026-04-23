@@ -389,7 +389,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     const renderer = new WebGLRenderer({ canvas, antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+    renderer.setSize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight, false);
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.85;
 
@@ -476,7 +476,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       if (w === 0 || h === 0) return;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderer.setSize(w, h, false);
     });
     ro.observe(canvas);
 
@@ -2147,6 +2147,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           // Transition: physics walking → free-fly (Escape key) or placement mode (F key)
           inPhysicsMode = false;
           cancelAnimationFrame(animId);
+          // Clear any active script display panel (bookshelf, etc.) so it doesn't persist across re-entry
+          window.dispatchEvent(new CustomEvent("world:display", { detail: { html: null } }));
           // Freeze script mesh placement — fires whether keydown or lockchange comes first.
           if (scriptMeshPlacementPendingRef.current) {
             scriptMeshPlacementPendingRef.current = false;
