@@ -241,3 +241,19 @@ Never overwrite `scene_versions` rows. They are immutable once written.
 
 - Never use sed/cat to read files. Always use the Read tool (offset + limit for range reads).
 - Read every file in full before editing it.
+- Three files exceed the 800-line limit and MUST be read with offset+limit range reads, not full reads:
+  - `viewer/src/components/SplatViewer.tsx` (~2855 lines) — use Grep to locate sections first
+  - `viewer/src/App.tsx` (~1800 lines) — use Grep to locate sections first
+  - `src/behaviors/skills/code-gen.ts` (~870 lines) — use Grep to locate sections first
+
+## Agent Invocation
+
+Use these agents without waiting to be asked:
+
+| Trigger | Agent |
+|---------|-------|
+| After editing any file | `code-reviewer` |
+| `npm run check` fails | `build-error-resolver` |
+| Adding a new feature | `tdd-guide` (write tests first) |
+| Architectural decision | `architect` |
+| Security-sensitive code (auth, input handling, API endpoints) | `security-reviewer` |
