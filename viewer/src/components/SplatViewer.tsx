@@ -1252,11 +1252,33 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         window.dispatchEvent(new CustomEvent("world:toast", { detail: { text, durationMs } }));
       },
       setDisplay(html: string | null) {
+        if (html !== null && document.pointerLockElement) {
+          suppressDisplayClearOnLock = true;
+          document.exitPointerLock();
+        }
         window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
       },
       // Alias for legacy generated code that hallucinated showPanel
       showPanel(html: string | null) {
+        if (html !== null && document.pointerLockElement) {
+          suppressDisplayClearOnLock = true;
+          document.exitPointerLock();
+        }
         window.dispatchEvent(new CustomEvent("world:display", { detail: { html } }));
+      },
+      storage: {
+        get(key: string) {
+          return localStorage.getItem(`sw:${sceneId ?? "default"}:${key}`);
+        },
+        set(key: string, value: string) {
+          localStorage.setItem(`sw:${sceneId ?? "default"}:${key}`, value);
+        },
+        remove(key: string) {
+          localStorage.removeItem(`sw:${sceneId ?? "default"}:${key}`);
+        },
+      },
+      onMessage(handler: (data: unknown) => void) {
+        (window as unknown as Record<string, unknown>).__scriptMessageHandler = handler;
       },
       spark: {
         addEdit(edit: unknown) {
@@ -1289,6 +1311,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       },
     };
     (window as unknown as Record<string, unknown>).__worldAPI = worldAPI;
+
+    // When setDisplay opens a panel while pointer lock is active, we exit lock so the user
+    // can interact with the iframe. This flag tells onLockChange to skip clearing the panel.
+    let suppressDisplayClearOnLock = false;
 
     // ── Recording state ───────────────────────────────────────────────────────
     let mediaRecorder: MediaRecorder | null = null;
@@ -2147,8 +2173,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           // Transition: physics walking → free-fly (Escape key) or placement mode (F key)
           inPhysicsMode = false;
           cancelAnimationFrame(animId);
-          // Clear any active script display panel (bookshelf, etc.) so it doesn't persist across re-entry
-          window.dispatchEvent(new CustomEvent("world:display", { detail: { html: null } }));
+          // Clear any active script display panel, unless the panel itself triggered the lock exit
+          if (suppressDisplayClearOnLock) {
+            suppressDisplayClearOnLock = false;
+          } else {
+            window.dispatchEvent(new CustomEvent("world:display", { detail: { html: null } }));
+          }
           // Freeze script mesh placement — fires whether keydown or lockchange comes first.
           if (scriptMeshPlacementPendingRef.current) {
             scriptMeshPlacementPendingRef.current = false;

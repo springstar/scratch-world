@@ -2,6 +2,13 @@
  * WorldAPI — the surface exposed to code-gen scripts inside the sandbox.
  * Defined here so the viewer can import the type without depending on SplatViewer internals.
  */
+/** Key-value storage scoped to the current scene, backed by localStorage. */
+export interface StorageAPI {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+  remove(key: string): void;
+}
+
 export interface WorldAPI {
   provider: "splat" | "threejs";
   /** Full Three.js module — use world.THREE.PlaneGeometry, world.THREE.MeshBasicMaterial, etc. */
@@ -18,6 +25,12 @@ export interface WorldAPI {
   setDisplay(html: string | null): void;
   /** @deprecated alias for setDisplay — only exists to handle legacy generated code */
   showPanel(html: string | null): void;
+  /** Persistent key-value storage scoped to the current scene (localStorage-backed). */
+  storage: StorageAPI;
+  /** Register a handler to receive messages posted from the setDisplay iframe via postMessage.
+   *  The iframe should call: window.parent.postMessage({ type: "...", ... }, "*")
+   *  Only one handler is active at a time — calling onMessage again replaces it. */
+  onMessage(handler: (data: unknown) => void): void;
   /** Spark 2.0 Gaussian Splat rendering capabilities.
    *  Only available when provider === "splat". */
   spark?: SparkAPI;
@@ -82,6 +95,9 @@ export interface ScriptContext {
   displayWidth: number;
   /** Height of display surface in world units. */
   displayHeight: number;
+  /** Yaw angle (radians) from objectPosition toward the camera at script run time.
+   *  Use as group.rotation.y to make a 3D object face the player. */
+  facingAngle: number;
 }
 
 /**
@@ -96,7 +112,7 @@ export interface ScriptContext {
 export function runScript(code: string, world: WorldAPI, ctx?: ScriptContext): string | null {
   try {
     const preamble = ctx
-      ? `const objectPosition = ${JSON.stringify(ctx.objectPosition)};\nconst displayY = ${ctx.displayY};\nconst displayWidth = ${ctx.displayWidth};\nconst displayHeight = ${ctx.displayHeight};\n`
+      ? `const objectPosition = ${JSON.stringify(ctx.objectPosition)};\nconst displayY = ${ctx.displayY};\nconst displayWidth = ${ctx.displayWidth};\nconst displayHeight = ${ctx.displayHeight};\nconst facingAngle = ${ctx.facingAngle};\n`
       : "";
     // new Function creates a function without access to the current closure,
     // reducing accidental leakage of local variables.

@@ -3,6 +3,7 @@ import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "crypto";
 import { behaviorRegistry } from "../../behaviors/registry.js";
+import { WORLD_API_VERSION } from "../../behaviors/skills/code-gen.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import { registerPicker } from "../../viewer-api/position-picker-registry.js";
 import type { RealtimeBus } from "../../viewer-api/realtime.js";
@@ -164,7 +165,12 @@ export function attachSkillTool(
 								metadata: {
 									skill: {
 										name: params.skillName,
-										config: { ...config, cachedCode: display.code, autoRun: true },
+										config: {
+											...config,
+											cachedCode: display.code,
+											cachedCodeVersion: WORLD_API_VERSION,
+											autoRun: true,
+										},
 									},
 								},
 							});
@@ -203,7 +209,12 @@ export function attachSkillTool(
 							metadata: {
 								skill: {
 									name: params.skillName,
-									config: { ...config, cachedCode: display.code, autoRun: true },
+									config: {
+										...config,
+										cachedCode: display.code,
+										cachedCodeVersion: WORLD_API_VERSION,
+										autoRun: true,
+									},
 								},
 							},
 						});

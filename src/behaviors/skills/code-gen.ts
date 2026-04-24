@@ -10,6 +10,13 @@ import type {
 import { detectCategoryFromRequest, detectCodeCategory } from "./categories/index.js";
 import { detectEffect } from "./effects/index.js";
 
+/**
+ * Increment when WorldAPI surface changes in a breaking way.
+ * cachedCode generated against an older version will be discarded and regenerated.
+ * History: 1=initial, 2=added world.storage + world.onMessage
+ */
+export const WORLD_API_VERSION = "2";
+
 /** WorldAPI surface documented for the LLM — must match viewer/src/behaviors/world-api.ts */
 const WORLD_API_DOCS = `\
 You have access to a \`world\` object with the following API:
@@ -43,6 +50,22 @@ world.showToast(text: string, durationMs?: number): void
 // Use ONLY for menus, info panels, dialogs. Pass null to dismiss.
 world.setDisplay(html: string | null): void
 
+// Persistent key-value storage scoped to the current scene (localStorage-backed).
+// Use for saving user data, preferences, lists, etc. across sessions.
+// Keys and values are strings. JSON.stringify/parse for complex values.
+world.storage.get(key: string): string | null
+world.storage.set(key: string, value: string): void
+world.storage.remove(key: string): void
+
+// Register a handler to receive messages posted from the setDisplay iframe.
+// Inside your HTML (passed to world.setDisplay), use:
+//   window.parent.postMessage({ type: "save", key: "books", value: JSON.stringify(list) }, "*")
+// Then in your script, handle it:
+//   world.onMessage((data) => {
+//     if (data.type === "save") world.storage.set(data.key, data.value);
+//   });
+world.onMessage(handler: (data: unknown) => void): void
+
 // The Three.js scene graph — add meshes here to place objects in 3D world space.
 // Objects added to world.scene stay fixed in the world, independent of camera movement.
 // Use this for: TV screen overlays, signs, floating text, particles, lights, any 3D content.
@@ -62,6 +85,7 @@ world.setDisplay(html: string | null): void
 //   // CRITICAL position rule: use objectPosition.x and objectPosition.z from Scene context,
 //   // use displayY (also from Scene context) as the Y coordinate.
 //   // Use displayWidth and displayHeight from Scene context for PlaneGeometry dimensions.
+//   // Set mesh.rotation.y = facingAngle so the surface faces the player.
 //   mesh.position.set(OBJ_X, DISPLAY_Y, OBJ_Z);
 //   mesh.renderOrder = 1;   // REQUIRED: mesh transparent=true + renderOrder>0 renders on top of Gaussian Splat
 //   world.scene.add(mesh);
@@ -116,11 +140,17 @@ Rules:
 - Only use the \`world\` API. Do NOT access \`window\`, \`document\`, \`fetch\`, \`eval\`, or any global.
   Exception: \`document.createElement('canvas')\` is allowed when creating a CanvasTexture for world.scene.
 - Do NOT use \`import\` or \`require\`.
-- CRITICAL: \`world\` exposes DIRECT PROPERTIES only — \`world.scene\`, \`world.camera\`, \`world.THREE\`, \`world.spark\`.
+- CRITICAL: \`world\` exposes DIRECT PROPERTIES only — \`world.scene\`, \`world.camera\`, \`world.THREE\`, \`world.spark\`, \`world.storage\`.
   There are NO getter methods. \`world.getThreeScene()\`, \`world.getScene()\`, \`world.getRenderer()\`, \`world.getCamera()\` do NOT exist and will throw.
-- CRITICAL: The ONLY world methods are: \`world.spawn()\`, \`world.despawn()\`, \`world.setColor()\`, \`world.animate()\`, \`world.showToast()\`, \`world.setDisplay()\`.
+- CRITICAL: The ONLY world methods are: \`world.spawn()\`, \`world.despawn()\`, \`world.setColor()\`, \`world.animate()\`, \`world.showToast()\`, \`world.setDisplay()\`, \`world.onMessage()\`.
   There is NO \`world.showPanel()\`, \`world.openPanel()\`, \`world.showPopup()\`, \`world.createPanel()\` — these do not exist and will throw.
   To show a 2D HTML overlay, use \`world.setDisplay(htmlString)\`. To dismiss it, call \`world.setDisplay(null)\`.
+- For persistent storage: use \`world.storage.get/set/remove\`. Values must be strings; wrap objects with JSON.stringify/parse.
+- For iframe → script communication: use \`window.parent.postMessage({...}, "*")\` in the HTML and \`world.onMessage(handler)\` in the script.
+- CRITICAL: The \`world\` object does NOT exist inside the iframe HTML passed to \`world.setDisplay()\`.
+  NEVER write \`onclick="world.setDisplay(null)"\` or any \`world.*\` call inside HTML strings — they will throw ReferenceError.
+  To close the panel from inside HTML: \`<button onclick="window.parent.postMessage({type:'close'},'*')">×</button>\`
+  Then in the script: \`world.onMessage((d) => { if (d.type === 'close') world.setDisplay(null); });\`
 - The script runs once. Use \`world.animate()\` for anything that needs to update every frame.
 - Keep generated objects small and well-positioned so they're visible and don't block navigation.
 - CRITICAL: For ANY content that should appear on a physical surface in the 3D world (TV, screen,
@@ -129,6 +159,7 @@ Rules:
 - CRITICAL: For mesh position — ALWAYS use objectPosition.x and objectPosition.z from Scene context,
   and ALWAYS use displayY from Scene context as the Y coordinate. Never hardcode Y.
 - CRITICAL: For PlaneGeometry — ALWAYS use displayWidth and displayHeight from Scene context. Never hardcode these values.
+- CRITICAL: For ANY 3D object (group, mesh, model) that should face the player — ALWAYS set \`group.rotation.y = facingAngle\` (from Scene context). Never hardcode rotation.y. facingAngle is pre-computed as atan2(camera.x - obj.x, camera.z - obj.z) at script run time.
 - Return only the raw JavaScript — no markdown fences, no explanation.
 
 ## Available particle textures
@@ -373,8 +404,14 @@ function reviewGeneratedCode(code: string, userRequest: string): string[] {
 	// Universal rules
 	if (/\bTHREE\./.test(code)) violations.push("Uses bare THREE global — must use world.THREE");
 	if (/\b(import|require)\b/.test(code)) violations.push("Contains import/require — not allowed in sandbox");
-	if (/\b(window|fetch|eval)\b/.test(code)) violations.push("Uses window/fetch/eval — not allowed in sandbox");
-	if (!categoryDef?.skipAnimateCheck && !/world\.animate\s*\(/.test(code)) {
+	// Strip string literals before checking globals — window.parent.postMessage inside an HTML
+	// template string (passed to world.setDisplay) is correct usage and must not be flagged.
+	const codeNoStrings = code.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/gs, '""');
+	if (/\b(window|fetch|eval)\b/.test(codeNoStrings))
+		violations.push("Uses window/fetch/eval — not allowed in sandbox");
+	// UI_PANEL scripts use world.setDisplay() instead of world.animate() — skip animate check.
+	const isUiPanel = /world\.setDisplay\s*\(/.test(code);
+	if (!isUiPanel && !categoryDef?.skipAnimateCheck && !/world\.animate\s*\(/.test(code)) {
 		violations.push("No world.animate() call — effect will be completely static");
 	}
 	const hallucinated = code.match(/world\.(get\w+|getScene|getThreeScene|getRenderer|getCamera|getControls)\s*\(/g);
@@ -435,6 +472,7 @@ Identify which category this request falls into:
 - UI_3D: text labels, signs, scoreboards, HUD elements attached to world space
 - SPLAT_EDIT: spatial deformation of the scene background (ripple, shockwave, warp, burn, color zone)
 - SPLAT_WEATHER: snow/rain/fog as high-quality Gaussian splat particles (prefer over THREE.Points for weather)
+- UI_PANEL: interactive 2D overlay (menus, lists, forms, dialogs) using world.setDisplay() + world.storage + world.onMessage
 - COMPOSITE: two or more of the above combined
 
 **Step 2 — Apply the mandatory technique for that category**
@@ -504,6 +542,29 @@ UI_3D effects — rules:
 - renderOrder = 1 on all UI meshes (renders above splat)
 - depthTest = false on material (always visible, never occluded)
 - Position using objectPosition.x/z and displayY from scene context
+- Set mesh.rotation.y = facingAngle so the plane faces the player (facingAngle from scene context)
+
+UI_PANEL effects — rules:
+- Use world.setDisplay(html) for the panel; world.animate() is NOT needed
+- Load persisted data with world.storage.get() at script start; parse JSON for arrays/objects
+- Register world.onMessage(handler) BEFORE calling world.setDisplay() so messages are handled
+- The close button MUST be: \`<button onclick="window.parent.postMessage({type:'close'},'*')">×</button>\`
+  — NOT \`world.setDisplay(null)\` (world is undefined inside the iframe)
+- Any mutation from the iframe (add item, delete, update) must postMessage to the script, which writes to world.storage and re-renders by calling world.setDisplay(newHtml)
+- HTML template pattern:
+  \`\`\`
+  // 1. Load state
+  const raw = world.storage.get('items'); const items = raw ? JSON.parse(raw) : [];
+  // 2. Render function (returns full HTML string)
+  const render = (list) => \`<div>...\${list.map(i => \`<p>\${i}</p>\`).join('')}...</div>\`;
+  // 3. Handle messages from iframe
+  world.onMessage((d) => {
+    if (d.type === 'close') { world.setDisplay(null); return; }
+    if (d.type === 'add') { items.push(d.value); world.storage.set('items', JSON.stringify(items)); world.setDisplay(render(items)); }
+  });
+  // 4. Show panel
+  world.setDisplay(render(items));
+  \`\`\`
 
 **Step 3 — Write the implementation**
 
@@ -518,11 +579,12 @@ Quality bar:
 Run through this checklist mentally:
 - [ ] Particles use THREE.Points, not Mesh?
 - [ ] AdditiveBlending and depthWrite: false set?
-- [ ] world.animate() registered for moving elements?
+- [ ] world.animate() registered for moving elements? (skip for UI_PANEL — animate not needed)
 - [ ] Effect positioned at objectPosition.x/z (not hardcoded 0,0)?
 - [ ] Effect visible from ~5m distance (not too small, not too large)?
 - [ ] No bare THREE global (always world.THREE)?
-- [ ] No import/require/fetch/window/eval?
+- [ ] No import/require/fetch/window/eval in script body? (window.parent.postMessage is only allowed inside HTML strings passed to world.setDisplay)
+- [ ] If UI_PANEL: close button uses postMessage, NOT world.setDisplay(null) directly?
 
 ---
 
@@ -553,7 +615,14 @@ export async function fixGeneratedCode(brokenCode: string, errorMessage: string)
 Rules:
 - Fix ONLY the reported error — do not rewrite or restructure the code
 - Keep all logic, variable names, and structure intact
-- Output raw JavaScript only — no markdown fences, no explanation`;
+- Output raw JavaScript only — no markdown fences, no explanation
+WorldAPI constraints (do not violate when fixing):
+- Use world.THREE — never bare THREE
+- No import/require/fetch/eval; no window/document in script body (window.parent.postMessage is only valid inside HTML strings)
+- world methods: spawn, despawn, setColor, animate, showToast, setDisplay, onMessage
+- world properties: scene, camera, THREE, spark, storage
+- world.storage.get/set/remove for persistence; world.onMessage(handler) for iframe messages
+- Inside HTML passed to world.setDisplay: use window.parent.postMessage to communicate back, never call world.*`;
 
 	const userMessage = `Error: ${errorMessage}\n\nCode:\n${brokenCode}`;
 	const response = await completeSimple(model, {
@@ -627,11 +696,15 @@ export const codeGenSkill: SkillHandler = {
 			return { type: "script", code, title };
 		}
 
-		// If calibrated LLM code exists, use it directly — skip LLM call.
-		// autoRun controls when the script fires (on approach vs manual E), not whether to cache.
-		if (ctx.config.cachedCode) {
-			console.log(`[code-gen] serving cachedCode for "${userRequest}"`);
+		// If calibrated LLM code exists and matches current API version, use it directly.
+		if (ctx.config.cachedCode && ctx.config.cachedCodeVersion === WORLD_API_VERSION) {
+			console.log(`[code-gen] serving cachedCode v${WORLD_API_VERSION} for "${userRequest}"`);
 			return { type: "script", code: String(ctx.config.cachedCode), title };
+		}
+		if (ctx.config.cachedCode && ctx.config.cachedCodeVersion !== WORLD_API_VERSION) {
+			console.log(
+				`[code-gen] cachedCode version mismatch (${ctx.config.cachedCodeVersion ?? "none"} → ${WORLD_API_VERSION}), regenerating`,
+			);
 		}
 
 		// ── Resource analysis + design pass — run in parallel ────────────────
@@ -730,6 +803,11 @@ export const codeGenSkill: SkillHandler = {
 		const displayY = (ctx.displayY ?? 1.3).toFixed(3);
 		const displayW = ctx.displayWidth?.toFixed(3) ?? "1.600";
 		const displayH = ctx.displayHeight?.toFixed(3) ?? "0.900";
+		const facingAngle =
+			ctx.playerPosition && ctx.objectPosition
+				? Math.atan2(ctx.playerPosition.x - ctx.objectPosition.x, ctx.playerPosition.z - ctx.objectPosition.z)
+				: 0;
+		const facingAngleStr = facingAngle.toFixed(4);
 		const envStr = env
 			? [
 					env.timeOfDay && `timeOfDay="${env.timeOfDay}"`,
@@ -740,7 +818,7 @@ export const codeGenSkill: SkillHandler = {
 					.filter(Boolean)
 					.join(", ")
 			: null;
-		const baseUserMessage = `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}${envStr ? `, environment=(${envStr})` : ""}\n\nUser request: ${userRequest}${designContext}`;
+		const baseUserMessage = `Scene context: objectName="${ctx.objectName}", sceneId="${ctx.sceneId}", objectPosition=(${posStr}), displayY=${displayY}, displayWidth=${displayW}, displayHeight=${displayH}, facingAngle=${facingAngleStr}${envStr ? `, environment=(${envStr})` : ""}\n\nUser request: ${userRequest}${designContext}`;
 
 		let code = "";
 		let lastErr: string | null = null;

@@ -26,7 +26,7 @@ import { ScriptPanel } from "./components/ScriptPanel.js";
 import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
 import { CameraPanel } from "./components/CameraPanel.js";
 
-function buildScriptContext(scene: SceneResponse, objectId: string): ScriptContext {
+function buildScriptContext(scene: SceneResponse, objectId: string, cameraPos?: { x: number; y: number; z: number }): ScriptContext {
   const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
   const pos = obj?.position ?? { x: 0, y: 0, z: 0 };
   const meta = (obj?.metadata ?? {}) as Record<string, unknown>;
@@ -34,7 +34,14 @@ function buildScriptContext(scene: SceneResponse, objectId: string): ScriptConte
   const targetH = typeof meta.targetHeight === "number" ? meta.targetHeight : 0.9;
   const displayHeight = targetH;
   const displayWidth = Math.round(displayHeight * (16 / 9) * 100) / 100;
-  return { objectPosition: { x: pos.x, y: pos.y, z: pos.z }, displayY, displayWidth, displayHeight };
+  const facingAngle = cameraPos
+    ? Math.atan2(cameraPos.x - pos.x, cameraPos.z - pos.z)
+    : 0;
+  return { objectPosition: { x: pos.x, y: pos.y, z: pos.z }, displayY, displayWidth, displayHeight, facingAngle };
+}
+
+function getCameraPos(api: unknown): { x: number; y: number; z: number } | undefined {
+  return (api as { camera?: { position?: { x: number; y: number; z: number } } })?.camera?.position;
 }
 import { runScript, type ScriptContext } from "./behaviors/world-api.js";
 
@@ -317,7 +324,7 @@ export function App() {
         if (alreadyRan) continue;
         autoRanScriptsRef.current.add(obj.objectId);
         const countBefore = api.scene.children.length;
-        runScript(code, silenceDisplay(worldAPI) as Parameters<typeof runScript>[1], buildScriptContext(scene, obj.objectId));
+        runScript(code, silenceDisplay(worldAPI) as Parameters<typeof runScript>[1], buildScriptContext(scene, obj.objectId, getCameraPos(worldAPI)));
         for (let i = countBefore; i < api.scene.children.length; i++) {
           fixScriptMeshRendering(api.scene.children[i] as AnyObj, obj.objectId);
         }
@@ -512,6 +519,18 @@ export function App() {
     return () => window.removeEventListener("world:display", handleDisplay);
   }, []);
 
+  // Bridge postMessage from setDisplay iframe → world.onMessage handler
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      const handler = (window as unknown as Record<string, unknown>).__scriptMessageHandler;
+      if (typeof handler === "function") {
+        handler(e.data);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
   // Chat send
   const handleSend = useCallback(
     async (text: string, images?: PendingImage[]) => {
@@ -656,7 +675,7 @@ export function App() {
         for (const o of existingObjs) wapi.scene.remove(o as object);
       }
       const countBefore = api.scene.children.length;
-      const err = runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+      const err = runScript(code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
       if (!err) {
         const newObjs: Array<import("three").Object3D> = [];
         for (let i = countBefore; i < api.scene.children.length; i++) {
@@ -686,7 +705,7 @@ export function App() {
       const existing = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
       for (const o of existing) api.scene.remove(o as object);
       const countBefore = api.scene.children.length;
-      const err = runScript(skillCfg.cachedCode, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+      const err = runScript(skillCfg.cachedCode, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
       if (!err) {
         setScriptErrors((prev) => { const next = { ...prev }; delete next[objectId]; return next; });
         for (let i = countBefore; i < api.scene.children.length; i++) {
@@ -732,7 +751,7 @@ export function App() {
         const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
         for (const o of existingObjs) api.scene.remove(o as object);
         const countBefore = api.scene.children.length;
-        const err = runScript(String(skillCfg.cachedCode), worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+        const err = runScript(String(skillCfg.cachedCode), worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
         if (!err) {
           setScriptErrors((prev) => { const next = { ...prev }; delete next[objectId]; return next; });
           for (let i = countBefore; i < api.scene.children.length; i++) {
@@ -752,7 +771,7 @@ export function App() {
         const existingObjs = api.scene.children.filter((c) => c.userData?.scriptObjectId === objectId);
         for (const o of existingObjs) api.scene.remove(o as object);
         const countBefore = api.scene.children.length;
-        const err = runScript(String(skillCfg.cachedCode), worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+        const err = runScript(String(skillCfg.cachedCode), worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
         if (!err) {
           for (let i = countBefore; i < api.scene.children.length; i++) {
             fixScriptMeshRendering(api.scene.children[i] as AnyObj, objectId);
@@ -823,7 +842,7 @@ export function App() {
               setScriptMeshPlacement({ meshes: existing as unknown as Array<import("three").Object3D>, objectId, sceneId: scene.sceneId, cachedCode: result.display.code, frozen: true });
             } else {
               const countBefore = api.scene.children.length;
-              const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+              const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
               if (!err) {
                 const newObjs: Array<import("three").Object3D> = [];
                 for (let i = countBefore; i < api.scene.children.length; i++) {
@@ -879,7 +898,7 @@ export function App() {
           if (worldAPI) {
             const api = worldAPI as { scene: { children: Array<{ type?: string; renderOrder?: number; position: { set(x: number, y: number, z: number): void; x: number; y: number; z: number }; material?: { transparent?: boolean; needsUpdate?: boolean } | Array<{ transparent?: boolean; needsUpdate?: boolean }>; userData?: Record<string, unknown> }> } };
             const countBefore = api.scene.children.length;
-            const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+            const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
             if (!err) {
               for (let i = countBefore; i < api.scene.children.length; i++) {
                 const child = api.scene.children[i];
@@ -924,7 +943,7 @@ export function App() {
               setScriptMeshPlacement({ meshes: existing as unknown as Array<import("three").Object3D>, objectId, sceneId, cachedCode: result.display.code, frozen: true });
             } else {
               const countBefore = api.scene.children.length;
-              const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId));
+              const err = runScript(result.display.code, worldAPI as Parameters<typeof runScript>[1], buildScriptContext(scene, objectId, getCameraPos(worldAPI)));
               if (!err) {
                 const newObjs: Array<import("three").Object3D> = [];
                 for (let i = countBefore; i < api.scene.children.length; i++) {
@@ -971,7 +990,7 @@ export function App() {
           if (alreadyRan) return;
           autoRanScriptsRef.current.add(objectId);
           const countBefore = api.scene.children.length;
-          const err = runScript(String(skillConfig.cachedCode), silenceDisplay(worldAPI) as Parameters<typeof runScript>[1], sceneRef.current ? buildScriptContext(sceneRef.current, objectId) : undefined);
+          const err = runScript(String(skillConfig.cachedCode), silenceDisplay(worldAPI) as Parameters<typeof runScript>[1], sceneRef.current ? buildScriptContext(sceneRef.current, objectId, getCameraPos(worldAPI)) : undefined);
           if (!err) {
             for (let i = countBefore; i < api.scene.children.length; i++) {
               fixScriptMeshRendering(api.scene.children[i] as AnyObj, objectId);
