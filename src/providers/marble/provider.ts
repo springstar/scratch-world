@@ -4,6 +4,7 @@ import type { ProviderRef, SceneData } from "../../scene/types.js";
 import type {
 	EditOptions,
 	GenerateOptions,
+	MultiImagePromptEntry,
 	ProviderDescription,
 	ProviderResult,
 	SceneRenderProvider,
@@ -105,6 +106,37 @@ async function pollOperation(apiKey: string, operationId: string): Promise<Marbl
 	throw new Error(`Marble operation ${operationId} timed out after ${POLL_TIMEOUT_MS / 1000}s`);
 }
 
+// ── World prompt builder ───────────────────────────────────────────────────────
+// Constructs the world_prompt payload from a text prompt + optional media inputs.
+
+function buildWorldPrompt(prompt: string, options?: GenerateOptions): Record<string, unknown> {
+	if (options?.multiImageUrls && options.multiImageUrls.length > 0) {
+		return {
+			type: "multi-image",
+			multi_image_prompt: options.multiImageUrls.map((e: MultiImagePromptEntry) => ({
+				azimuth: e.azimuth,
+				content: { source: "uri", uri: e.content.uri },
+			})),
+			text_prompt: prompt || undefined,
+		};
+	}
+	if (options?.imageUrl) {
+		return {
+			type: "image",
+			image_prompt: { source: "uri", uri: options.imageUrl },
+			text_prompt: prompt || undefined,
+		};
+	}
+	if (options?.videoUrl) {
+		return {
+			type: "video",
+			video_prompt: { source: "uri", uri: options.videoUrl },
+			text_prompt: prompt || undefined,
+		};
+	}
+	return { type: "text", text_prompt: prompt };
+}
+
 // ── SceneData builder from a Marble World ────────────────────────────────────
 // Marble returns a navigable 3D world, not a structured object graph.
 // We synthesise a minimal SceneData so the rest of the system (agent tools,
@@ -192,17 +224,17 @@ export class MarbleProvider implements SceneRenderProvider {
 		this.spzMode = spzMode;
 	}
 
-	async generate(prompt: string, _options?: GenerateOptions): Promise<ProviderResult> {
+	async generate(prompt: string, options?: GenerateOptions): Promise<ProviderResult> {
 		console.log(`[MarbleProvider] generating world: "${prompt}"`);
-		const { operationId } = await this.startGeneration(prompt);
+		const { operationId } = await this.startGeneration(prompt, options);
 		const world = await pollOperation(this.apiKey, operationId);
 		return this.buildResult(world, prompt);
 	}
 
-	async startGeneration(prompt: string, _options?: GenerateOptions): Promise<{ operationId: string }> {
+	async startGeneration(prompt: string, options?: GenerateOptions): Promise<{ operationId: string }> {
 		console.log(`[MarbleProvider] starting async generation: "${prompt}"`);
 		const requestBody = {
-			world_prompt: { type: "text", text_prompt: prompt },
+			world_prompt: buildWorldPrompt(prompt, options),
 			display_name: prompt.slice(0, 64),
 			model: "Marble 0.1-plus",
 		};

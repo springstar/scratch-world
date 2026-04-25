@@ -109,8 +109,33 @@ export class SessionManager {
 			}
 		});
 
+		// Save uploaded images to disk, build context prefix and ImageContent array for agent
+		type ImageEntry = ImageContent & { filePath: string };
+		let contextPrefix = "";
+		let imageContents: ImageContent[] | undefined;
+		if (msg.media && msg.media.length > 0) {
+			const photosDir = join(this.projectRoot, "uploads", "photos");
+			await mkdir(photosDir, { recursive: true });
+			const entries: ImageEntry[] = [];
+			for (const m of msg.media) {
+				if (m.type !== "image" || !m.data) continue;
+				const ext = m.mimeType === "image/png" ? "png" : m.mimeType === "image/webp" ? "webp" : "jpg";
+				const fileName = `${randomUUID()}.${ext}`;
+				const filePath = join(photosDir, fileName);
+				await writeFile(filePath, m.data);
+				const publicUrl = `${this.viewerBaseUrl}/uploads/photos/${fileName}`;
+				contextPrefix += `[上传图片: path=${filePath}, url=${publicUrl}]\n`;
+				entries.push({ type: "image" as const, data: m.data.toString("base64"), mimeType: m.mimeType, filePath });
+			}
+			if (entries.length > 0) {
+				imageContents = entries.map(({ type, data, mimeType }) => ({ type, data, mimeType }));
+			}
+		}
+
+		const promptText = contextPrefix ? `${contextPrefix}${msg.text}` : msg.text;
+
 		try {
-			await agent.prompt(msg.text);
+			await agent.prompt(promptText, imageContents);
 		} finally {
 			unsub();
 		}
@@ -256,7 +281,8 @@ export class SessionManager {
 					const fileName = `${randomUUID()}.${ext}`;
 					const filePath = join(photosDir, fileName);
 					await writeFile(filePath, Buffer.from(img.base64, "base64"));
-					contextPrefix += `[上传图片: path=${filePath}]\n`;
+					const publicUrl = `${this.viewerBaseUrl}/uploads/photos/${fileName}`;
+					contextPrefix += `[上传图片: path=${filePath}, url=${publicUrl}]\n`;
 				}
 			}
 			// Prepend player position and click target as spatial context

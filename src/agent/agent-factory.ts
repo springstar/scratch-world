@@ -316,6 +316,11 @@ When a user wants to load, open, switch to, or revisit a scene by name (e.g. "�
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, call share_scene.
 When a user uploads a photo and asks to place it in the scene, turn it into a 3D object, or add it to the asset library, call image_to_3d with the imagePath from the [上传图片: path=...] prefix and a descriptive assetName. After success, call add_to_catalog to persist it, then call place_prop to add it to the active scene.
+When a user uploads a photo and asks to recreate, match, restore, generate a scene from it, or build a world that looks like it:
+1. Extract the public URL from [上传图片: url=...] in the context.
+2. Analyze the photo thoroughly in your reasoning: dominant anchor (what fills 40%+ of the view), space type (indoor/outdoor), architectural or natural style, cultural context, lighting conditions, key objects by depth layer (foreground/midground/background), materials and textures, atmosphere.
+3. Compose a dense, specific prompt (3–5× more detailed than a casual description) that captures all of the above.
+4. Call create_scene with this enriched prompt AND imageUrl set to the extracted URL. Do NOT pass sceneData or sceneCode for Marble scenes.
 
 CRITICAL — DO NOT call update_scene or create_scene for ANY of the following. These operations must use targeted tools instead:
 - Adding, placing, or removing objects/props → place_prop / remove_prop

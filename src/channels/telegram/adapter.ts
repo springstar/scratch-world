@@ -26,6 +26,18 @@ export class TelegramAdapter implements ChannelAdapter {
 			if (!this.handler) return;
 			const caption = ctx.message.caption ?? "";
 			const photo = ctx.message.photo.at(-1)!; // largest size
+			let imageData: Buffer | undefined;
+			try {
+				const file = await ctx.api.getFile(photo.file_id);
+				if (file.file_path) {
+					const token = (this.bot as unknown as { token: string }).token;
+					const dlUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+					const res = await fetch(dlUrl, { signal: AbortSignal.timeout(30_000) });
+					if (res.ok) imageData = Buffer.from(await res.arrayBuffer());
+				}
+			} catch (err) {
+				console.warn("[TelegramAdapter] photo download failed:", err);
+			}
 			const msg: ChatMessage = {
 				userId: String(ctx.from.id),
 				channelId: this.channelId,
@@ -34,7 +46,7 @@ export class TelegramAdapter implements ChannelAdapter {
 				media: [
 					{
 						type: "image",
-						url: photo.file_id, // resolved via Telegram file API if needed
+						data: imageData,
 						mimeType: "image/jpeg",
 					},
 				],

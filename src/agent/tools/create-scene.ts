@@ -10,6 +10,13 @@ import { formatViolations, validateSceneCode } from "../scene-validator.js";
 const parameters = Type.Object({
 	prompt: Type.String({ description: "Detailed description of the scene to generate" }),
 	title: Type.Optional(Type.String({ description: "Short title for the scene (max 60 chars)" })),
+	imageUrl: Type.Optional(
+		Type.String({
+			description:
+				"Public URL of an uploaded photo to use as the visual basis for Marble world generation. " +
+				"Use the URL from [上传图片: url=...] in the context. Omit for text-only generation.",
+		}),
+	),
 	sceneData: Type.Optional(SceneDataSchema),
 	sceneCode: Type.Optional(
 		Type.String({
@@ -107,9 +114,10 @@ export function createSceneTool(
 			console.log(`[create_scene] taking provider path, provider=${provider.name}`);
 			if (provider.startGeneration) {
 				const title = params.title ?? params.prompt.slice(0, 60);
+				const genOptions = params.imageUrl ? { imageUrl: params.imageUrl } : undefined;
 				let operationId: string;
 				try {
-					({ operationId } = await provider.startGeneration(params.prompt));
+					({ operationId } = await provider.startGeneration(params.prompt, genOptions));
 				} catch (err) {
 					const msg = err instanceof Error ? err.message : String(err);
 					console.error(`[create_scene] provider.startGeneration failed: ${msg}`);

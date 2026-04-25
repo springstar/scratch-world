@@ -1,9 +1,25 @@
 import type { ProviderRef, SceneData } from "../scene/types.js";
 
+export interface ImagePromptContent {
+	source: "uri";
+	uri: string;
+}
+
+export interface MultiImagePromptEntry {
+	azimuth: number;
+	content: ImagePromptContent;
+}
+
 export interface GenerateOptions {
 	style?: string; // e.g. "realistic", "low-poly", "cartoon"
 	width?: number;
 	height?: number;
+	/** Single image URL — Marble type: "image" */
+	imageUrl?: string;
+	/** Multiple images with azimuth angles — Marble type: "multi-image" */
+	multiImageUrls?: MultiImagePromptEntry[];
+	/** Video URL — Marble type: "video" */
+	videoUrl?: string;
 }
 
 export interface EditOptions {
