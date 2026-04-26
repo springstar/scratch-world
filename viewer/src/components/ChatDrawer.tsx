@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import type { SceneListItem } from "../api.js";
+import { uploadMedia } from "../api.js";
+import type { UploadedMedia } from "../api.js";
 
 export interface ChatMessage {
   id: string;
@@ -27,13 +29,13 @@ interface Props {
   messages: ChatMessage[];
   sceneCards: SceneCard[];
   isTyping: boolean;
-  onSend: (text: string, images?: PendingImage[]) => void;
+  onSend: (text: string, images?: PendingImage[], mediaFiles?: UploadedMedia[]) => void;
   onSceneSelect: (card: SceneCard) => void;
   onCommand: (cmd: string) => void;
   onDeleteScene: (sceneId: string) => void;
 }
 
-export type { PendingImage };
+export type { PendingImage, UploadedMedia };
 
 type DrawerState = "peek" | "open";
 
@@ -93,6 +95,8 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
   const [draft, setDraft] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [pendingMediaFiles, setPendingMediaFiles] = useState<UploadedMedia[]>([]);
+  const [uploading, setUploading] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const lastMsgRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -128,13 +132,18 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
       setState("open");
       return;
     }
-    if (!text && pendingImages.length === 0) return;
+    if (!text && pendingImages.length === 0 && pendingMediaFiles.length === 0) return;
     setDraft("");
     setPendingImages([]);
-    onSend(text, pendingImages.length > 0 ? pendingImages : undefined);
+    setPendingMediaFiles([]);
+    onSend(
+      text,
+      pendingImages.length > 0 ? pendingImages : undefined,
+      pendingMediaFiles.length > 0 ? pendingMediaFiles : undefined,
+    );
     setState("open");
     if (inputRef.current) inputRef.current.style.height = "40px";
-  }, [draft, pendingImages, onSend, onCommand]);
+  }, [draft, pendingImages, pendingMediaFiles, onSend, onCommand]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -184,25 +193,47 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
     if (valid.length > 0) setPendingImages((prev) => [...prev, ...valid]);
   }, [fileToImage]);
 
-  // File input change handler
+  // File input change handler — images as base64, videos pre-uploaded via /media-upload
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
-    const results = await Promise.all(files.map(fileToImage));
-    const valid = results.filter((r): r is PendingImage => r !== null);
-    if (valid.length > 0) setPendingImages((prev) => [...prev, ...valid]);
-    // Reset file input so the same file can be re-selected
     e.target.value = "";
+
+    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+    const mediaFiles = files.filter((f) => f.type.startsWith("video/") || f.type.startsWith("image/"));
+
+    // Base64 images for inline preview
+    const imageResults = await Promise.all(imageFiles.map(fileToImage));
+    const validImages = imageResults.filter((r): r is PendingImage => r !== null);
+    if (validImages.length > 0) setPendingImages((prev) => [...prev, ...validImages]);
+
+    // Pre-upload all files (images and videos) via /media-upload for Marble path
+    const uploadables = mediaFiles;
+    if (uploadables.length > 0) {
+      setUploading(true);
+      try {
+        const uploaded = await Promise.all(uploadables.map((f) => uploadMedia(f)));
+        setPendingMediaFiles((prev) => [...prev, ...uploaded]);
+      } catch (err) {
+        console.error("[ChatDrawer] media upload failed:", err);
+      } finally {
+        setUploading(false);
+      }
+    }
   }, [fileToImage]);
 
   const removeImage = useCallback((idx: number) => {
     setPendingImages((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
+  const removeMediaFile = useCallback((idx: number) => {
+    setPendingMediaFiles((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
   const isOpen = state === "open";
   const drawerHeight = isOpen ? `${OPEN_HEIGHT_VH}vh` : `${PEEK_HEIGHT}px`;
   const lastMsg = messages[messages.length - 1];
-  const canSend = !!(draft.trim() || pendingImages.length > 0);
+  const canSend = !!(draft.trim() || pendingImages.length > 0 || pendingMediaFiles.length > 0);
 
   // Command autocomplete: show only while typing the command word (no space yet)
   const cmdToken = draft.trim();
@@ -664,12 +695,69 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               </div>
             )}
 
+            {/* Pending media file chips (uploaded videos/images) */}
+            {(pendingMediaFiles.length > 0 || uploading) && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 0" }}>
+                {uploading && (
+                  <div style={{ fontSize: 11, color: "rgba(180,160,255,0.7)", alignSelf: "center", padding: "0 4px" }}>
+                    上传中…
+                  </div>
+                )}
+                {pendingMediaFiles.map((mf, i) => {
+                  const name = mf.publicUrl.split("/").pop() ?? mf.mimeType;
+                  const isVideo = mf.kind === "video";
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: "3px 8px",
+                        borderRadius: 8,
+                        background: "rgba(140,100,255,0.12)",
+                        border: "1px solid rgba(140,100,255,0.3)",
+                        fontSize: 11,
+                        color: "rgba(200,180,255,0.9)",
+                        maxWidth: 160,
+                        position: "relative",
+                      }}
+                    >
+                      <span style={{ marginRight: 2 }}>{isVideo ? "▶" : "🖼"}</span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                      <button
+                        onClick={() => removeMediaFile(i)}
+                        style={{
+                          marginLeft: 4,
+                          width: 14,
+                          height: 14,
+                          borderRadius: "50%",
+                          background: "rgba(30,20,50,0.9)",
+                          border: "none",
+                          color: "rgba(220,200,255,0.9)",
+                          fontSize: 10,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding: 0,
+                          flexShrink: 0,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
               {/* Hidden file input */}
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,video/*"
                 multiple
                 style={{ display: "none" }}
                 onChange={handleFileChange}

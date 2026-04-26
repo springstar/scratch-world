@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { extname, join } from "node:path";
 import type { ProviderRef, SceneData } from "../../scene/types.js";
 import type {
 	EditOptions,
@@ -54,6 +54,21 @@ interface MarbleOperation {
 	response: MarbleWorld | null;
 }
 
+interface MarbleMediaAsset {
+	media_asset_id: string;
+	kind: "image" | "video";
+	extension: string;
+}
+
+interface MarblePrepareUploadResponse {
+	media_asset: MarbleMediaAsset;
+	upload_info: {
+		upload_url: string;
+		upload_method: string;
+		required_headers: Record<string, string>;
+	};
+}
+
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
 async function marbleRequest<T>(apiKey: string, method: string, path: string, body?: unknown): Promise<T> {
@@ -106,10 +121,64 @@ async function pollOperation(apiKey: string, operationId: string): Promise<Marbl
 	throw new Error(`Marble operation ${operationId} timed out after ${POLL_TIMEOUT_MS / 1000}s`);
 }
 
+// ── Upload a local file to Marble media-assets ────────────────────────────────
+// Avoids the need for a publicly accessible URL (e.g. cloudflared tunnel).
+
+async function uploadLocalFile(apiKey: string, filePath: string, kind: "image" | "video"): Promise<string> {
+	const ext = extname(filePath).replace(".", "") || (kind === "image" ? "jpg" : "mp4");
+	const fileName = filePath.split("/").pop() ?? `upload.${ext}`;
+
+	const prepared = await marbleRequest<MarblePrepareUploadResponse>(
+		apiKey,
+		"POST",
+		"/marble/v1/media-assets:prepare_upload",
+		{ file_name: fileName, kind, extension: ext },
+	);
+	console.log(`[MarbleProvider] prepare_upload response: ${JSON.stringify(prepared.media_asset)}`);
+
+	const fileBytes = await readFile(filePath);
+	const mimeType = kind === "image" ? `image/${ext === "jpg" ? "jpeg" : ext}` : `video/${ext}`;
+
+	const uploadRes = await fetch(prepared.upload_info.upload_url, {
+		method: prepared.upload_info.upload_method,
+		headers: { "Content-Type": mimeType, ...prepared.upload_info.required_headers },
+		body: fileBytes,
+	});
+	if (!uploadRes.ok) {
+		throw new Error(`Marble media-asset upload failed: ${uploadRes.status} ${await uploadRes.text()}`);
+	}
+	const mediaAssetId = prepared.media_asset.media_asset_id;
+	if (!mediaAssetId) {
+		throw new Error(
+			`Marble prepare_upload returned no media_asset_id. Response: ${JSON.stringify(prepared.media_asset)}`,
+		);
+	}
+	console.log(`[MarbleProvider] uploaded ${kind} → media_asset_id=${mediaAssetId}`);
+	return mediaAssetId;
+}
+
 // ── World prompt builder ───────────────────────────────────────────────────────
 // Constructs the world_prompt payload from a text prompt + optional media inputs.
+// mediaAssetId is pre-resolved by startGeneration when a local file path is provided.
+// multiMediaAssetIds is pre-resolved for multi-image uploads.
 
-function buildWorldPrompt(prompt: string, options?: GenerateOptions): Record<string, unknown> {
+function buildWorldPrompt(
+	prompt: string,
+	options?: GenerateOptions,
+	mediaAssetId?: string,
+	multiMediaAssetIds?: string[],
+): Record<string, unknown> {
+	if (multiMediaAssetIds && multiMediaAssetIds.length > 0) {
+		const n = multiMediaAssetIds.length;
+		return {
+			type: "multi-image",
+			multi_image_prompt: multiMediaAssetIds.map((id, i) => ({
+				azimuth: Math.round((360 * i) / n),
+				content: { source: "media_asset", media_asset_id: id },
+			})),
+			text_prompt: prompt || undefined,
+		};
+	}
 	if (options?.multiImageUrls && options.multiImageUrls.length > 0) {
 		return {
 			type: "multi-image",
@@ -117,6 +186,15 @@ function buildWorldPrompt(prompt: string, options?: GenerateOptions): Record<str
 				azimuth: e.azimuth,
 				content: { source: "uri", uri: e.content.uri },
 			})),
+			text_prompt: prompt || undefined,
+		};
+	}
+	if (mediaAssetId) {
+		const kind = options?.videoFilePath ? "video" : "image";
+		const promptKey = kind === "image" ? "image_prompt" : "video_prompt";
+		return {
+			type: kind,
+			[promptKey]: { source: "media_asset", media_asset_id: mediaAssetId },
 			text_prompt: prompt || undefined,
 		};
 	}
@@ -233,8 +311,30 @@ export class MarbleProvider implements SceneRenderProvider {
 
 	async startGeneration(prompt: string, options?: GenerateOptions): Promise<{ operationId: string }> {
 		console.log(`[MarbleProvider] starting async generation: "${prompt}"`);
+
+		// Upload local file to Marble media-assets when a local path is provided.
+		// This avoids requiring a publicly accessible URL (e.g. cloudflared tunnel).
+		let mediaAssetId: string | undefined;
+		let multiMediaAssetIds: string[] | undefined;
+
+		if (options?.multiImageFilePaths && options.multiImageFilePaths.length > 0) {
+			console.log(
+				`[MarbleProvider] uploading ${options.multiImageFilePaths.length} local images for multi-image generation`,
+			);
+			multiMediaAssetIds = await Promise.all(
+				options.multiImageFilePaths.map((p) => uploadLocalFile(this.apiKey, p, "image")),
+			);
+		} else if (options?.imageFilePath) {
+			console.log(`[MarbleProvider] uploading local image: ${options.imageFilePath}`);
+			mediaAssetId = await uploadLocalFile(this.apiKey, options.imageFilePath, "image");
+		} else if (options?.videoFilePath) {
+			console.log(`[MarbleProvider] uploading local video: ${options.videoFilePath}`);
+			mediaAssetId = await uploadLocalFile(this.apiKey, options.videoFilePath, "video");
+		}
+
+		const worldPrompt = buildWorldPrompt(prompt, options, mediaAssetId, multiMediaAssetIds);
 		const requestBody = {
-			world_prompt: buildWorldPrompt(prompt, options),
+			world_prompt: worldPrompt,
 			display_name: prompt.slice(0, 64),
 			model: "Marble 0.1-plus",
 		};

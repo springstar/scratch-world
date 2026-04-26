@@ -26,6 +26,8 @@ export class TelegramAdapter implements ChannelAdapter {
 			if (!this.handler) return;
 			const caption = ctx.message.caption ?? "";
 			const photo = ctx.message.photo.at(-1)!; // largest size
+
+			// Download photo from Telegram CDN so the agent can use vision on it.
 			let imageData: Buffer | undefined;
 			try {
 				const file = await ctx.api.getFile(photo.file_id);
@@ -38,6 +40,7 @@ export class TelegramAdapter implements ChannelAdapter {
 			} catch (err) {
 				console.warn("[TelegramAdapter] photo download failed:", err);
 			}
+
 			const msg: ChatMessage = {
 				userId: String(ctx.from.id),
 				channelId: this.channelId,

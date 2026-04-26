@@ -8,6 +8,8 @@ interface ChatBody {
 	text: string;
 	sceneId?: string;
 	images?: Array<{ base64: string; mimeType: string }>;
+	/** Pre-uploaded media files (images or videos uploaded via /media-upload) */
+	mediaFiles?: Array<{ filePath: string; publicUrl: string; mimeType: string; kind: "image" | "video" }>;
 	playerPosition?: { x: number; y: number; z: number };
 	clickPosition?: { x: number; y: number; z: number };
 }
@@ -25,14 +27,24 @@ export function chatRoute(sessionManager: SessionManager, bus: RealtimeBus): Hon
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const { sessionId, userId, text, sceneId, images, playerPosition, clickPosition } = body;
-		if (!sessionId || !userId || (!text?.trim() && !images?.length)) {
-			return c.json({ error: "Missing required fields: sessionId, userId, and text or images" }, 400);
+		const { sessionId, userId, text, sceneId, images, mediaFiles, playerPosition, clickPosition } = body;
+		if (!sessionId || !userId || (!text?.trim() && !images?.length && !mediaFiles?.length)) {
+			return c.json({ error: "Missing required fields: sessionId, userId, and text or images/mediaFiles" }, 400);
 		}
 
 		// Fire-and-forget — response streams over WebSocket
 		sessionManager
-			.dispatchWebChat(sessionId, userId, text ?? "", bus, images, playerPosition, clickPosition, sceneId)
+			.dispatchWebChat(
+				sessionId,
+				userId,
+				text ?? "",
+				bus,
+				images,
+				playerPosition,
+				clickPosition,
+				sceneId,
+				mediaFiles,
+			)
 			.catch((err: unknown) => {
 				// err.message is empty for AggregateError (e.g. ECONNREFUSED); fall back to toString()
 				const message = err instanceof Error ? err.message || String(err) : String(err);

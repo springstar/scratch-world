@@ -11,7 +11,7 @@ import { ViewpointBar } from "./components/ViewpointBar.js";
 import { InteractionPrompt } from "./components/InteractionPrompt.js";
 import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
-import type { ChatMessage, SceneCard, PendingImage } from "./components/ChatDrawer.js";
+import type { ChatMessage, SceneCard, PendingImage, UploadedMedia } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition, addScenePortal } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject, DisplayConfig, ResourceNeed, ResourceChoice } from "./types.js";
 import type { PendingNpc, GeneratedNpcModel } from "./components/NpcDrawer.js";
@@ -533,7 +533,7 @@ export function App() {
 
   // Chat send
   const handleSend = useCallback(
-    async (text: string, images?: PendingImage[]) => {
+    async (text: string, images?: PendingImage[], mediaFiles?: UploadedMedia[]) => {
       const userMsg: ChatMessage = {
         id: nextId(),
         role: "user",
@@ -559,7 +559,7 @@ export function App() {
         ? { x: rawClick.x, y: rawClick.y, z: rawClick.z }
         : undefined;
       try {
-        await postChat({ sessionId, userId: userId.current, text, sceneId: scene?.sceneId, images: apiImages, playerPosition, clickPosition });
+        await postChat({ sessionId, userId: userId.current, text, sceneId: scene?.sceneId, images: apiImages, mediaFiles, playerPosition, clickPosition });
       } catch (err) {
         setIsTyping(false);
         const msg = err instanceof Error ? err.message : "Failed to send";

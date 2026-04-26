@@ -3,6 +3,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
+import sharp from "sharp";
 import { BASE_SYSTEM_PROMPT, createAgent, PROVIDER_BASE_PROMPT } from "../agent/agent-factory.js";
 import { trimContext } from "../agent/context-trimmer.js";
 import { isRejectionSignal, logFeedback } from "../agent/feedback-logger.js";
@@ -38,6 +39,7 @@ export class SessionManager {
 		private projectRoot: string = process.cwd(),
 		private agentTtlMs: number = DEFAULT_AGENT_TTL_MS,
 		private bus?: RealtimeBus,
+		_publicUploadsUrl?: string,
 	) {}
 
 	dispatch(msg: ChatMessage): Promise<void> {
@@ -57,9 +59,20 @@ export class SessionManager {
 		playerPosition?: { x: number; y: number; z: number },
 		clickPosition?: { x: number; y: number; z: number },
 		viewerSceneId?: string,
+		mediaFiles?: Array<{ filePath: string; publicUrl: string; mimeType: string; kind: "image" | "video" }>,
 	): Promise<void> {
 		return this.enqueue(sessionId, () =>
-			this._dispatchWebChat(sessionId, userId, text, bus, images, playerPosition, clickPosition, viewerSceneId),
+			this._dispatchWebChat(
+				sessionId,
+				userId,
+				text,
+				bus,
+				images,
+				playerPosition,
+				clickPosition,
+				viewerSceneId,
+				mediaFiles,
+			),
 		);
 	}
 
@@ -161,6 +174,7 @@ export class SessionManager {
 		playerPosition?: { x: number; y: number; z: number },
 		clickPosition?: { x: number; y: number; z: number },
 		viewerSceneId?: string,
+		mediaFiles?: Array<{ filePath: string; publicUrl: string; mimeType: string; kind: "image" | "video" }>,
 	): Promise<void> {
 		console.log(
 			`[SessionManager] _dispatchWebChat sessionId=${sessionId} viewerSceneId=${viewerSceneId ?? "(none)"}`,
@@ -253,13 +267,24 @@ export class SessionManager {
 				}
 			}
 		});
-
 		try {
-			const imageContents: ImageContent[] | undefined = images?.map((img) => ({
-				type: "image" as const,
-				data: img.base64,
-				mimeType: img.mimeType,
-			}));
+			// Compress images before sending to LLM — large photos (5MB+) cause stream timeouts.
+			// Resize to max 1280px on longest edge, re-encode as JPEG ≤80% quality.
+			const imageContents: ImageContent[] | undefined = images
+				? await Promise.all(
+						images.map(async (img) => {
+							const buf = Buffer.from(img.base64, "base64");
+							const compressed = await sharp(buf)
+								.resize(1280, 1280, { fit: "inside", withoutEnlargement: true })
+								.jpeg({ quality: 80 })
+								.toBuffer();
+							const beforeKB = Math.round(buf.length / 1024);
+							const afterKB = Math.round(compressed.length / 1024);
+							console.log(`[SessionManager] image compressed ${beforeKB}KB → ${afterKB}KB`);
+							return { type: "image" as const, data: compressed.toString("base64"), mimeType: "image/jpeg" };
+						}),
+					)
+				: undefined;
 			// Log rejection signals for skill evolution before the agent processes them
 			if (text && isRejectionSignal(text)) {
 				logFeedback({
@@ -272,8 +297,12 @@ export class SessionManager {
 			}
 			// Save uploaded images to disk and inject file paths into the prompt
 			// so the image_to_3d tool can read them by path.
+			// Skip if mediaFiles already covers the same images (pre-uploaded via /media-upload)
+			// to avoid injecting duplicate [上传图片: path=...] entries into the context.
 			let contextPrefix = "";
-			if (images && images.length > 0) {
+			const mediaFileImages = mediaFiles?.filter((f) => f.kind === "image") ?? [];
+			const skipInlineImages = mediaFileImages.length > 0 && images && mediaFileImages.length >= images.length;
+			if (images && images.length > 0 && !skipInlineImages) {
 				const photosDir = join(this.projectRoot, "uploads", "photos");
 				await mkdir(photosDir, { recursive: true });
 				for (const img of images) {
@@ -285,6 +314,16 @@ export class SessionManager {
 					contextPrefix += `[上传图片: path=${filePath}, url=${publicUrl}]\n`;
 				}
 			}
+			// Inject pre-uploaded media files (images via /media-upload, videos)
+			if (mediaFiles && mediaFiles.length > 0) {
+				for (const mf of mediaFiles) {
+					if (mf.kind === "video") {
+						contextPrefix += `[上传视频: path=${mf.filePath}]\n`;
+					} else {
+						contextPrefix += `[上传图片: path=${mf.filePath}]\n`;
+					}
+				}
+			}
 			// Prepend player position and click target as spatial context
 			if (playerPosition) {
 				contextPrefix += `[玩家当前位置: x=${playerPosition.x.toFixed(1)}, y=${playerPosition.y.toFixed(1)}, z=${playerPosition.z.toFixed(1)}]\n`;
@@ -292,7 +331,14 @@ export class SessionManager {
 			if (clickPosition) {
 				contextPrefix += `[点击目标: x=${clickPosition.x.toFixed(2)}, y=${clickPosition.y.toFixed(2)}, z=${clickPosition.z.toFixed(2)}]\n`;
 			}
-			const promptText = contextPrefix ? `${contextPrefix}${text}` : text;
+			const hasMedia = (images && images.length > 0) || (mediaFiles && mediaFiles.length > 0);
+			const hasVideo = mediaFiles?.some((f) => f.kind === "video");
+			const effectiveText =
+				!text?.trim() && hasMedia ? (hasVideo ? "根据上传的视频生成场景" : "根据上传的图片生成场景") : text;
+			const promptText = contextPrefix ? `${contextPrefix}${effectiveText}` : effectiveText;
+			console.log(
+				`[SessionManager] promptText=${JSON.stringify(promptText.slice(0, 200))} imageCount=${imageContents?.length ?? 0}`,
+			);
 			console.log("[SessionManager] calling agent.prompt");
 			await agent.prompt(promptText, imageContents);
 			console.log("[SessionManager] agent.prompt done");

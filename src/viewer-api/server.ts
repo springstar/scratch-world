@@ -20,6 +20,7 @@ import { confirmPositionRoute } from "./routes/confirm-position.js";
 import { generatorsRoute } from "./routes/generators.js";
 import { gltfProxyRoute } from "./routes/gltf-proxy.js";
 import { interactRoute } from "./routes/interact.js";
+import { mediaUploadRoute } from "./routes/media-upload.js";
 import { npcGreetRoute } from "./routes/npc-greet.js";
 import { npcInteractRoute } from "./routes/npc-interact.js";
 import { scenesRoute } from "./routes/scenes.js";
@@ -37,6 +38,7 @@ export interface ViewerApiOptions {
 	narratorRegistryRef: { current: NarratorRegistry };
 	projectRoot: string;
 	marbleApiKey?: string;
+	publicUploadsUrl?: string;
 	/** Pre-created bus shared with GenerationQueue. If omitted, a new bus is created. */
 	bus?: RealtimeBus;
 }
@@ -57,6 +59,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 		narratorRegistryRef,
 		projectRoot,
 		marbleApiKey,
+		publicUploadsUrl = `http://localhost:${opts.port}`,
 	} = opts;
 	const bus = opts.bus ?? new RealtimeBus();
 
@@ -104,6 +107,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/gltf-proxy", gltfProxyRoute());
 	app.route("/confirm-position", confirmPositionRoute());
 	app.route("/user-assets", userAssetsRoute(db, projectRoot));
+	app.route("/media-upload", mediaUploadRoute(projectRoot, publicUploadsUrl));
 	app.route("/", generatorsRoute(providerRegistryRef, narratorRegistryRef, skillLoader));
 
 	app.get("/health", (c) => c.json({ ok: true }));

@@ -10,11 +10,32 @@ import { formatViolations, validateSceneCode } from "../scene-validator.js";
 const parameters = Type.Object({
 	prompt: Type.String({ description: "Detailed description of the scene to generate" }),
 	title: Type.Optional(Type.String({ description: "Short title for the scene (max 60 chars)" })),
-	imageUrl: Type.Optional(
+	imagePath: Type.Optional(
 		Type.String({
 			description:
-				"Public URL of an uploaded photo to use as the visual basis for Marble world generation. " +
-				"Use the URL from [上传图片: url=...] in the context. Omit for text-only generation.",
+				"Local file path of a single uploaded photo for Marble generation. " +
+				"Use the path from [上传图片: path=...]. Use imagePaths instead when multiple images are uploaded.",
+		}),
+	),
+	imagePaths: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Local file paths of multiple uploaded photos for Marble multi-image generation. " +
+				"Collect ALL [上传图片: path=...] values from context and pass them here. " +
+				"Azimuths are assigned automatically (0°, 360°/n, 720°/n, …). " +
+				"Use this whenever 2 or more images are present in context.",
+		}),
+	),
+	imageUrl: Type.Optional(
+		Type.String({
+			description: "Fallback public URL of a single uploaded photo. Use only when imagePath is unavailable.",
+		}),
+	),
+	videoPath: Type.Optional(
+		Type.String({
+			description:
+				"Local file path of an uploaded video for Marble generation. " +
+				"Use the path from [上传视频: path=...] in context.",
 		}),
 	),
 	sceneData: Type.Optional(SceneDataSchema),
@@ -46,12 +67,16 @@ export function createSceneTool(
 		name: "create_scene",
 		label: "Create 3D scene",
 		description: providerHandlesGeneration
-			? "Generate a new 3D scene. Supply only 'prompt' and optional 'title' — do NOT provide sceneData or sceneCode. The provider generates the complete scene."
+			? "Generate a new 3D scene from a text prompt or uploaded media. Supply 'prompt' and optional 'title'. For uploaded images/videos, pass the file path(s) from context: imagePaths (array) for 2+ images, imagePath for a single image, videoPath for a video. Do NOT provide sceneData or sceneCode."
 			: "Generate a new 3D scene. Always supply sceneCode — it is the sole rendering mechanism. Use for all scenes including settlements rendered from create_city layout data.",
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
-			console.log(`[create_scene] called, hasSceneData=${!!params.sceneData}, hasSceneCode=${!!params.sceneCode}`);
-			// Merge sceneCode into sceneData if provided
+			console.log(
+				`[create_scene] called params=${JSON.stringify({ prompt: params.prompt?.slice(0, 80), imagePath: params.imagePath, imagePaths: params.imagePaths, videoPath: params.videoPath, imageUrl: params.imageUrl, hasSceneData: !!params.sceneData, hasSceneCode: !!params.sceneCode })}`,
+			);
+			// When provider handles its own rendering (e.g. Marble), sceneData is metadata only
+			// (spawn points, interaction objects). Do NOT take the skill path for metadata-only sceneData —
+			// only take it when sceneCode is present (custom Three.js rendering).
 			const mergedSceneData = params.sceneCode
 				? {
 						...(params.sceneData ?? { objects: [], environment: {}, viewpoints: [] }),
@@ -59,7 +84,7 @@ export function createSceneTool(
 					}
 				: params.sceneData;
 
-			if (mergedSceneData) {
+			if (mergedSceneData && (!providerHandlesGeneration || params.sceneCode)) {
 				console.log("[create_scene] taking skill path (sceneData or sceneCode provided)");
 
 				// Validate before saving — ERROR violations block scene creation entirely.
@@ -114,7 +139,17 @@ export function createSceneTool(
 			console.log(`[create_scene] taking provider path, provider=${provider.name}`);
 			if (provider.startGeneration) {
 				const title = params.title ?? params.prompt.slice(0, 60);
-				const genOptions = params.imageUrl ? { imageUrl: params.imageUrl } : undefined;
+				// Priority: multi-image paths > single path > URL
+				const genOptions =
+					params.imagePaths && params.imagePaths.length > 0
+						? { multiImageFilePaths: params.imagePaths }
+						: params.imagePath
+							? { imageFilePath: params.imagePath }
+							: params.imageUrl
+								? { imageUrl: params.imageUrl }
+								: params.videoPath
+									? { videoFilePath: params.videoPath }
+									: undefined;
 				let operationId: string;
 				try {
 					({ operationId } = await provider.startGeneration(params.prompt, genOptions));

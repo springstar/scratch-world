@@ -14,12 +14,18 @@ export interface GenerateOptions {
 	style?: string; // e.g. "realistic", "low-poly", "cartoon"
 	width?: number;
 	height?: number;
-	/** Single image URL — Marble type: "image" */
+	/** Single image URL — Marble type: "image" with source: "uri" */
 	imageUrl?: string;
-	/** Multiple images with azimuth angles — Marble type: "multi-image" */
+	/** Local file path — provider uploads to media-assets and uses source: "media_asset" */
+	imageFilePath?: string;
+	/** Multiple images with azimuth angles — Marble type: "multi-image" (URI source) */
 	multiImageUrls?: MultiImagePromptEntry[];
+	/** Multiple local file paths — azimuths auto-distributed evenly (0, 360/n, 720/n, …) */
+	multiImageFilePaths?: string[];
 	/** Video URL — Marble type: "video" */
 	videoUrl?: string;
+	/** Local video file path — provider uploads to media-assets and uses source: "media_asset" */
+	videoFilePath?: string;
 }
 
 export interface EditOptions {

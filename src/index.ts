@@ -82,6 +82,8 @@ async function main() {
 	// ── Viewer API ─────────────────────────────────────────────────────────
 	const viewerPort = Number(process.env.VIEWER_API_PORT ?? "3001");
 	const viewerBaseUrl = process.env.VIEWER_BASE_URL ?? `http://localhost:${viewerPort}`;
+	// Public URL for uploaded files — use tunnel/CDN URL when the backend is behind a proxy
+	const publicUploadsUrl = process.env.PUBLIC_UPLOADS_URL ?? viewerBaseUrl;
 
 	// ── Session manager ────────────────────────────────────────────────────
 	const sessionManager = new SessionManager(
@@ -94,6 +96,7 @@ async function main() {
 		projectRoot,
 		undefined,
 		bus,
+		publicUploadsUrl,
 	);
 	gateway.onMessage(async (msg) => {
 		await sessionManager.dispatch(msg);
@@ -109,6 +112,7 @@ async function main() {
 		narratorRegistryRef,
 		projectRoot,
 		marbleApiKey: marbleKey,
+		publicUploadsUrl,
 		bus,
 	});
 

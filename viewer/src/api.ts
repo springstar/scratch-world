@@ -77,6 +77,7 @@ export async function postChat(payload: {
   text: string;
   sceneId?: string;
   images?: Array<{ base64: string; mimeType: string }>;
+  mediaFiles?: Array<{ filePath: string; publicUrl: string; mimeType: string; kind: "image" | "video" }>;
   playerPosition?: { x: number; y: number; z: number };
   clickPosition?: { x: number; y: number; z: number };
 }): Promise<void> {
@@ -464,6 +465,24 @@ export function userAssetToOption(asset: UserAsset): ResourceOption {
     thumbnail: asset.kind === "texture" ? asset.url : undefined,
     source: "upload",
   };
+}
+
+export interface UploadedMedia {
+  filePath: string;
+  publicUrl: string;
+  mimeType: string;
+  kind: "image" | "video";
+}
+
+export async function uploadMedia(file: File): Promise<UploadedMedia> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/media-upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<UploadedMedia>;
 }
 
 export function connectRealtime(

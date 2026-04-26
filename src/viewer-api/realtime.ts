@@ -56,7 +56,13 @@ export class RealtimeBus {
 		}
 		clients.add(ws);
 
+		// Ping every 30s to keep the connection alive through Cloudflare tunnel (100s idle timeout).
+		const pingInterval = setInterval(() => {
+			if (ws.readyState === ws.OPEN) ws.ping();
+		}, 30_000);
+
 		ws.on("close", () => {
+			clearInterval(pingInterval);
 			clients!.delete(ws);
 			if (clients!.size === 0) this.sockets.delete(sessionId);
 		});
