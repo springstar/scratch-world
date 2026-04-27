@@ -103,9 +103,102 @@ SPZ_MODE=local
 
 ---
 
-## Production Build
+## Docker Deployment
 
-### Backend
+### Prerequisites
+
+- Docker >= 24
+- Docker Compose v2 (`docker compose` command)
+
+### Quick start
+
+```bash
+# 1. Copy and fill in secrets
+cp .env.example .env
+# Set at minimum: ANTHROPIC_API_KEY, POSTGRES_PASSWORD
+
+# 2. Build and start
+docker compose up -d
+
+# 3. Verify
+curl http://localhost:3001/health   # → {"ok":true}
+```
+
+The stack starts two services:
+
+| Service | Image | Port |
+|---------|-------|------|
+| `postgres` | postgres:16-alpine | internal only |
+| `backend` | built from `Dockerfile` | 3001 |
+
+`postgres` uses a named volume (`postgres_data`) for persistence. `uploads` is also a named volume — bind-mount it to a host path if you need direct access.
+
+### Environment variables for docker compose
+
+Create a `.env` file at the project root (same directory as `docker-compose.yml`):
+
+```env
+POSTGRES_PASSWORD=change_me
+
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional — leave blank to use stub provider
+MARBLE_API_KEY=
+MARBLE_API_URL=
+
+CHANNEL=stdin                        # or telegram
+TELEGRAM_BOT_TOKEN=
+
+SCENE_PROVIDER=stub                  # or marble / llm
+VIEWER_BASE_URL=http://localhost:3001
+```
+
+`docker compose` automatically reads `.env` from the working directory and substitutes `${VAR}` in `docker-compose.yml`.
+
+### Useful commands
+
+```bash
+docker compose up -d            # start in background
+docker compose logs -f backend  # stream backend logs
+docker compose down             # stop (data volumes preserved)
+docker compose down -v          # stop AND delete volumes (destructive)
+docker compose build --no-cache # force full rebuild
+```
+
+### Serving the viewer in Docker
+
+The `Dockerfile` builds the Vite viewer and copies `viewer/dist/` to `/app/viewer/dist` in the runtime image. The backend's static file middleware serves it when a request hits `/` or any path not claimed by the API.
+
+If you deploy behind a reverse proxy (nginx, Caddy), point static asset requests at the container and API requests at port 3001 — see the Nginx example below.
+
+---
+
+## CI/CD (GitHub Actions)
+
+The workflow lives at `.github/workflows/ci.yml` and runs on every push and pull request to `master`/`main`.
+
+### What it does
+
+1. Checks out code
+2. Sets up Node.js 22 with npm cache
+3. Installs backend deps (`npm ci`)
+4. Installs viewer deps (`npm ci --prefix viewer`)
+5. Runs `npm run check` — biome lint + TypeScript type check
+6. Runs `npm test` — vitest test suite (157 tests)
+
+### Branch protection (recommended)
+
+In GitHub → Settings → Branches → Add branch ruleset for `master`:
+- Require status checks to pass: `check-and-test`
+- Require branches to be up to date before merging
+
+### Adding secrets for CI
+
+If you ever add tests that require real API keys, store them in GitHub → Settings → Secrets and variables → Actions. Reference them in the workflow as `${{ secrets.ANTHROPIC_API_KEY }}`. Current tests use stubs and require no secrets.
+
+---
+
+## Production Build
 
 ```bash
 npm run build          # compiles TypeScript → dist/
@@ -162,12 +255,14 @@ server {
     index index.html;
 
     # API + WebSocket proxy
-    location ~ ^/(scenes|interact|chat|splat|uploads|realtime|health) {
+    location ~ ^/(scenes|interact|npc-interact|npc-greet|chat|splat|collider|gltf-proxy|confirm-position|user-assets|uploads|realtime|health|debug|screenshots|generators) {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 300s;   # allow long Marble generation polls
     }
 
@@ -177,6 +272,11 @@ server {
     }
 }
 ```
+
+> The `X-Forwarded-For` header is required for the in-process rate limiter
+> (`/chat`: 20 req/min, `/interact`: 30 req/min) to correctly identify clients.
+> Without it, all traffic appears to come from `127.0.0.1` and the limits are
+> shared across all users.
 
 ---
 
