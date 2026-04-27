@@ -180,6 +180,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
+  const [loadPct, setLoadPct] = useState(0);
   const [isLocked, setIsLocked] = useState(false);
   const [physicsReady, setPhysicsReady] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -371,6 +372,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     if (!canvas) return;
 
     setStatus("loading");
+    setLoadPct(0);
     setIsLocked(false);
     setPhysicsReady(false);
     setClickIndicator(null);
@@ -387,7 +389,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     let clickIndicatorTimer: ReturnType<typeof setTimeout> | null = null;
 
     const renderer = new WebGLRenderer({ canvas, antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight, false);
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.85;
@@ -449,25 +451,45 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     (window as unknown as Record<string, unknown>).__sparkRenderer = sparkRenderer;
     scene.add(sparkRenderer);
 
-    const splat = new SplatMesh({ url: splatUrl, lod: true });
-    splat.rotation.x = Math.PI;
-    scene.add(splat);
+    // ── Splat: stream-based load with AbortController ─────────────────────────
+    const abortCtrl = new AbortController();
     let splatInitialized = false;
-    splat.initialized.then(() => {
-      splatInitialized = true;
-      // Pixel sampling in freeFlyLoop confirms SparkRenderer drew the scene.
-      // If the pixel check never fires (e.g. PBO still bound, dark center pixel),
-      // fall back to marking ready after 3 s so the scene never stays stuck.
-      setTimeout(() => {
-        if (splatInitialized) {
-          splatInitialized = false;
-          setStatus("ready");
-        }
-      }, 3000);
-    }).catch((err: unknown) => {
-      setErrorMsg(err instanceof Error ? err.message : "Failed to load splat file");
-      setStatus("error");
-    });
+    let splat: SplatMesh | null = null;
+
+    (async () => {
+      try {
+        const response = await fetch(splatUrl, { signal: abortCtrl.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.body) throw new Error("No response body");
+        const contentLength = response.headers.get("content-length");
+        const streamLength = contentLength ? parseInt(contentLength, 10) : undefined;
+        const mesh = new SplatMesh({
+          stream: response.body,
+          streamLength,
+          lod: "quality",
+          onProgress: (evt: ProgressEvent) => {
+            if (evt.lengthComputable && evt.total > 0) {
+              setLoadPct(Math.round((evt.loaded / evt.total) * 100));
+            }
+          },
+        });
+        mesh.rotation.x = Math.PI;
+        scene.add(mesh);
+        splat = mesh;
+        await mesh.initialized;
+        splatInitialized = true;
+        // freeFlyLoop pixel check is the primary ready signal.
+        // 8 s fallback for zero-dimension canvas edge case.
+        setTimeout(() => {
+          if (splatInitialized) { splatInitialized = false; setStatus("ready"); }
+        }, 8000);
+      } catch (err: unknown) {
+        if (abortCtrl.signal.aborted) return;
+        setErrorMsg(err instanceof Error ? err.message : "Failed to load splat");
+        setStatus("error");
+      }
+    })();
+
     // ── Resize observer ───────────────────────────────────────────────────────
     const ro = new ResizeObserver(() => {
       const w = canvas.clientWidth;
@@ -1088,14 +1110,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       },
       spark: {
         addEdit(edit: unknown) {
+          if (!splat) return;
           if (!splat.edits) splat.edits = [];
           splat.edits.push(edit as SplatEdit);
         },
         removeEdit(edit: unknown) {
-          if (splat.edits) {
-            const idx = splat.edits.indexOf(edit as SplatEdit);
-            if (idx !== -1) splat.edits.splice(idx, 1);
-          }
+          if (!splat?.edits) return;
+          const idx = splat.edits.indexOf(edit as SplatEdit);
+          if (idx !== -1) splat.edits.splice(idx, 1);
         },
         addSplat(mesh: unknown) {
           scene.add(mesh as SplatMesh);
@@ -2339,7 +2361,8 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       doPlacementRef.current = null;
       exitPlacementRef.current = null;
       cleanupPhysics?.();
-      splat.dispose();
+      abortCtrl.abort();
+      splat?.dispose();
       renderer.dispose();
     };
   // sceneObjects and onInteract are accessed via refs — not reactive dependencies
@@ -2612,7 +2635,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           fontFamily: "system-ui, -apple-system, sans-serif",
           gap: 16,
         }}>
-          <div style={{ fontSize: 14, letterSpacing: 0.5 }}>Loading Gaussian Splat…</div>
+          <div style={{ fontSize: 14, letterSpacing: 0.5 }}>
+            Loading{loadPct > 0 ? ` ${loadPct}%` : "…"}
+          </div>
           <div style={{
             width: 120, height: 3, borderRadius: 2,
             background: "rgba(255,255,255,0.1)",
@@ -2620,8 +2645,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           }}>
             <div style={{
               height: "100%",
+              width: loadPct > 0 ? `${loadPct}%` : "0%",
               background: "linear-gradient(90deg, #7c4dff, #448aff)",
-              animation: "splatScan 1.4s ease-in-out infinite",
+              transition: loadPct > 0 ? "width 0.3s ease-out" : undefined,
+              animation: loadPct === 0 ? "splatScan 1.4s ease-in-out infinite" : undefined,
             }} />
           </div>
           <style>{`

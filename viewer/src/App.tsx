@@ -1365,6 +1365,30 @@ export function App() {
         )}
       </div>
 
+      {/* Back to universe — top-left, shown when a scene is loaded */}
+      {scene && (
+        <button
+          onClick={() => {
+            if (document.pointerLockElement) document.exitPointerLock();
+            setScene(null);
+            sceneRef.current = null;
+            history.pushState(null, "", "/");
+          }}
+          style={{
+            position: "fixed", top: 16, left: 16, zIndex: 105,
+            background: "rgba(10,10,30,0.75)",
+            border: "1px solid rgba(100,150,255,0.35)",
+            borderRadius: 8, padding: "7px 14px",
+            color: "rgba(180,210,255,0.9)", fontSize: 13,
+            cursor: "pointer",
+            backdropFilter: "blur(8px)",
+            fontFamily: "system-ui, -apple-system, sans-serif",
+          }}
+        >
+          ← 宇宙
+        </button>
+      )}
+
       {/* Toolbar buttons — top-right, shown when a scene is loaded */}
       {scene && (
         <div style={{ position: "fixed", top: 16, right: 16, display: "flex", gap: 8, zIndex: 105 }}>

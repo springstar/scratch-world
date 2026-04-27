@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
-import { SparkRenderer, SplatMesh, SplatEdit, SplatEditSdf, SplatEditSdfType } from "@sparkjsdev/spark";
+import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import type { SceneListItem } from "../api.js";
 
 interface Props {
@@ -13,6 +13,17 @@ interface SceneNode {
 	sceneId: string;
 	title: string;
 	worldPos: THREE.Vector3;
+}
+
+type SplatLoadStatus = "idle" | "loading" | "loaded";
+
+interface SplatEntry {
+	sceneId: string;
+	splatUrl: string;
+	worldPos: THREE.Vector3;
+	placeholderMesh: THREE.Mesh;
+	splatMesh: SplatMesh | null;
+	status: SplatLoadStatus;
 }
 
 function fibonacciSphere(count: number, radius: number): THREE.Vector3[] {
@@ -54,7 +65,7 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 		const sparkRenderer = new SparkRenderer({ renderer, enableLod: true, sortRadial: true });
 		threeScene.add(sparkRenderer);
 
-		// ── Starfield (Three.js Points) ───────────────────────────────────────────
+		// ── Starfield ─────────────────────────────────────────────────────────────
 		const STAR_COUNT = 80_000;
 		const starPos = new Float32Array(STAR_COUNT * 3);
 		for (let i = 0; i < STAR_COUNT; i++) {
@@ -70,44 +81,95 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 		const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.5, sizeAttenuation: true });
 		threeScene.add(new THREE.Points(starGeo, starMat));
 
-		// ── Scene splat worlds ────────────────────────────────────────────────────
+		// ── Scene nodes + placeholder orbs ────────────────────────────────────────
 		const ready = scenes.filter((s) => s.status === "ready");
 		const positions = fibonacciSphere(Math.max(ready.length, 1), 80);
 		const nodes: SceneNode[] = [];
-		const splatMeshes: SplatMesh[] = [];
+		const entries = new Map<string, SplatEntry>();
+		let activeLoads = 0;
+		const abortControllers = new Map<string, AbortController>();
 
 		for (let i = 0; i < ready.length; i++) {
 			const s = ready[i];
 			const pos = positions[i];
 			nodes.push({ sceneId: s.sceneId, title: s.title, worldPos: pos.clone() });
 
+			const color = s.splatUrl ? 0x334466 : 0x2255cc;
+			const geo = new THREE.SphereGeometry(3, 16, 16);
+			const mat = new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.35 });
+			const placeholderMesh = new THREE.Mesh(geo, mat);
+			placeholderMesh.position.copy(pos);
+			threeScene.add(placeholderMesh);
+
 			if (s.splatUrl) {
-				// Gaussian splat world
-				const splat = new SplatMesh({ url: s.splatUrl, lod: true });
-				splat.rotation.x = Math.PI; // Marble splats are Y-flipped
-				splat.position.copy(pos);
-				splat.scale.setScalar(0.05);
-
-				// Clip to sphere shape — radius in local (pre-scale) space
-				const sdf = new SplatEditSdf({ type: SplatEditSdfType.SPHERE, radius: 70 });
-				const edit = new SplatEdit({ sdfs: [sdf] });
-				splat.add(edit);
-
-				threeScene.add(splat);
-				splatMeshes.push(splat);
-			} else {
-				// Placeholder orb for non-splat scenes
-				const geo = new THREE.SphereGeometry(3, 24, 24);
-				const mat = new THREE.MeshBasicMaterial({ color: 0x2255cc, wireframe: true, transparent: true, opacity: 0.5 });
-				const mesh = new THREE.Mesh(geo, mat);
-				mesh.position.copy(pos);
-				threeScene.add(mesh);
+				entries.set(s.sceneId, {
+					sceneId: s.sceneId,
+					splatUrl: s.splatUrl,
+					worldPos: pos.clone(),
+					placeholderMesh,
+					splatMesh: null,
+					status: "idle",
+				});
 			}
+		}
+
+		// ── Splat load/dispose helpers ────────────────────────────────────────────
+		function loadSplat(entry: SplatEntry): void {
+			entry.status = "loading";
+			activeLoads += 1;
+			const ctrl = new AbortController();
+			abortControllers.set(entry.sceneId, ctrl);
+
+			fetch(entry.splatUrl, { signal: ctrl.signal })
+				.then((response) => {
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+					if (!response.body) throw new Error("No response body");
+					const contentLength = response.headers.get("content-length");
+					const streamLength = contentLength ? parseInt(contentLength, 10) : undefined;
+					const mesh = new SplatMesh({ stream: response.body, streamLength, lod: true });
+					mesh.rotation.x = Math.PI;
+					mesh.position.copy(entry.worldPos);
+					mesh.scale.setScalar(0.04);
+					mesh.opacity = 0.45;
+					entry.splatMesh = mesh;
+					threeScene.add(mesh);
+					return mesh.initialized;
+				})
+				.then(() => {
+					entry.status = "loaded";
+					activeLoads -= 1;
+					abortControllers.delete(entry.sceneId);
+				})
+				.catch((err: unknown) => {
+					abortControllers.delete(entry.sceneId);
+					activeLoads -= 1;
+					if (ctrl.signal.aborted) return;
+					// Non-abort error: revert to idle so distance check can retry
+					if (entry.splatMesh) {
+						threeScene.remove(entry.splatMesh);
+						entry.splatMesh = null;
+					}
+					entry.status = "idle";
+					console.warn(`[UniverseView] splat load failed for ${entry.sceneId}:`, (err as Error).message);
+				});
+		}
+
+		function disposeSplat(entry: SplatEntry): void {
+			const ctrl = abortControllers.get(entry.sceneId);
+			if (ctrl) {
+				ctrl.abort();
+				abortControllers.delete(entry.sceneId);
+			}
+			if (entry.splatMesh) {
+				threeScene.remove(entry.splatMesh);
+				entry.splatMesh.dispose();
+				entry.splatMesh = null;
+			}
+			entry.status = "idle";
 		}
 
 		// ── Controls ──────────────────────────────────────────────────────────────
 		const controls = new PointerLockControls(camera, canvas);
-
 		const keys: Record<string, boolean> = {};
 		const nearRef = { current: null as { title: string; sceneId: string; close: boolean } | null };
 
@@ -117,9 +179,7 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 				onEnterRef.current(nearRef.current.sceneId);
 			}
 		};
-		const onKeyUp = (e: KeyboardEvent) => {
-			delete keys[e.code];
-		};
+		const onKeyUp = (e: KeyboardEvent) => { delete keys[e.code]; };
 
 		window.addEventListener("keydown", onKeyDown);
 		window.addEventListener("keyup", onKeyUp);
@@ -150,15 +210,12 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 			if (keys["Space"]) camera.position.y += speed * delta;
 			if (keys["KeyQ"] || keys["ControlLeft"]) camera.position.y -= speed * delta;
 
-			// Proximity check
+			// Proximity label
 			let nearest: SceneNode | null = null;
 			let nearestDist = Infinity;
 			for (const node of nodes) {
 				const d = camera.position.distanceTo(node.worldPos);
-				if (d < 20 && d < nearestDist) {
-					nearest = node;
-					nearestDist = d;
-				}
+				if (d < 20 && d < nearestDist) { nearest = node; nearestDist = d; }
 			}
 
 			if (nearest !== null) {
@@ -175,6 +232,27 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 				lastNearId = "";
 				nearRef.current = null;
 				setNearScene(null);
+			}
+
+			// Lazy load/dispose + scale animation
+			for (const entry of entries.values()) {
+				const d = camera.position.distanceTo(entry.worldPos);
+
+				// Load when approaching (max 3 concurrent)
+				if (entry.status === "idle" && d < 120 && activeLoads < 3) {
+					loadSplat(entry);
+				}
+				// Dispose when retreating (hysteresis: 150 > 120 prevents thrash)
+				if ((entry.status === "loaded" || entry.status === "loading") && d > 150) {
+					disposeSplat(entry);
+				}
+				// Scale animation: tiny star far away → ghost orb close
+				if (entry.status === "loaded" && entry.splatMesh) {
+					const t = Math.max(0, Math.min(1, (70 - d) / 62));
+					entry.splatMesh.scale.setScalar(0.04 + t * 0.26);
+				}
+				// Hide placeholder once splat is loaded and close
+				entry.placeholderMesh.visible = entry.status !== "loaded" || d > 70;
 			}
 
 			renderer.render(threeScene, camera);
@@ -198,8 +276,15 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 			window.removeEventListener("keydown", onKeyDown);
 			window.removeEventListener("keyup", onKeyUp);
 			controls.dispose();
-			for (const splat of splatMeshes) {
-				threeScene.remove(splat);
+			for (const ctrl of abortControllers.values()) ctrl.abort();
+			for (const entry of entries.values()) {
+				if (entry.splatMesh) {
+					threeScene.remove(entry.splatMesh);
+					entry.splatMesh.dispose();
+				}
+				entry.placeholderMesh.geometry.dispose();
+				(entry.placeholderMesh.material as THREE.MeshBasicMaterial).dispose();
+				threeScene.remove(entry.placeholderMesh);
 			}
 			starGeo.dispose();
 			starMat.dispose();
@@ -274,26 +359,8 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 						pointerEvents: "none",
 					}}
 				>
-					<div
-						style={{
-							position: "absolute",
-							top: "50%",
-							left: 0,
-							right: 0,
-							height: 1,
-							background: "rgba(255,255,255,0.65)",
-						}}
-					/>
-					<div
-						style={{
-							position: "absolute",
-							left: "50%",
-							top: 0,
-							bottom: 0,
-							width: 1,
-							background: "rgba(255,255,255,0.65)",
-						}}
-					/>
+					<div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: 1, background: "rgba(255,255,255,0.65)" }} />
+					<div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.65)" }} />
 				</div>
 			)}
 		</div>
