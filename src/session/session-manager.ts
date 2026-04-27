@@ -36,8 +36,8 @@ export class SessionManager {
 		private viewerBaseUrl: string,
 		private skillLoader: SkillLoader,
 		private generationQueue: GenerationQueue,
-		private projectRoot: string = process.cwd(),
 		private agentTtlMs: number = DEFAULT_AGENT_TTL_MS,
+		private projectRoot: string = process.cwd(),
 		private bus?: RealtimeBus,
 		_publicUploadsUrl?: string,
 	) {}

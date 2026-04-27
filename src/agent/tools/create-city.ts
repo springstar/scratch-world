@@ -3,6 +3,7 @@ import type { Static } from "@sinclair/typebox";
 import { Type } from "@sinclair/typebox";
 import { CityGenerator, DEFAULT_CITY_CONFIG } from "../../citygen/city-generator.js";
 import { cityDataToSceneData } from "../../citygen/scene-adapter.js";
+import type { SceneManager } from "../../scene/scene-manager.js";
 
 const parameters = Type.Object({
 	prompt: Type.String({ description: "Describe the settlement's theme and atmosphere" }),
@@ -47,7 +48,11 @@ const SIZE_CONFIGS: Record<Size, SizeConfig> = {
 	},
 };
 
-export function createCityTool(): AgentTool<typeof parameters> {
+export function createCityTool(
+	sceneManager?: SceneManager,
+	ownerId?: () => string,
+	viewerUrl?: (id: string) => string,
+): AgentTool<typeof parameters> {
 	return {
 		name: "create_city",
 		label: "Generate settlement layout",
@@ -136,6 +141,35 @@ export function createCityTool(): AgentTool<typeof parameters> {
 				buildings,
 			};
 
+			// When called with a sceneManager (direct tool path), create the scene immediately.
+			if (sceneManager && ownerId && viewerUrl) {
+				const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, sceneData);
+				const url = viewerUrl(scene.sceneId);
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({
+								sceneId: scene.sceneId,
+								title: scene.title,
+								viewUrl: url,
+								buildingCount: buildings.length,
+								segmentCount: highways + roads,
+								layout,
+								sceneData,
+							}),
+						},
+					],
+					details: {
+						sceneId: scene.sceneId,
+						title: scene.title,
+						buildingCount: buildings.length,
+						segmentCount: highways + roads,
+					},
+				};
+			}
+
+			// Agent path: return layout data for the agent to pass to create_scene.
 			return {
 				content: [
 					{

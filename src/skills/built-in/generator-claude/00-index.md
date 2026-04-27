@@ -1,5 +1,7 @@
 # generator-claude
 
+This skill generates `SceneData` objects for the Three.js renderer. Claude fills `sceneData` and `sceneCode` directly in the tool call.
+
 ## Mandatory rules
 
 1. **Every call must have `sceneCode`** — never pass only `sceneData` JSON objects.

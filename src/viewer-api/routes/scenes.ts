@@ -13,7 +13,7 @@ import { generatePropRoute } from "./generate-prop.js";
 export function scenesRoute(
 	sceneManager: SceneManager,
 	projectRoot: string,
-	bus: RealtimeBus,
+	bus?: RealtimeBus,
 	sessionManager?: SessionManager,
 ): Hono {
 	const app = new Hono();
@@ -42,11 +42,11 @@ export function scenesRoute(
 	});
 
 	// GET /scenes/:sceneId — viewer fetches scene data on mount.
-	// No auth: all scenes are openly readable by sceneId.
-	// (Access control lives at the channel/agent layer, not the viewer API.)
+	// Access requires a valid share token (?token=) or owner session (?session=web:<userId>).
 	app.get("/:sceneId", async (c) => {
 		const { sceneId } = c.req.param();
 		const tokenParam = c.req.query("token");
+		const sessionParam = c.req.query("session");
 
 		let scene = tokenParam ? await sceneManager.getSceneByShareToken(tokenParam) : null;
 
@@ -58,8 +58,15 @@ export function scenesRoute(
 
 		if (scene.sceneId !== sceneId) return c.json({ error: "Scene not found" }, 404);
 
+		// Auth check: require token or owner session
+		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
+		const isOwner = sessionUserId !== null && scene.ownerId === sessionUserId;
+		const hasToken = tokenParam !== undefined && tokenParam !== null && tokenParam !== "";
+		if (!hasToken && !isOwner) {
+			return c.json({ error: "Forbidden" }, 403);
+		}
+
 		// Sync active scene for the session so the agent always operates on the scene the viewer is showing.
-		const sessionParam = c.req.query("session");
 		if (sessionParam && sessionManager) {
 			sessionManager.setActiveScene(sessionParam, sceneId).catch(() => {});
 		}
@@ -159,7 +166,7 @@ export function scenesRoute(
 		};
 
 		const updated = await sceneManager.addPropsToScene(sceneId, [newObject]);
-		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+		bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 
 		return c.json({ ok: true, objectId, version: updated.version });
 	});
@@ -174,7 +181,7 @@ export function scenesRoute(
 
 		try {
 			const updated = await sceneManager.removePropFromScene(sceneId, propId);
-			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
@@ -240,7 +247,7 @@ export function scenesRoute(
 		};
 
 		const updated = await sceneManager.addPropsToScene(sceneId, [newNpc]);
-		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+		bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 		return c.json({ ok: true, objectId, version: updated.version });
 	});
 
@@ -263,7 +270,7 @@ export function scenesRoute(
 				...(body.name !== undefined ? { name: body.name, description: body.personality ?? undefined } : {}),
 				...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
 			});
-			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
@@ -281,7 +288,7 @@ export function scenesRoute(
 
 		try {
 			const updated = await sceneManager.removePropFromScene(sceneId, npcId);
-			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
@@ -323,7 +330,7 @@ export function scenesRoute(
 		};
 
 		const updated = await sceneManager.addPropsToScene(sceneId, [newPortal]);
-		bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+		bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 		return c.json({ ok: true, objectId, version: updated.version });
 	});
 
@@ -337,7 +344,7 @@ export function scenesRoute(
 
 		try {
 			const updated = await sceneManager.removePropFromScene(sceneId, portalId);
-			bus.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
+			bus?.publish(sessionParam!, { type: "scene_updated", sceneId: updated.sceneId, version: updated.version });
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
@@ -533,7 +540,7 @@ export function scenesRoute(
 		if (!brokenCode) return c.json({ error: "No cached code to fix" }, 400);
 
 		if (sessionParam) {
-			bus.publish(sessionParam, {
+			bus?.publish(sessionParam, {
 				type: "skill_generating",
 				objectId,
 				objectName: obj.name,
@@ -549,13 +556,13 @@ export function scenesRoute(
 					metadata: { skill: { name: "code-gen", config: { ...existingConfig, cachedCode: fixedCode } } },
 				});
 				if (sessionParam) {
-					bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
-					bus.publish(sessionParam, { type: "scene_updated", sceneId, version: saved.version });
+					bus?.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+					bus?.publish(sessionParam, { type: "scene_updated", sceneId, version: saved.version });
 				}
 				console.log(`[fix-skill] patched ${objectId}: ${body.error}`);
 			} catch (err) {
 				console.error(`[fix-skill] failed for ${objectId}:`, err);
-				if (sessionParam) bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+				if (sessionParam) bus?.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
 			}
 		})();
 
@@ -588,14 +595,14 @@ export function scenesRoute(
 		});
 
 		if (sessionParam) {
-			bus.publish(sessionParam, {
+			bus?.publish(sessionParam, {
 				type: "skill_generating",
 				objectId,
 				objectName: obj.name,
 				sceneId,
 				skillName: "code-gen",
 			});
-			bus.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
+			bus?.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
 		}
 
 		// Background generation
@@ -620,14 +627,14 @@ export function scenesRoute(
 						metadata: { skill: { name: "code-gen", config: { ...updatedConfig, cachedCode: display.code } } },
 					});
 					if (sessionParam) {
-						bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
-						bus.publish(sessionParam, { type: "scene_updated", sceneId, version: saved.version });
+						bus?.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+						bus?.publish(sessionParam, { type: "scene_updated", sceneId, version: saved.version });
 					}
 					console.log(`[regen-skill] done for ${objectId}`);
 				}
 			} catch (err) {
 				console.error(`[regen-skill] failed for ${objectId}:`, err);
-				if (sessionParam) bus.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
+				if (sessionParam) bus?.publish(sessionParam, { type: "skill_ready", objectId, sceneId });
 			}
 		})();
 
@@ -652,7 +659,7 @@ export function scenesRoute(
 		});
 
 		if (sessionParam) {
-			bus.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
+			bus?.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
 		}
 		return c.json({ ok: true, version: updated.version });
 	});

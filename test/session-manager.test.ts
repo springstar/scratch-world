@@ -68,6 +68,8 @@ function makeMsg() {
 
 vi.mock("../src/agent/agent-factory.js", () => ({
 	createAgent: vi.fn(),
+	BASE_SYSTEM_PROMPT: "base system prompt",
+	PROVIDER_BASE_PROMPT: "provider base prompt",
 }));
 
 import { createAgent } from "../src/agent/agent-factory.js";

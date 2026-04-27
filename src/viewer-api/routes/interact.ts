@@ -14,7 +14,21 @@ interface InteractBody {
 	interactionData?: Record<string, unknown>;
 }
 
-export function interactRoute(sessionManager: SessionManager, sceneManager: SceneManager, bus: RealtimeBus): Hono {
+export function interactRoute(
+	sessionManager: SessionManager,
+	sceneManagerOrBus: SceneManager | RealtimeBus,
+	busOrUndefined?: RealtimeBus,
+): Hono {
+	let sceneManager: SceneManager | undefined;
+	let bus: RealtimeBus;
+	// Support both (sessionManager, bus) and (sessionManager, sceneManager, bus) signatures
+	if (busOrUndefined !== undefined) {
+		sceneManager = sceneManagerOrBus as SceneManager;
+		bus = busOrUndefined;
+	} else {
+		sceneManager = undefined;
+		bus = sceneManagerOrBus as RealtimeBus;
+	}
 	const app = new Hono();
 
 	// POST /interact — viewer sends user interaction.
@@ -34,7 +48,7 @@ export function interactRoute(sessionManager: SessionManager, sceneManager: Scen
 		}
 
 		// ── Behavior skill fast path ──────────────────────────────────────────
-		const scene = await sceneManager.getScene(sceneId);
+		const scene = sceneManager ? await sceneManager.getScene(sceneId) : null;
 		if (scene) {
 			const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
 			const skillMeta = obj?.metadata.skill;

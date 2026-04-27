@@ -181,6 +181,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
   const [loadPct, setLoadPct] = useState(0);
+  const [loadingTooLong, setLoadingTooLong] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [physicsReady, setPhysicsReady] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -373,6 +374,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
     setStatus("loading");
     setLoadPct(0);
+    setLoadingTooLong(false);
     setIsLocked(false);
     setPhysicsReady(false);
     setClickIndicator(null);
@@ -455,6 +457,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const abortCtrl = new AbortController();
     let splatInitialized = false;
     let splat: SplatMesh | null = null;
+
+    // Show "refresh" hint if still loading after 30s
+    const loadingHintTimer = setTimeout(() => setLoadingTooLong(true), 30_000);
 
     (async () => {
       try {
@@ -2361,6 +2366,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       doPlacementRef.current = null;
       exitPlacementRef.current = null;
       cleanupPhysics?.();
+      clearTimeout(loadingHintTimer);
       abortCtrl.abort();
       splat?.dispose();
       renderer.dispose();
@@ -2638,6 +2644,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           <div style={{ fontSize: 14, letterSpacing: 0.5 }}>
             Loading{loadPct > 0 ? ` ${loadPct}%` : "…"}
           </div>
+          {loadingTooLong && (
+            <div style={{ fontSize: 12, color: "rgba(255,180,100,0.8)", textAlign: "center", maxWidth: 240 }}>
+              Taking longer than usual. Try refreshing the page.
+            </div>
+          )}
           <div style={{
             width: 120, height: 3, borderRadius: 2,
             background: "rgba(255,255,255,0.1)",

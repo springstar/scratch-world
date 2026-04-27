@@ -134,7 +134,10 @@ export class SceneManager {
 		return this.repo.findById(sceneId);
 	}
 
-	async listScenes(): Promise<Scene[]> {
+	async listScenes(ownerId?: string): Promise<Scene[]> {
+		if (ownerId) {
+			return this.repo.findByOwner(ownerId);
+		}
 		const provider = this.providerRegistryRef.current.getActiveProvider().name;
 		return this.repo.findByProvider(provider);
 	}

@@ -93,8 +93,8 @@ async function main() {
 		viewerBaseUrl,
 		skillLoader,
 		generationQueue,
-		projectRoot,
 		undefined,
+		projectRoot,
 		bus,
 		publicUploadsUrl,
 	);

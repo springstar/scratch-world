@@ -161,6 +161,9 @@ export function UniverseView({ scenes, onEnterScene }: Props) {
 				abortControllers.delete(entry.sceneId);
 			}
 			if (entry.splatMesh) {
+				// Silence internal AbortError from stream cancellation — SplatMesh's
+				// async reader throws when the underlying stream is aborted.
+				entry.splatMesh.initialized.catch(() => {});
 				threeScene.remove(entry.splatMesh);
 				entry.splatMesh.dispose();
 				entry.splatMesh = null;
