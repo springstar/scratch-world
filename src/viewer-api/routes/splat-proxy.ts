@@ -57,9 +57,8 @@ export function splatProxyRoute(sceneManager: SceneManager, marbleApiKey: string
 			});
 		} catch (err) {
 			clearTimeout(timer);
-			const msg = err instanceof Error ? err.message : String(err);
-			console.error(`[splat-proxy] fetch failed for ${sceneId}: ${msg}`);
-			return c.json({ error: `Failed to fetch splat: ${msg}` }, 502);
+			console.error(`[splat-proxy] fetch failed for ${sceneId}:`, err);
+			return c.json({ error: "Upstream service unavailable" }, 502);
 		}
 		clearTimeout(timer);
 

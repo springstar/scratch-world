@@ -15,7 +15,7 @@
  */
 
 import * as THREE from "three/webgpu";
-import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 
 // Map each skybox preset to a Polyhaven HDRI asset ID.
 // 1k resolution: good quality for IBL, small download (~100–300 KB).
@@ -46,7 +46,7 @@ const inFlight = new Map<string, Promise<THREE.Texture>>();
 const bgCache   = new Map<string, THREE.Texture>();
 const bgInFlight = new Map<string, Promise<THREE.Texture>>();
 
-const rgbeLoader = new RGBELoader();
+const rgbeLoader = new HDRLoader();
 
 /**
  * Load (or return cached) PMREM environment texture for a skybox preset.

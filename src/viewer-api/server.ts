@@ -13,6 +13,7 @@ import type { SceneProviderRegistry } from "../providers/scene-provider-registry
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { SessionManager } from "../session/session-manager.js";
 import type { SkillLoader } from "../skills/skill-loader.js";
+import { rateLimit } from "./rate-limit.js";
 import { RealtimeBus } from "./realtime.js";
 import { chatRoute } from "./routes/chat.js";
 import { colliderProxyRoute } from "./routes/collider-proxy.js";
@@ -30,7 +31,7 @@ import { createUserAssetsTable, userAssetsRoute } from "./routes/user-assets.js"
 
 export interface ViewerApiOptions {
 	port: number;
-	db: Database.Database;
+	db?: Database.Database | null;
 	sceneManager: SceneManager;
 	sessionManager: SessionManager;
 	skillLoader: SkillLoader;
@@ -51,7 +52,7 @@ export interface ViewerApiServer {
 export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	const {
 		port,
-		db,
+		db = null,
 		sceneManager,
 		sessionManager,
 		skillLoader,
@@ -98,9 +99,11 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 
 	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus, sessionManager));
 	app.route("/screenshots", screenshotsRoute);
+	app.use("/interact/*", rateLimit(30, 60_000, "interact"));
 	app.route("/interact", interactRoute(sessionManager, sceneManager, bus));
 	app.route("/npc-interact", npcInteractRoute(sceneManager, bus));
 	app.route("/npc-greet", npcGreetRoute(sceneManager, bus));
+	app.use("/chat/*", rateLimit(20, 60_000, "chat"));
 	app.route("/chat", chatRoute(sessionManager, bus));
 	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));
 	app.route("/collider", colliderProxyRoute(sceneManager, marbleApiKey));

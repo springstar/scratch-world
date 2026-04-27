@@ -1,5 +1,4 @@
 import "dotenv/config";
-import Database from "better-sqlite3";
 import { ChannelGateway } from "./channels/gateway.js";
 import { StdinAdapter } from "./channels/stdin/adapter.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
@@ -16,18 +15,35 @@ import { SessionManager } from "./session/session-manager.js";
 import { SkillLoader } from "./skills/skill-loader.js";
 import { SqliteSceneRepo } from "./storage/sqlite/scene-repo.js";
 import { SqliteSessionRepo } from "./storage/sqlite/session-repo.js";
+import type { SceneRepository, SessionRepository } from "./storage/types.js";
 import { RealtimeBus } from "./viewer-api/realtime.js";
 import { startViewerApi } from "./viewer-api/server.js";
 
 async function main() {
 	// ── Storage ────────────────────────────────────────────────────────────
 	const dbUrl = process.env.DATABASE_URL ?? "sqlite:./dev.db";
-	const dbPath = dbUrl.replace(/^sqlite:/, "");
-	const db = new Database(dbPath);
-	db.pragma("journal_mode = WAL");
+	let sceneRepo: SceneRepository;
+	let sessionRepo: SessionRepository;
+	let sqliteDb: import("better-sqlite3").Database | null = null;
 
-	const sceneRepo = new SqliteSceneRepo(db);
-	const sessionRepo = new SqliteSessionRepo(db);
+	if (dbUrl.startsWith("postgres")) {
+		const { PgSceneRepo } = await import("./storage/postgres/scene-repo.js");
+		const { PgSessionRepo } = await import("./storage/postgres/session-repo.js");
+		const sr = new PgSceneRepo(dbUrl);
+		const sess = new PgSessionRepo(dbUrl);
+		await sr.init();
+		await sess.init();
+		sceneRepo = sr;
+		sessionRepo = sess;
+	} else {
+		const Database = (await import("better-sqlite3")).default;
+		const dbPath = dbUrl.replace(/^sqlite:/, "");
+		const db = new Database(dbPath);
+		db.pragma("journal_mode = WAL");
+		sqliteDb = db;
+		sceneRepo = new SqliteSceneRepo(db);
+		sessionRepo = new SqliteSessionRepo(db);
+	}
 
 	// ── Project root ───────────────────────────────────────────────────────
 	const projectRoot = process.cwd();
@@ -104,7 +120,7 @@ async function main() {
 
 	startViewerApi({
 		port: viewerPort,
-		db,
+		db: sqliteDb,
 		sceneManager,
 		sessionManager,
 		skillLoader,

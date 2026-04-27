@@ -43,7 +43,8 @@ const EXT_FALLBACK: Record<string, string> = {
 	webm: "video/webm",
 };
 
-export function createUserAssetsTable(db: Database.Database): void {
+export function createUserAssetsTable(db: Database.Database | null): void {
+	if (!db) return;
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS user_assets (
 			id          TEXT PRIMARY KEY,
@@ -58,12 +59,13 @@ export function createUserAssetsTable(db: Database.Database): void {
 	`);
 }
 
-export function userAssetsRoute(db: Database.Database, projectRoot: string): Hono {
+export function userAssetsRoute(db: Database.Database | null, projectRoot: string): Hono {
 	const app = new Hono();
 
 	// POST /user-assets?session=<sessionId>
 	// multipart/form-data: file + optional name
 	app.post("/", async (c) => {
+		if (!db) return c.json({ error: "User assets not available in this configuration" }, 501);
 		const sessionId = c.req.query("session");
 		if (!sessionId) return c.json({ error: "Missing session query param" }, 400);
 
@@ -107,6 +109,7 @@ export function userAssetsRoute(db: Database.Database, projectRoot: string): Hon
 
 	// GET /user-assets?session=<sessionId>
 	app.get("/", (c) => {
+		if (!db) return c.json({ assets: [] });
 		const sessionId = c.req.query("session");
 		if (!sessionId) return c.json({ error: "Missing session query param" }, 400);
 

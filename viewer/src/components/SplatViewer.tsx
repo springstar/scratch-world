@@ -29,7 +29,7 @@ import {
   BufferAttribute,
 } from "three";
 import * as THREE from "three";
-import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
+import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { SparkRenderer, SplatMesh, SplatEdit, SplatEditSdf, SplatEditSdfType, SplatEditRgbaBlendMode, imageSplats, textSplats, generators } from "@sparkjsdev/spark";
 import { getRapier } from "../physics/init-rapier.js";
@@ -412,7 +412,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     let sceneEnvMap: import("three").Texture | null = null;
     const pmrem = new PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
-    new RGBELoader()
+    new HDRLoader()
       .loadAsync("https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr")
       .then((equirect) => {
         sceneEnvMap = pmrem.fromEquirectangular(equirect).texture;

@@ -10,6 +10,14 @@ import type { SessionManager } from "../../session/session-manager.js";
 import type { RealtimeBus } from "../realtime.js";
 import { generatePropRoute } from "./generate-prop.js";
 
+function apiError(err: unknown, fallback: string): string {
+	const e = err as { status?: number; message?: string };
+	// Domain errors (4xx) carry user-facing messages — return them as-is.
+	// Generic 500 errors log server-side; return opaque fallback to client.
+	if (e.status && e.status < 500) return e.message ?? fallback;
+	return fallback;
+}
+
 export function scenesRoute(
 	sceneManager: SceneManager,
 	projectRoot: string,
@@ -185,7 +193,8 @@ export function scenesRoute(
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json({ error: err instanceof Error ? err.message : "Failed to remove prop" }, status as 404 | 500);
+			if (status === 500) console.error("[scenes] remove prop error:", err);
+			return c.json({ error: apiError(err, "Failed to remove prop") }, status as 404 | 500);
 		}
 	});
 
@@ -274,7 +283,8 @@ export function scenesRoute(
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json({ error: err instanceof Error ? err.message : "Failed to update NPC" }, status as 404 | 500);
+			if (status === 500) console.error("[scenes] update NPC error:", err);
+			return c.json({ error: apiError(err, "Failed to update NPC") }, status as 404 | 500);
 		}
 	});
 
@@ -292,7 +302,8 @@ export function scenesRoute(
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json({ error: err instanceof Error ? err.message : "Failed to remove NPC" }, status as 404 | 500);
+			if (status === 500) console.error("[scenes] remove NPC error:", err);
+			return c.json({ error: apiError(err, "Failed to remove NPC") }, status as 404 | 500);
 		}
 	});
 
@@ -348,7 +359,8 @@ export function scenesRoute(
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json({ error: err instanceof Error ? err.message : "Failed to remove portal" }, status as 404 | 500);
+			if (status === 500) console.error("[scenes] remove portal error:", err);
+			return c.json({ error: apiError(err, "Failed to remove portal") }, status as 404 | 500);
 		}
 	});
 
@@ -399,7 +411,8 @@ export function scenesRoute(
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json({ error: err instanceof Error ? err.message : "Failed to update object" }, status as 404 | 500);
+			if (status === 500) console.error("[scenes] update object error:", err);
+			return c.json({ error: apiError(err, "Failed to update object") }, status as 404 | 500);
 		}
 	});
 
@@ -457,10 +470,8 @@ export function scenesRoute(
 			return c.json({ ok: true, newPersonality, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json(
-				{ error: err instanceof Error ? err.message : "Failed to apply evolution" },
-				status as 404 | 500,
-			);
+			if (status === 500) console.error("[scenes] apply evolution error:", err);
+			return c.json({ error: apiError(err, "Failed to apply evolution") }, status as 404 | 500);
 		}
 	});
 
@@ -491,10 +502,8 @@ export function scenesRoute(
 			return c.json({ ok: true, version: updated.version });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json(
-				{ error: err instanceof Error ? err.message : "Failed to reject evolution" },
-				status as 404 | 500,
-			);
+			if (status === 500) console.error("[scenes] reject evolution error:", err);
+			return c.json({ error: apiError(err, "Failed to reject evolution") }, status as 404 | 500);
 		}
 	});
 
@@ -509,10 +518,8 @@ export function scenesRoute(
 			return c.json({ ok: true });
 		} catch (err) {
 			const status = (err as { status?: number }).status ?? 500;
-			return c.json(
-				{ error: err instanceof Error ? err.message : "Failed to delete scene" },
-				status as 403 | 404 | 500,
-			);
+			if (status === 500) console.error("[scenes] delete scene error:", err);
+			return c.json({ error: apiError(err, "Failed to delete scene") }, status as 403 | 404 | 500);
 		}
 	});
 

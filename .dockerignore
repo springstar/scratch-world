@@ -1,0 +1,9 @@
+node_modules
+viewer/node_modules
+dist
+viewer/dist
+.env
+*.db
+uploads
+.claude
+.git
