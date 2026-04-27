@@ -766,7 +766,7 @@ export function ChatDrawer({ messages, sceneCards, isTyping, onSend, onSceneSele
               {/* Upload button */}
               <button
                 onClick={() => fileInputRef.current?.click()}
-                title="上传图片"
+                title="上传图片/草图/视频"
                 style={{
                   flexShrink: 0,
                   width: 40,

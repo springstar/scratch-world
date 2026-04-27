@@ -16,6 +16,7 @@ import { evolveSkillsTool } from "./tools/evolve-skills.js";
 import { findGltfAssetsTool } from "./tools/find-gltf-assets.js";
 import { getSceneTool } from "./tools/get-scene.js";
 import { imageToSdTool } from "./tools/image-to-3d.js";
+import { linkScenesTool } from "./tools/link-scenes.js";
 import { listScenesTool } from "./tools/list-scenes.js";
 import { placePropTool } from "./tools/place-prop.js";
 import { removePropTool } from "./tools/remove-prop.js";
@@ -315,11 +316,12 @@ When a user asks what scenes they have, call list_scenes.
 When a user wants to load, open, switch to, or revisit a scene by name (e.g. "加载阶梯教室", "open my classroom", "切换到森林场景"), call list_scenes first, find the best title match, then share its view link — do NOT create a new scene.
 When you need the current state of a scene, call get_scene.
 When a user asks to share a scene, call share_scene.
+When you have created 2 or more related scenes in a conversation (e.g. a mansion interior + exterior, a forest + a cave, a city district + a rooftop) and the user wants to explore them as a connected world, or when the user asks to "connect", "link", "join", or "add a portal between" scenes, call link_scenes. Set bidirectional=true if the user should be able to travel back. After linking, share the fromScene viewUrl so the user can enter and walk to the portal.
 When a user uploads a photo and asks to place it in the scene, turn it into a 3D object, or add it to the asset library, call image_to_3d with the imagePath from the [上传图片: path=...] prefix and a descriptive assetName. After success, call add_to_catalog to persist it, then call place_prop to add it to the active scene.
 When a user uploads a video and asks to generate a scene from it (e.g. "用这个视频生成场景", "generate a world from this video", "按照这段视频生成场景"), call create_scene with videoPath set to the path from [上传视频: path=...] and a descriptive prompt.
-When a user uploads 2 or more photos and asks to generate a scene (e.g. "用这些图片生成场景", "generate a world from these photos"), call create_scene with imagePaths set to ALL [上传图片: path=...] values from context. Azimuths are assigned automatically — do NOT specify them.
-When a user uploads a single photo and asks to recreate, match, restore, or generate a scene from it (e.g. "recreate this", "make this scene", "generate a world like this photo", "按照这张照片生成场景"), follow this workflow:
-1. Analyze the photo thoroughly in your reasoning before writing any prompt:
+When a user uploads 2 or more images and asks to generate a scene (e.g. "用这些图片生成场景", "generate a world from these photos"), call create_scene with imagePaths set to ALL [上传图片: path=...] values from context. Azimuths are assigned automatically — do NOT specify them. This works equally well with photos, concept art, illustrations, or sketches. TIP: 360° equirectangular panoramas (2:1 aspect ratio) produce especially coherent and navigable Marble scenes — if the user has one, prefer it over regular photos.
+When a user uploads a single image and asks to recreate, match, restore, or generate a scene from it (e.g. "recreate this", "make this scene", "generate a world like this", "按照这张图生成场景"), follow this workflow. The image can be a photo, hand-drawn sketch, concept art, illustration, or painting — Marble accepts all of these as valid scene references. NOTE: if the image is a 360° equirectangular panorama (very wide, 2:1 ratio), it will produce a more spatially coherent world — no special flag needed, just pass it via imagePath as usual.
+1. Analyze the image thoroughly in your reasoning before writing any prompt:
    - Dominant anchor: what ONE element fills 40%+ of the view? (river, mountain, building facade, courtyard, etc.)
    - Space type: indoor or outdoor? Approximate dimensions/scale?
    - Architectural/cultural style: building materials, roof form, windows, regional identity
@@ -487,6 +489,7 @@ export function createAgent(
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),
 				placePropTool(sceneManager, viewerUrl, bus, sessionId),
 				removePropTool(sceneManager),
+				linkScenesTool(sceneManager, viewerUrl),
 				attachSkillTool(sceneManager, bus, sessionId),
 				analyzeSceneObjectsTool(sceneManager),
 				webSearchTool(),

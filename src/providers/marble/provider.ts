@@ -134,7 +134,6 @@ async function uploadLocalFile(apiKey: string, filePath: string, kind: "image" |
 		"/marble/v1/media-assets:prepare_upload",
 		{ file_name: fileName, kind, extension: ext },
 	);
-	console.log(`[MarbleProvider] prepare_upload response: ${JSON.stringify(prepared.media_asset)}`);
 
 	const fileBytes = await readFile(filePath);
 	const mimeType = kind === "image" ? `image/${ext === "jpg" ? "jpeg" : ext}` : `video/${ext}`;

@@ -13,17 +13,19 @@ const parameters = Type.Object({
 	imagePath: Type.Optional(
 		Type.String({
 			description:
-				"Local file path of a single uploaded photo for Marble generation. " +
-				"Use the path from [上传图片: path=...]. Use imagePaths instead when multiple images are uploaded.",
+				"Local file path of a single uploaded image for Marble generation. " +
+				"Use the path from [上传图片: path=...]. Use imagePaths instead when multiple images are uploaded. " +
+				"360° equirectangular panoramas (2:1 aspect ratio) produce especially coherent and navigable worlds.",
 		}),
 	),
 	imagePaths: Type.Optional(
 		Type.Array(Type.String(), {
 			description:
-				"Local file paths of multiple uploaded photos for Marble multi-image generation. " +
+				"Local file paths of multiple uploaded images for Marble multi-image generation. " +
 				"Collect ALL [上传图片: path=...] values from context and pass them here. " +
 				"Azimuths are assigned automatically (0°, 360°/n, 720°/n, …). " +
-				"Use this whenever 2 or more images are present in context.",
+				"Use this whenever 2 or more images are present in context. " +
+				"Works with photos, concept art, illustrations, or sketches.",
 		}),
 	),
 	imageUrl: Type.Optional(
