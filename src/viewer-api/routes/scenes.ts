@@ -35,6 +35,7 @@ export function scenesRoute(
 					updatedAt: s.updatedAt,
 					thumbnailUrl,
 					provider: s.providerRef.provider,
+					splatUrl: s.sceneData.splatUrl ?? null,
 				};
 			}),
 		});

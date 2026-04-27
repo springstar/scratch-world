@@ -13,6 +13,7 @@ import { StarField } from "./components/StarField.js";
 import { ChatDrawer } from "./components/ChatDrawer.js";
 import type { ChatMessage, SceneCard, PendingImage, UploadedMedia } from "./components/ChatDrawer.js";
 import { fetchScene, postInteract, postNpcInteract, postNpcGreet, postChat, connectRealtime, addSceneProp, addSceneNpc, fetchSceneList, deleteScene, patchSceneObjectPosition, addScenePortal } from "./api.js";
+import type { SceneListItem } from "./api.js";
 import type { SceneResponse, Viewpoint, RealtimeEvent, SceneObject, DisplayConfig, ResourceNeed, ResourceChoice } from "./types.js";
 import type { PendingNpc, GeneratedNpcModel } from "./components/NpcDrawer.js";
 import { PropDrawer } from "./components/PropDrawer.js";
@@ -25,6 +26,7 @@ import { PositionPicker } from "./components/PositionPicker.js";
 import { ScriptPanel } from "./components/ScriptPanel.js";
 import { resolveVideoDisplay } from "./behaviors/video-player-client.js";
 import { CameraPanel } from "./components/CameraPanel.js";
+import { UniverseView } from "./components/UniverseView.js";
 
 function buildScriptContext(scene: SceneResponse, objectId: string, cameraPos?: { x: number; y: number; z: number }): ScriptContext {
   const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
@@ -114,6 +116,7 @@ export function App() {
   const sceneRef = useRef<SceneResponse | null>(null);
   const [urlInfo] = useState(parseUrl);
   const [sceneError, setSceneError] = useState<string | null>(null);
+  const [universeScenes, setUniverseScenes] = useState<SceneListItem[]>([]);
 
   // Chat state
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -295,6 +298,14 @@ export function App() {
     if (!urlInfo.sceneId) return;
     loadSceneById(urlInfo.sceneId, { token: urlInfo.token ?? undefined, session: sessionId });
   }, [urlInfo.sceneId, urlInfo.token, sessionId, loadSceneById]);
+
+  // Fetch scene list for UniverseView when no scene is active
+  useEffect(() => {
+    if (scene !== null) return;
+    fetchSceneList()
+      .then((list) => setUniverseScenes(list.filter((s) => s.status === "ready")))
+      .catch(console.warn);
+  }, [scene]);
 
   // Auto-run scripts for props that have skill.config.autoRun = true
   useEffect(() => {
@@ -1207,8 +1218,12 @@ export function App() {
           <div style={{ color: "#f88", fontFamily: "monospace", padding: 24, background: "#111", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {sceneError}
           </div>
-        ) : scene ? (
-          scene.sceneData.splatUrl ? (
+        ) : !scene ? (
+          <UniverseView
+            scenes={universeScenes}
+            onEnterScene={(sceneId) => loadSceneById(sceneId, { session: sessionId })}
+          />
+        ) : scene.sceneData.splatUrl ? (
             <SplatViewer
               splatUrl={scene.sceneData.splatUrl}
               colliderMeshUrl={scene.sceneData.colliderMeshUrl ? `/collider/${scene.sceneId}` : undefined}
@@ -1332,48 +1347,7 @@ export function App() {
                 onScreenshot={uploadScreenshot}
               />
           )
-        ) : (
-          <div style={{ position: "relative", width: "100%", height: "100%" }}>
-            <StarField />
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                pointerEvents: "none",
-              }}
-            >
-              {/* Aurora glow */}
-              <div style={{
-                position: "absolute",
-                width: 360,
-                height: 180,
-                borderRadius: "50%",
-                background: "radial-gradient(ellipse, rgba(100,60,220,0.18) 0%, rgba(40,80,200,0.10) 50%, transparent 80%)",
-                filter: "blur(32px)",
-              }} />
-              <div style={{
-                fontSize: 36,
-                fontWeight: 300,
-                fontFamily: "Georgia, serif",
-                letterSpacing: 3,
-                marginBottom: 14,
-                background: "linear-gradient(135deg, #c8b0ff 0%, #a8d4ff 60%, #e0ccff 100%)",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
-              }}>
-                Scratch World
-              </div>
-              <div style={{ fontSize: 15, color: "rgba(170,185,235,0.6)", fontFamily: "system-ui, -apple-system, sans-serif", letterSpacing: 0.5 }}>
-                描述一个你想探索的世界
-              </div>
-            </div>
-          </div>
-        )}
+        }
 
         {scene && (
           <>

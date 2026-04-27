@@ -377,6 +377,7 @@ export interface SceneListItem {
   updatedAt: number;
   thumbnailUrl: string | null;
   provider: string;
+  splatUrl: string | null;
 }
 
 export async function fetchSceneList(): Promise<SceneListItem[]> {

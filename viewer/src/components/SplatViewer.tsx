@@ -449,7 +449,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     (window as unknown as Record<string, unknown>).__sparkRenderer = sparkRenderer;
     scene.add(sparkRenderer);
 
-    const splat = new SplatMesh({ url: splatUrl });
+    const splat = new SplatMesh({ url: splatUrl, lod: true });
     splat.rotation.x = Math.PI;
     scene.add(splat);
     let splatInitialized = false;
