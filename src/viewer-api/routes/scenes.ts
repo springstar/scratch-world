@@ -7,6 +7,7 @@ import { fixGeneratedCode } from "../../behaviors/skills/code-gen.js";
 import { applyEvolutionDelta, type EvolutionLogEntry } from "../../npcs/npc-evolution.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SessionManager } from "../../session/session-manager.js";
+import type { WorldEventRepository } from "../../storage/types.js";
 import type { RealtimeBus } from "../realtime.js";
 import { generatePropRoute } from "./generate-prop.js";
 
@@ -23,6 +24,7 @@ export function scenesRoute(
 	projectRoot: string,
 	bus?: RealtimeBus,
 	sessionManager?: SessionManager,
+	worldEventRepo?: WorldEventRepository,
 ): Hono {
 	const app = new Hono();
 
@@ -669,6 +671,22 @@ export function scenesRoute(
 			bus?.publish(sessionParam, { type: "scene_updated", sceneId, version: updated.version });
 		}
 		return c.json({ ok: true, version: updated.version });
+	});
+
+	// GET /scenes/:sceneId/events — world journal events for a living scene
+	app.get("/:sceneId/events", async (c) => {
+		const { sceneId } = c.req.param();
+		const limit = Math.min(Number(c.req.query("limit") ?? 20), 100);
+
+		if (!worldEventRepo) return c.json({ events: [] });
+
+		try {
+			const events = await worldEventRepo.getRecentEvents(sceneId, limit);
+			return c.json({ events });
+		} catch (err) {
+			console.error("[scenes/events] failed to load events:", err);
+			return c.json({ error: "Failed to load events" }, 500);
+		}
 	});
 
 	return app;

@@ -37,3 +37,21 @@ export interface SessionRepository {
 	findById(sessionId: string): Promise<SessionRecord | null>;
 	delete(sessionId: string): Promise<void>;
 }
+
+// ── World events persistence ───────────────────────────────────────────────
+
+export interface WorldEvent {
+	eventId: string;
+	sceneId: string;
+	worldTime: number; // 0–86400 game seconds at time of event
+	eventType: string; // "weather" | "discovery" | "npc_activity" | "anomaly"
+	headline: string; // ≤60 chars — shown in WorldJournal
+	body: string; // 1–2 sentence flavor text
+	createdAt: number; // Unix ms
+}
+
+export interface WorldEventRepository {
+	init(): Promise<void>;
+	addEvent(event: WorldEvent): Promise<void>;
+	getRecentEvents(sceneId: string, limit?: number): Promise<WorldEvent[]>;
+}

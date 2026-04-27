@@ -15,7 +15,8 @@ import { SessionManager } from "./session/session-manager.js";
 import { SkillLoader } from "./skills/skill-loader.js";
 import { SqliteSceneRepo } from "./storage/sqlite/scene-repo.js";
 import { SqliteSessionRepo } from "./storage/sqlite/session-repo.js";
-import type { SceneRepository, SessionRepository } from "./storage/types.js";
+import { SqliteWorldEventRepo } from "./storage/sqlite/world-event-repo.js";
+import type { SceneRepository, SessionRepository, WorldEventRepository } from "./storage/types.js";
 import { RealtimeBus } from "./viewer-api/realtime.js";
 import { startViewerApi } from "./viewer-api/server.js";
 
@@ -24,17 +25,22 @@ async function main() {
 	const dbUrl = process.env.DATABASE_URL ?? "sqlite:./dev.db";
 	let sceneRepo: SceneRepository;
 	let sessionRepo: SessionRepository;
+	let worldEventRepo: WorldEventRepository;
 	let sqliteDb: import("better-sqlite3").Database | null = null;
 
 	if (dbUrl.startsWith("postgres")) {
 		const { PgSceneRepo } = await import("./storage/postgres/scene-repo.js");
 		const { PgSessionRepo } = await import("./storage/postgres/session-repo.js");
+		const { PgWorldEventRepo } = await import("./storage/postgres/world-event-repo.js");
 		const sr = new PgSceneRepo(dbUrl);
 		const sess = new PgSessionRepo(dbUrl);
+		const wer = new PgWorldEventRepo(dbUrl);
 		await sr.init();
 		await sess.init();
+		await wer.init();
 		sceneRepo = sr;
 		sessionRepo = sess;
+		worldEventRepo = wer;
 	} else {
 		const Database = (await import("better-sqlite3")).default;
 		const dbPath = dbUrl.replace(/^sqlite:/, "");
@@ -43,6 +49,9 @@ async function main() {
 		sqliteDb = db;
 		sceneRepo = new SqliteSceneRepo(db);
 		sessionRepo = new SqliteSessionRepo(db);
+		const wer = new SqliteWorldEventRepo(db);
+		await wer.init();
+		worldEventRepo = wer;
 	}
 
 	// ── Project root ───────────────────────────────────────────────────────
@@ -130,6 +139,7 @@ async function main() {
 		marbleApiKey: marbleKey,
 		publicUploadsUrl,
 		bus,
+		worldEventRepo,
 	});
 
 	// ── Start ──────────────────────────────────────────────────────────────

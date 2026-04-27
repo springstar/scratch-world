@@ -28,6 +28,8 @@ export interface EnvironmentConfig {
 	ambientLight?: string;
 	weather?: string;
 	timeOfDay?: string;
+	worldTime?: number; // 0–86400 seconds since midnight; undefined = static scene
+	livingEnabled?: boolean; // opt-in: enables WorldHeartbeat autonomous evolution
 	effects?: {
 		bloom?: { strength?: number; radius?: number; threshold?: number };
 	};

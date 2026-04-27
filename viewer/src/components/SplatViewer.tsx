@@ -52,6 +52,7 @@ import type { AssetEntry } from "../renderer/asset-catalog.js";
 import { ASSET_CATALOG } from "../renderer/asset-catalog.js";
 import { patchSceneObjectPosition } from "../api.js";
 import { PropPicker } from "./PropPicker.js";
+import { WorldJournal } from "./WorldJournal.js";
 import { ObjectRendererRegistry } from "../renderer/object-renderer.js";
 import { GltfObjectRenderer } from "../renderer/gltf-object-renderer.js";
 import { createPortalManager } from "../behaviors/portal-manager.js";
@@ -176,6 +177,36 @@ export interface CameraAPI {
 // Module-level registry so it is constructed once and shared across mounts.
 const objectRendererRegistry = new ObjectRendererRegistry().register(new GltfObjectRenderer());
 
+// Lighting keyframes for worldTime (0–86400 seconds since midnight).
+// night(0h) → dawn(6h) → noon(12h) → dusk(18h) → night(24h)
+const WT_KF = [
+  { t: 0,     sunColor: 0x2244aa, sunIntensity: 0.05, hemiIntensity: 0.15 },
+  { t: 21600, sunColor: 0xff8c42, sunIntensity: 0.8,  hemiIntensity: 0.35 },
+  { t: 43200, sunColor: 0xfff4e0, sunIntensity: 1.2,  hemiIntensity: 0.7  },
+  { t: 64800, sunColor: 0xff8c42, sunIntensity: 0.8,  hemiIntensity: 0.35 },
+  { t: 86400, sunColor: 0x2244aa, sunIntensity: 0.05, hemiIntensity: 0.15 },
+];
+
+function applyWorldTimeLighting(
+  worldTime: number,
+  hemiLight: HemisphereLight,
+  sunLight: DirectionalLight,
+): void {
+  let idx = 0;
+  for (let i = 0; i < WT_KF.length - 1; i++) {
+    if (worldTime >= WT_KF[i].t && worldTime <= WT_KF[i + 1].t) {
+      idx = i;
+      break;
+    }
+  }
+  const a = WT_KF[idx];
+  const b = WT_KF[idx + 1];
+  const alpha = a.t === b.t ? 0 : (worldTime - a.t) / (b.t - a.t);
+  sunLight.intensity = a.sunIntensity + (b.sunIntensity - a.sunIntensity) * alpha;
+  hemiLight.intensity = a.hemiIntensity + (b.hemiIntensity - a.hemiIntensity) * alpha;
+  sunLight.color.copy(new Color(a.sunColor).lerp(new Color(b.sunColor), alpha));
+}
+
 export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoints, splatGroundOffset, sceneId, sessionId, onInteract, onAddProp, onPlacementRequest, onNpcApproach, onNpcLeave, onNpcClick, onPlayerMove, npcSpeech: _npcSpeech, speechFeed, npcPlacementPending, onNpcPlace, onNpcPlaceCancel, propPlacementPending, onPropPlace, onPropPlaceCancel, portalPlacementPending, onPortalPlace, onPortalPlaceCancel, onPortalApproach, onPortalLeave, onPropApproach, onPropLeave, ghostModelUrl, ghostModelScale, scriptMeshPlacementPending, scriptMeshes, onScriptMeshPlace, onScriptMeshPlaceCancel, onCameraReady }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -187,6 +218,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const [editMode, setEditMode] = useState(false);
   const editModeRef = useRef(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [journalOpen, setJournalOpen] = useState(false);
+  const [journalBadge, setJournalBadge] = useState(0);
+  const journalOpenRef = useRef(false);
+  journalOpenRef.current = journalOpen;
   const selectedPropRef = useRef<AssetEntry | null>(null);
   const onAddPropRef = useRef(onAddProp);
   onAddPropRef.current = onAddProp;
@@ -407,6 +442,11 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     const fillLight = new DirectionalLight(0xadd8e6, 0.3);
     fillLight.position.set(-8, 5, -5);
     scene.add(fillLight);
+
+    // Register worldTime lighting callback — called by App when world_time_update arrives
+    (window as unknown as Record<string, unknown>).__setWorldTime = (t: number) => {
+      applyWorldTimeLighting(t, hemiLight, sunLight);
+    };
 
     // IBL env map — loaded async from Polyhaven; applied to GLTF props once ready.
     let sceneEnvMap: import("three").Texture | null = null;
@@ -2345,6 +2385,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       delete (window as unknown as Record<string, unknown>).__nearbyNpc;
       delete (window as unknown as Record<string, unknown>).__nearbyInteractiveProp;
       delete (window as unknown as Record<string, unknown>).__worldAPI;
+      delete (window as unknown as Record<string, unknown>).__setWorldTime;
       scene.remove(avatarGroup);
       avatarMat.dispose();
       // Clean up any objects spawned by code-gen scripts.
@@ -2621,6 +2662,71 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           >✕</button>
         </div>
       )}
+      {/* World Journal panel + toggle button */}
+      {status === "ready" && sceneId && (
+        <>
+          <WorldJournal
+            sceneId={sceneId}
+            isOpen={journalOpen}
+            onClose={() => setJournalOpen(false)}
+            onNewEvent={() => {
+              if (!journalOpenRef.current) setJournalBadge((n) => n + 1);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setJournalOpen((v) => !v);
+              if (!journalOpen) setJournalBadge(0);
+            }}
+            title="世界日志"
+            style={{
+              position: "absolute",
+              bottom: 12,
+              right: 12,
+              width: 36,
+              height: 36,
+              borderRadius: "50%",
+              background: journalOpen
+                ? "rgba(120, 80, 200, 0.55)"
+                : "rgba(20, 15, 40, 0.75)",
+              border: "1px solid rgba(120, 80, 200, 0.4)",
+              backdropFilter: "blur(8px)",
+              color: "rgba(200, 180, 255, 0.9)",
+              fontSize: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 40,
+              transition: "background 0.15s",
+            }}
+          >
+            {journalBadge > 0 && !journalOpen ? (
+              <span style={{
+                position: "absolute",
+                top: -4,
+                right: -4,
+                background: "rgba(180, 100, 255, 0.9)",
+                color: "#fff",
+                fontSize: 9,
+                fontWeight: 700,
+                borderRadius: "50%",
+                minWidth: 14,
+                height: 14,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "0 3px",
+              }}>
+                {journalBadge > 9 ? "9+" : journalBadge}
+              </span>
+            ) : null}
+            ◈
+          </button>
+        </>
+      )}
+
       <style>{`
         @keyframes clickDot {
           0%   { opacity: 1; transform: scale(1); }

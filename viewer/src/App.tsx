@@ -493,6 +493,18 @@ export function App() {
         setSkillGenerating({ objectId: event.objectId, objectName: event.objectName });
       } else if (event.type === "skill_ready") {
         setSkillGenerating((prev) => (prev?.objectId === event.objectId ? null : prev));
+      } else if (event.type === "world_time_update") {
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        const setWorldTime = (window as unknown as Record<string, unknown>).__setWorldTime as
+          | ((t: number) => void)
+          | undefined;
+        setWorldTime?.(event.worldTime);
+      } else if (event.type === "world_event") {
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        const addWorldEvent = (window as unknown as Record<string, unknown>).__addWorldEvent as
+          | ((e: { eventId: string; worldTime: number; eventType: string; headline: string; body: string }) => void)
+          | undefined;
+        addWorldEvent?.({ eventId: event.eventId, worldTime: event.worldTime, eventType: event.eventType, headline: event.headline, body: event.body });
       }
     });
     return disconnect;

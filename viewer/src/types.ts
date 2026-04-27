@@ -137,4 +137,14 @@ export type RealtimeEvent =
       sceneId: string;
     }
   | { type: "skill_generating"; objectId: string; objectName: string; sceneId: string; skillName: string }
-  | { type: "skill_ready"; objectId: string; sceneId: string };
+  | { type: "skill_ready"; objectId: string; sceneId: string }
+  | { type: "world_time_update"; sceneId: string; worldTime: number }
+  | {
+      type: "world_event";
+      sceneId: string;
+      eventId: string;
+      worldTime: number;
+      eventType: string;
+      headline: string;
+      body: string;
+    };

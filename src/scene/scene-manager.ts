@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import type { SceneProviderRegistry } from "../providers/scene-provider-registry.js";
 import type { ProviderResult } from "../providers/types.js";
 import type { SceneRepository } from "../storage/types.js";
-import type { Scene, SceneData } from "./types.js";
+import type { EnvironmentConfig, Scene, SceneData } from "./types.js";
 
 export class SceneManager {
 	constructor(
@@ -329,6 +329,23 @@ export class SceneManager {
 			providerRef: updated.providerRef,
 			createdAt: now,
 		});
+		await this.repo.save(updated);
+		return updated;
+	}
+
+	/** Update environment fields without creating a version snapshot.
+	 * Used by WorldHeartbeat for continuous background updates (worldTime, weather, etc.).
+	 */
+	async updateEnvironment(sceneId: string, patch: Partial<EnvironmentConfig>): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		const updated: Scene = {
+			...scene,
+			sceneData: {
+				...scene.sceneData,
+				environment: { ...scene.sceneData.environment, ...patch },
+			},
+			updatedAt: Date.now(),
+		};
 		await this.repo.save(updated);
 		return updated;
 	}

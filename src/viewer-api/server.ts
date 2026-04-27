@@ -13,6 +13,8 @@ import type { SceneProviderRegistry } from "../providers/scene-provider-registry
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { SessionManager } from "../session/session-manager.js";
 import type { SkillLoader } from "../skills/skill-loader.js";
+import type { WorldEventRepository } from "../storage/types.js";
+import { startWorldHeartbeat } from "../world/world-heartbeat.js";
 import { rateLimit } from "./rate-limit.js";
 import { RealtimeBus } from "./realtime.js";
 import { chatRoute } from "./routes/chat.js";
@@ -42,6 +44,8 @@ export interface ViewerApiOptions {
 	publicUploadsUrl?: string;
 	/** Pre-created bus shared with GenerationQueue. If omitted, a new bus is created. */
 	bus?: RealtimeBus;
+	/** Optional world event store for Living Worlds event generation. */
+	worldEventRepo?: WorldEventRepository;
 }
 
 export interface ViewerApiServer {
@@ -61,6 +65,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 		projectRoot,
 		marbleApiKey,
 		publicUploadsUrl = `http://localhost:${opts.port}`,
+		worldEventRepo,
 	} = opts;
 	const bus = opts.bus ?? new RealtimeBus();
 
@@ -97,7 +102,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	});
 	app.use("/uploads/*", serveStatic({ root: projectRoot }));
 
-	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus, sessionManager));
+	app.route("/scenes", scenesRoute(sceneManager, projectRoot, bus, sessionManager, worldEventRepo));
 	app.route("/screenshots", screenshotsRoute);
 	app.use("/interact/*", rateLimit(30, 60_000, "interact"));
 	app.route("/interact", interactRoute(sessionManager, sceneManager, bus));
@@ -146,13 +151,16 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	});
 
 	// Start NPC world heartbeat — fire spontaneous NPC speech for active sessions
-	const stopHeartbeat = startNpcHeartbeat(sceneManager, bus);
+	const stopNpcHeartbeat = startNpcHeartbeat(sceneManager, bus);
+	// Start world evolution heartbeat — advance worldTime for living scenes
+	const stopWorldHeartbeat = startWorldHeartbeat(sceneManager, bus, worldEventRepo);
 
 	return {
 		bus,
 		close: () =>
 			new Promise((resolve, reject) => {
-				stopHeartbeat();
+				stopNpcHeartbeat();
+				stopWorldHeartbeat();
 				wss.close((err) => {
 					if (err) reject(err);
 					else resolve();
