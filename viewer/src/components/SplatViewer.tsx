@@ -53,6 +53,7 @@ import { ASSET_CATALOG } from "../renderer/asset-catalog.js";
 import { patchSceneObjectPosition } from "../api.js";
 import { PropPicker } from "./PropPicker.js";
 import { WorldJournal } from "./WorldJournal.js";
+import { BulletinBoard } from "./BulletinBoard.js";
 import { ObjectRendererRegistry } from "../renderer/object-renderer.js";
 import { GltfObjectRenderer } from "../renderer/gltf-object-renderer.js";
 import { createPortalManager } from "../behaviors/portal-manager.js";
@@ -222,6 +223,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
   const [journalBadge, setJournalBadge] = useState(0);
   const journalOpenRef = useRef(false);
   journalOpenRef.current = journalOpen;
+  const [bulletinBoard, setBulletinBoard] = useState<{ objectId: string; objectName: string } | null>(null);
   const selectedPropRef = useRef<AssetEntry | null>(null);
   const onAddPropRef = useRef(onAddProp);
   onAddPropRef.current = onAddProp;
@@ -2173,10 +2175,26 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               }
             }
             const propId = pickObject(camera, props.flatMap((p) => p.meshes), 4);
-            if (propId) { onInteractRef.current?.(propId, "pick"); return; }
+            if (propId) {
+              const obj = sceneObjectsRef.current?.find((o) => o.objectId === propId);
+              if (obj?.type === "bulletin_board") {
+                setBulletinBoard({ objectId: propId, objectName: obj.name });
+              } else {
+                onInteractRef.current?.(propId, "pick");
+              }
+              return;
+            }
             // Fallback: if no mesh was hit but a skill prop is nearby, interact with it directly
             const nearbyPropId = (window as unknown as Record<string, unknown>).__nearbyInteractiveProp as string | null;
-            if (nearbyPropId) { onInteractRef.current?.(nearbyPropId, "pick"); return; }
+            if (nearbyPropId) {
+              const nearbyObj = sceneObjectsRef.current?.find((o) => o.objectId === nearbyPropId);
+              if (nearbyObj?.type === "bulletin_board") {
+                setBulletinBoard({ objectId: nearbyPropId, objectName: nearbyObj.name });
+              } else {
+                onInteractRef.current?.(nearbyPropId, "pick");
+              }
+              return;
+            }
             // Last fallback: find the closest interactable prop in the scene (no distance limit)
             {
               const camPos = camera.position;
@@ -2662,6 +2680,16 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           >✕</button>
         </div>
       )}
+      {/* Bulletin board overlay */}
+      {bulletinBoard && sceneId && (
+        <BulletinBoard
+          sceneId={sceneId}
+          objectId={bulletinBoard.objectId}
+          objectName={bulletinBoard.objectName}
+          onClose={() => setBulletinBoard(null)}
+        />
+      )}
+
       {/* World Journal panel + toggle button */}
       {status === "ready" && sceneId && (
         <>

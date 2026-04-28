@@ -118,6 +118,7 @@ export function buildPerceptionContext(
 	playerPosition: Vec3 | undefined,
 	environment: { timeOfDay?: string; weather?: string },
 	sceneCaption?: string,
+	recentWorldEvents?: string[],
 ): string {
 	const lines: string[] = [];
 
@@ -183,6 +184,11 @@ export function buildPerceptionContext(
 			return `${o.name}[${o.type}]（${dir} ${d.toFixed(1)}米）`;
 		});
 		lines.push(`附近物件：${parts.join("、")}`);
+	}
+
+	// ── Recent world events ──────────────────────────────────────────────────
+	if (recentWorldEvents && recentWorldEvents.length > 0) {
+		lines.push(`世界近事：${recentWorldEvents.slice(0, 2).join("；")}`);
 	}
 
 	return lines.join("\n");

@@ -350,6 +350,23 @@ export class SceneManager {
 		return updated;
 	}
 
+	/** Merge patch into a single object's metadata without creating a version snapshot.
+	 * Used for bulletin board messages and similar low-frequency object state updates.
+	 */
+	async patchObjectMetadata(sceneId: string, objectId: string, patch: Record<string, unknown>): Promise<Scene> {
+		const scene = await this.requireScene(sceneId);
+		const objects = scene.sceneData.objects.map((o) =>
+			o.objectId === objectId ? { ...o, metadata: { ...o.metadata, ...patch } } : o,
+		);
+		const updated: Scene = {
+			...scene,
+			sceneData: { ...scene.sceneData, objects },
+			updatedAt: Date.now(),
+		};
+		await this.repo.save(updated);
+		return updated;
+	}
+
 	/** Called by GenerationQueue when the provider returns a ProviderResult.
 	 * Fills in the real sceneData and marks status "ready".
 	 */

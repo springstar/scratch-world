@@ -1,4 +1,5 @@
 import type { SceneManager } from "../scene/scene-manager.js";
+import type { WorldEventRepository } from "../storage/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
 import { buildPerceptionContext, extractSceneCaption } from "./npc-perception.js";
 import { reactAsNpcNoCD, spontaneousNpcLine } from "./npc-runner.js";
@@ -16,9 +17,13 @@ const DIALOGUE_CHANCE = 0.4; // 40% chance of NPC-to-NPC exchange when 2+ NPCs p
  *
  * Returns a stop function that cancels the interval.
  */
-export function startNpcHeartbeat(sceneManager: SceneManager, bus: RealtimeBus): () => void {
+export function startNpcHeartbeat(
+	sceneManager: SceneManager,
+	bus: RealtimeBus,
+	eventStore?: WorldEventRepository,
+): () => void {
 	const timer = setInterval(() => {
-		void tick(sceneManager, bus);
+		void tick(sceneManager, bus, eventStore);
 	}, TICK_INTERVAL_MS);
 
 	// Prevent the interval from keeping the process alive
@@ -27,14 +32,19 @@ export function startNpcHeartbeat(sceneManager: SceneManager, bus: RealtimeBus):
 	return () => clearInterval(timer);
 }
 
-async function tick(sceneManager: SceneManager, bus: RealtimeBus): Promise<void> {
+async function tick(sceneManager: SceneManager, bus: RealtimeBus, eventStore?: WorldEventRepository): Promise<void> {
 	const sessions = bus.activeSessions();
 	if (sessions.length === 0) return;
 
-	await Promise.allSettled(sessions.map((sessionId) => tickSession(sceneManager, bus, sessionId)));
+	await Promise.allSettled(sessions.map((sessionId) => tickSession(sceneManager, bus, sessionId, eventStore)));
 }
 
-async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, sessionId: string): Promise<void> {
+async function tickSession(
+	sceneManager: SceneManager,
+	bus: RealtimeBus,
+	sessionId: string,
+	eventStore?: WorldEventRepository,
+): Promise<void> {
 	// Only bother if the session is still connected
 	if (!bus.hasSubscribers(sessionId)) return;
 
@@ -52,6 +62,9 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 
 	const env = scene.sceneData.environment;
 	const sceneCaption = extractSceneCaption(scene.sceneData.objects);
+	const recentWorldEvents = eventStore
+		? (await eventStore.getRecentEvents(scene.sceneId, 2)).map((e) => e.headline)
+		: undefined;
 
 	// With 2+ NPCs, 40% chance of generating a short NPC-to-NPC exchange
 	if (npcs.length >= 2 && Math.random() < DIALOGUE_CHANCE) {
@@ -69,8 +82,22 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 			? (npcB.metadata.npcMemory as string[]).filter((x): x is string => typeof x === "string")
 			: [];
 
-		const perceptionA = buildPerceptionContext(npcA, scene.sceneData.objects, undefined, env, sceneCaption);
-		const perceptionB = buildPerceptionContext(npcB, scene.sceneData.objects, undefined, env, sceneCaption);
+		const perceptionA = buildPerceptionContext(
+			npcA,
+			scene.sceneData.objects,
+			undefined,
+			env,
+			sceneCaption,
+			recentWorldEvents,
+		);
+		const perceptionB = buildPerceptionContext(
+			npcB,
+			scene.sceneData.objects,
+			undefined,
+			env,
+			sceneCaption,
+			recentWorldEvents,
+		);
 
 		try {
 			// NPC A initiates
@@ -128,7 +155,14 @@ async function tickSession(sceneManager: SceneManager, bus: RealtimeBus, session
 		return raw.filter((x): x is string => typeof x === "string");
 	})();
 
-	const perceptionContext = buildPerceptionContext(candidate, scene.sceneData.objects, undefined, env, sceneCaption);
+	const perceptionContext = buildPerceptionContext(
+		candidate,
+		scene.sceneData.objects,
+		undefined,
+		env,
+		sceneCaption,
+		recentWorldEvents,
+	);
 
 	try {
 		const text = await spontaneousNpcLine(candidate.objectId, candidate.name, personality, memory, perceptionContext);

@@ -30,6 +30,8 @@ export interface EnvironmentConfig {
 	timeOfDay?: string;
 	worldTime?: number; // 0–86400 seconds since midnight; undefined = static scene
 	livingEnabled?: boolean; // opt-in: enables WorldHeartbeat autonomous evolution
+	visitCount?: number; // cumulative visitor count (incremented on scene view)
+	lastVisitedAt?: number; // Unix ms of most recent visit
 	effects?: {
 		bloom?: { strength?: number; radius?: number; threshold?: number };
 	};

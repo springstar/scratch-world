@@ -265,6 +265,9 @@ export function App() {
           autoRanScriptsRef.current.clear();
           history.pushState(null, "", `/scene/${sceneId}?session=${sessionId}`);
 
+          // Record visit (fire-and-forget — don't block scene render on failure)
+          fetch(`/scenes/${sceneId}/visit`, { method: "POST" }).catch(() => {});
+
           // Inject newly added objects into the live physics world so a full
           // page reload is not required after placement.
           const prevIds = new Set(prevObjects.map((o) => o.objectId));

@@ -110,6 +110,8 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	app.route("/npc-greet", npcGreetRoute(sceneManager, bus));
 	app.use("/chat/*", rateLimit(20, 60_000, "chat"));
 	app.route("/chat", chatRoute(sessionManager, bus));
+	// Bulletin board posts: 5 per IP per 5 minutes
+	app.use("/scenes/*/objects/*/messages", rateLimit(5, 5 * 60_000, "bulletin"));
 	app.route("/splat", splatProxyRoute(sceneManager, marbleApiKey));
 	app.route("/collider", colliderProxyRoute(sceneManager, marbleApiKey));
 	app.route("/gltf-proxy", gltfProxyRoute());
@@ -151,7 +153,7 @@ export function startViewerApi(opts: ViewerApiOptions): ViewerApiServer {
 	});
 
 	// Start NPC world heartbeat — fire spontaneous NPC speech for active sessions
-	const stopNpcHeartbeat = startNpcHeartbeat(sceneManager, bus);
+	const stopNpcHeartbeat = startNpcHeartbeat(sceneManager, bus, worldEventRepo);
 	// Start world evolution heartbeat — advance worldTime for living scenes
 	const stopWorldHeartbeat = startWorldHeartbeat(sceneManager, bus, worldEventRepo);
 

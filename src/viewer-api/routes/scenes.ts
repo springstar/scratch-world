@@ -689,5 +689,69 @@ export function scenesRoute(
 		}
 	});
 
+	// POST /scenes/:sceneId/visit — increment visit counter, update lastVisitedAt
+	app.post("/:sceneId/visit", async (c) => {
+		const { sceneId } = c.req.param();
+		try {
+			const scene = await sceneManager.getScene(sceneId);
+			if (!scene) return c.json({ error: "Scene not found" }, 404);
+			const env = scene.sceneData.environment;
+			const updated = await sceneManager.updateEnvironment(sceneId, {
+				visitCount: (env.visitCount ?? 0) + 1,
+				lastVisitedAt: Date.now(),
+			});
+			return c.json({
+				visitCount: updated.sceneData.environment.visitCount,
+				lastVisitedAt: updated.sceneData.environment.lastVisitedAt,
+			});
+		} catch (err) {
+			console.error("[scenes/visit] failed:", err);
+			return c.json({ error: "Failed to record visit" }, 500);
+		}
+	});
+
+	// GET /scenes/:sceneId/objects/:objectId/messages — read bulletin board messages
+	app.get("/:sceneId/objects/:objectId/messages", async (c) => {
+		const { sceneId, objectId } = c.req.param();
+		try {
+			const scene = await sceneManager.getScene(sceneId);
+			if (!scene) return c.json({ error: "Scene not found" }, 404);
+			const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+			if (!obj) return c.json({ error: "Object not found" }, 404);
+			if (obj.type !== "bulletin_board") return c.json({ error: "Not a bulletin board" }, 400);
+			const messages = Array.isArray(obj.metadata.messages) ? obj.metadata.messages : [];
+			return c.json({ messages });
+		} catch (err) {
+			console.error("[scenes/messages] read failed:", err);
+			return c.json({ error: "Failed to read messages" }, 500);
+		}
+	});
+
+	// POST /scenes/:sceneId/objects/:objectId/messages — post a bulletin board message
+	app.post("/:sceneId/objects/:objectId/messages", async (c) => {
+		const { sceneId, objectId } = c.req.param();
+		try {
+			const body = await c.req.json<{ text?: unknown }>();
+			const text = typeof body.text === "string" ? body.text.trim().slice(0, 50) : null;
+			if (!text) return c.json({ error: "text required (max 50 chars)" }, 400);
+
+			const scene = await sceneManager.getScene(sceneId);
+			if (!scene) return c.json({ error: "Scene not found" }, 404);
+			const obj = scene.sceneData.objects.find((o) => o.objectId === objectId);
+			if (!obj) return c.json({ error: "Object not found" }, 404);
+			if (obj.type !== "bulletin_board") return c.json({ error: "Not a bulletin board" }, 400);
+
+			const existing = Array.isArray(obj.metadata.messages)
+				? (obj.metadata.messages as Array<{ text: string; timestamp: number }>)
+				: [];
+			const messages = [{ text, timestamp: Date.now() }, ...existing].slice(0, 20);
+			await sceneManager.patchObjectMetadata(sceneId, objectId, { messages });
+			return c.json({ messages });
+		} catch (err) {
+			console.error("[scenes/messages] post failed:", err);
+			return c.json({ error: "Failed to post message" }, 500);
+		}
+	});
+
 	return app;
 }
