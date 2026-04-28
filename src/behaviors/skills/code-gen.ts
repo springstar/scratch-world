@@ -1,4 +1,6 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import { createHash } from "crypto";
+import type { GeneCandidateRepository } from "../../storage/types.js";
 import type {
 	BehaviorContext,
 	DisplayConfig,
@@ -9,6 +11,29 @@ import type {
 } from "../types.js";
 import { detectCategoryFromRequest, detectCodeCategory } from "./categories/index.js";
 import { detectEffect } from "./effects/index.js";
+
+// Module-level repo reference — injected by the server at startup.
+let _geneCandidateRepo: GeneCandidateRepository | null = null;
+
+/** Call once at server startup to enable Gene auto-growth. */
+export function configureGeneAutoGrow(repo: GeneCandidateRepository): void {
+	_geneCandidateRepo = repo;
+}
+
+function saveGeneCandidate(request: string, code: string): void {
+	if (!_geneCandidateRepo) return;
+	const candidateId = createHash("sha256").update(code).digest("hex").slice(0, 16);
+	const candidate = {
+		candidateId,
+		request: request.slice(0, 120),
+		code,
+		validated: false,
+		createdAt: Date.now(),
+	};
+	_geneCandidateRepo.upsert(candidate).catch((err: unknown) => {
+		console.warn("[gene-auto-grow] upsert failed:", err);
+	});
+}
 
 /**
  * Increment when WorldAPI surface changes in a breaking way.
@@ -857,6 +882,9 @@ export const codeGenSkill: SkillHandler = {
 						`[code-gen] static review violations (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
 						violations,
 					);
+				} else {
+					// Clean code — auto-save as Gene candidate for future review.
+					saveGeneCandidate(userRequest, code);
 				}
 				break;
 			}

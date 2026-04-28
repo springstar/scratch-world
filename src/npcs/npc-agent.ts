@@ -4,6 +4,7 @@ import { getModel, Type } from "@mariozechner/pi-ai";
 import { createLogger } from "../logger.js";
 import type { SceneObject } from "../scene/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
+import { type MemoryEntry, memoryToPrompt, normalizeMemory } from "./memory.js";
 import { buildPerceptionContext, extractSceneCaption } from "./npc-perception.js";
 import { reactAsNpcNoCD } from "./npc-runner.js";
 import { loadNpcSkills } from "./npc-skills.js";
@@ -25,7 +26,7 @@ export async function runNpcAgent(opts: {
 	npcId: string;
 	npcName: string;
 	personality: string;
-	memory: string[];
+	memory: MemoryEntry[];
 	skillIds: string[];
 	perceptionContext: string;
 	userText: string;
@@ -55,7 +56,7 @@ export async function runNpcAgent(opts: {
 	const { promptAdditions, tools: skillTools } = loadNpcSkills(skillIds, { npcId, npcName, sessionId, sceneId, bus });
 	const skillSection = promptAdditions.length > 0 ? `\n\n[已装备技能]\n${promptAdditions.join("\n")}` : "";
 
-	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
+	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memoryToPrompt(memory)}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
 	// Build skill tool list for system prompt description
@@ -165,11 +166,7 @@ export async function runNpcAgent(opts: {
 					extractSceneCaption(sceneObjects),
 				);
 				const targetPersonality = (targetNpc.metadata?.npcPersonality as string | undefined) ?? "一个普通的村民";
-				const targetMemory: string[] = (() => {
-					const raw = targetNpc.metadata?.npcMemory;
-					if (!Array.isArray(raw)) return [];
-					return raw.filter((x): x is string => typeof x === "string");
-				})();
+				const targetMemory: MemoryEntry[] = normalizeMemory(targetNpc.metadata?.npcMemory);
 
 				// Generate the target NPC's reaction (bypasses cooldown — NPC-to-NPC)
 				const context = `${npcName}对你说："${text}"`;

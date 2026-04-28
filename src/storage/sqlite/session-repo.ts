@@ -8,6 +8,7 @@ interface SessionRow {
 	active_scene_id: string | null;
 	agent_messages: string;
 	updated_at: number;
+	signals?: string;
 }
 
 function rowToRecord(row: SessionRow): SessionRecord {
@@ -18,6 +19,7 @@ function rowToRecord(row: SessionRow): SessionRecord {
 		activeSceneId: row.active_scene_id,
 		agentMessages: row.agent_messages,
 		updatedAt: row.updated_at,
+		signals: row.signals ?? undefined,
 	};
 }
 
@@ -36,17 +38,24 @@ export class SqliteSessionRepo implements SessionRepository {
 				updated_at      INTEGER NOT NULL
 			);
 		`);
+		// Additive migration for existing DBs
+		try {
+			this.db.exec(`ALTER TABLE sessions ADD COLUMN signals TEXT DEFAULT '[]'`);
+		} catch {
+			/* already exists */
+		}
 	}
 
 	async save(session: SessionRecord): Promise<void> {
 		this.db
-			.prepare<[string, string, string, string | null, string, number]>(`
-				INSERT INTO sessions (session_id, user_id, channel_id, active_scene_id, agent_messages, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?)
+			.prepare<[string, string, string, string | null, string, number, string]>(`
+				INSERT INTO sessions (session_id, user_id, channel_id, active_scene_id, agent_messages, updated_at, signals)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(session_id) DO UPDATE SET
 					active_scene_id = excluded.active_scene_id,
 					agent_messages  = excluded.agent_messages,
-					updated_at      = excluded.updated_at
+					updated_at      = excluded.updated_at,
+					signals         = excluded.signals
 			`)
 			.run(
 				session.sessionId,
@@ -55,6 +64,7 @@ export class SqliteSessionRepo implements SessionRepository {
 				session.activeSceneId,
 				session.agentMessages,
 				session.updatedAt,
+				session.signals ?? "[]",
 			);
 	}
 
@@ -65,5 +75,10 @@ export class SqliteSessionRepo implements SessionRepository {
 
 	async delete(sessionId: string): Promise<void> {
 		this.db.prepare<[string]>("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
+	}
+
+	async listAll(): Promise<SessionRecord[]> {
+		const rows = this.db.prepare<[], SessionRow>("SELECT * FROM sessions ORDER BY updated_at DESC").all();
+		return rows.map(rowToRecord);
 	}
 }

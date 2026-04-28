@@ -1,14 +1,19 @@
 import { Hono } from "hono";
+import { normalizeMemory } from "../../npcs/memory.js";
 import { runNpcAgent } from "../../npcs/npc-agent.js";
-import { createEvolutionEntry, type EvolutionLogEntry, generateEvolutionDiff } from "../../npcs/npc-evolution.js";
+import { createNpcEvolutionEvent, generateEvolutionDiff, selectEvolutionStrategy } from "../../npcs/npc-evolution.js";
 import { buildPerceptionContext, extractSceneCaption } from "../../npcs/npc-perception.js";
 import { reactAsNpc, spontaneousNpcLine, updateMemory } from "../../npcs/npc-runner.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SceneObject } from "../../scene/types.js";
+import type { NpcEvolutionRepository, WorldEventRepository } from "../../storage/types.js";
+import { generateWorldEvent, makeWorldEventId } from "../../world/event-generator.js";
 import type { RealtimeBus } from "../realtime.js";
 
 // Number of interactions before a reflection job is triggered
 const EVOLUTION_THRESHOLD = 20;
+// Number of interactions before a world event is triggered
+const WORLD_EVENT_THRESHOLD = 5;
 
 // Keywords that indicate an action request — route to agent loop instead of fast reactAsNpc
 const ACTION_PATTERN =
@@ -56,11 +61,7 @@ function triggerPerceptionBus(
 	for (const bystander of bystanders) {
 		if (Math.random() > 0.15) continue;
 		const bystanderPersonality = (bystander.metadata.npcPersonality as string) ?? "一个普通的村民";
-		const bystanderMemory: string[] = (() => {
-			const raw = bystander.metadata.npcMemory;
-			if (!Array.isArray(raw)) return [];
-			return raw.filter((x): x is string => typeof x === "string");
-		})();
+		const bystanderMemory = normalizeMemory(bystander.metadata.npcMemory);
 		const perceptionNote = `附近的 ${speakingNpc.name} 正在和玩家对话。玩家说："${playerText.slice(0, 50)}"，${speakingNpc.name} 回应："${npcReply.slice(0, 50)}"`;
 
 		spontaneousNpcLine(bystander.objectId, bystander.name, bystanderPersonality, bystanderMemory, perceptionNote)
@@ -80,7 +81,12 @@ function triggerPerceptionBus(
 	}
 }
 
-export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): Hono {
+export function npcInteractRoute(
+	sceneManager: SceneManager,
+	bus: RealtimeBus,
+	eventStore?: WorldEventRepository,
+	evolutionRepo?: NpcEvolutionRepository,
+): Hono {
 	const app = new Hono();
 
 	app.post("/", async (c) => {
@@ -104,11 +110,7 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 
 		const personality = (npcObj.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
 		// Read persisted memory (stored as JSON array in metadata; default empty)
-		const memory: string[] = (() => {
-			const raw = npcObj.metadata.npcMemory;
-			if (!Array.isArray(raw)) return [];
-			return raw.filter((x): x is string => typeof x === "string");
-		})();
+		const memory = normalizeMemory(npcObj.metadata.npcMemory);
 		// Read assigned skill IDs
 		const skillIds: string[] = (() => {
 			const raw = npcObj.metadata.npcSkills;
@@ -138,21 +140,56 @@ export function npcInteractRoute(sceneManager: SceneManager, bus: RealtimeBus): 
 						typeof npcObj.metadata.npcInteractionCount === "number" ? npcObj.metadata.npcInteractionCount : 0;
 					const newCount = prevCount + 1;
 
-					const metadataPatch: Record<string, unknown> = { npcInteractionCount: newCount };
-					if (updatedMemory.length !== memory.length || updatedMemory.some((m, i) => m !== memory[i])) {
+					const metadataPatch: Record<string, unknown> = {
+						npcInteractionCount: newCount,
+						npcLastInteractedAt: Date.now(),
+					};
+					if (updatedMemory.length !== memory.length) {
 						metadataPatch.npcMemory = updatedMemory;
 					}
 
 					if (newCount % EVOLUTION_THRESHOLD === 0) {
-						const diff = await generateEvolutionDiff(npcObj.name, personality, updatedMemory);
+						const strategy = selectEvolutionStrategy(newCount);
+						const diff = await generateEvolutionDiff(npcObj.name, personality, updatedMemory, strategy);
 						if (diff) {
-							const existingLog: EvolutionLogEntry[] = (() => {
-								const raw = npcObj.metadata.npcEvolutionLog;
-								if (!Array.isArray(raw)) return [];
-								return raw as EvolutionLogEntry[];
-							})();
-							const entry = createEvolutionEntry(personality, diff, newCount);
-							metadataPatch.npcEvolutionLog = [...existingLog, entry];
+							if (evolutionRepo) {
+								const evt = createNpcEvolutionEvent(
+									npcObj.objectId,
+									sceneId,
+									"interaction",
+									strategy,
+									newCount,
+									personality,
+									diff,
+								);
+								await evolutionRepo.addEvent(evt).catch((err: unknown) => {
+									console.error("[npc-interact] evolution repo write failed:", err);
+								});
+							}
+						}
+					}
+
+					// Player-triggered world event: every WORLD_EVENT_THRESHOLD interactions with this NPC
+					if (eventStore && newCount % WORLD_EVENT_THRESHOLD === 0) {
+						const recentEvents = await eventStore.getRecentEvents(sceneId, 3);
+						const eventData = await generateWorldEvent(scene, recentEvents);
+						if (eventData) {
+							const worldEvent = {
+								eventId: makeWorldEventId(),
+								sceneId,
+								createdAt: Date.now(),
+								...eventData,
+							};
+							await eventStore.addEvent(worldEvent);
+							bus.publish(sessionId, {
+								type: "world_event",
+								sceneId,
+								eventId: worldEvent.eventId,
+								worldTime: worldEvent.worldTime,
+								eventType: worldEvent.eventType,
+								headline: worldEvent.headline,
+								body: worldEvent.body,
+							});
 						}
 					}
 

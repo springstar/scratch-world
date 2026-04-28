@@ -252,6 +252,27 @@ export function App() {
   // Track which NPCs have already greeted this session (key: sceneId:npcId)
   const greetedNpcsRef = useRef<Set<string>>(new Set());
 
+  // Persist NPC chat history in localStorage so conversation survives page reloads.
+  const NPC_HISTORY_CAP = 30;
+  const npcHistoryStorageKey = (sceneId: string, npcId: string) => `sw:npc:${sceneId}:${npcId}`;
+  const loadNpcHistory = (sceneId: string, npcId: string): NpcChatMessage[] => {
+    try {
+      const raw = localStorage.getItem(npcHistoryStorageKey(sceneId, npcId));
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as NpcChatMessage[];
+    } catch { /* ignore */ }
+    return [];
+  };
+
+  // Auto-save whenever history changes and an NPC is open
+  useEffect(() => {
+    if (!npcChatTarget || !scene) return;
+    const key = npcHistoryStorageKey(scene.sceneId, npcChatTarget.objectId);
+    const capped = npcChatHistory.slice(-NPC_HISTORY_CAP);
+    try { localStorage.setItem(key, JSON.stringify(capped)); } catch { /* quota exceeded */ }
+  }, [npcChatHistory, npcChatTarget, scene]);
+
   // Load a scene and jump to its first viewpoint
   const loadSceneById = useCallback(
     (sceneId: string, opts?: { token?: string; session?: string }) => {
@@ -508,6 +529,16 @@ export function App() {
           | ((e: { eventId: string; worldTime: number; eventType: string; headline: string; body: string }) => void)
           | undefined;
         addWorldEvent?.({ eventId: event.eventId, worldTime: event.worldTime, eventType: event.eventType, headline: event.headline, body: event.body });
+      } else if (event.type === "weather_overlay") {
+        if (event.sceneId && sceneRef.current && event.sceneId !== sceneRef.current.sceneId) return;
+        const win = window as unknown as Record<string, unknown>;
+        if (event.code) {
+          const apply = win.__applyWeatherOverlay as ((code: string) => void) | undefined;
+          apply?.(event.code as string);
+        } else {
+          const clear = win.__clearWeatherOverlay as (() => void) | undefined;
+          clear?.();
+        }
       }
     });
     return disconnect;
@@ -754,7 +785,7 @@ export function App() {
       if (obj?.type === "npc") {
         if (document.pointerLockElement) document.exitPointerLock();
         setNpcChatTarget({ objectId, name: obj.name });
-        setNpcChatHistory([]);
+        setNpcChatHistory(loadNpcHistory(scene.sceneId, objectId));
         setNpcChatPending(false);
         return;
       }
@@ -1176,7 +1207,7 @@ export function App() {
       // Exit pointer lock so the chat input can receive focus.
       if (document.pointerLockElement) document.exitPointerLock();
       setNpcChatTarget({ objectId, name });
-      setNpcChatHistory([]);
+      setNpcChatHistory(loadNpcHistory(scene.sceneId, objectId));
       setNpcChatPending(false);
     },
     [scene, pendingProp, pendingNpc],

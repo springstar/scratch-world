@@ -350,6 +350,19 @@ export class SceneManager {
 		return updated;
 	}
 
+	/** Patch colliderMeshUrl without creating a version snapshot.
+	 * Used after auto-generating a collider GLB from sceneData.objects.
+	 */
+	async patchColliderUrl(sceneId: string, colliderMeshUrl: string): Promise<void> {
+		const scene = await this.requireScene(sceneId);
+		const updated: Scene = {
+			...scene,
+			sceneData: { ...scene.sceneData, colliderMeshUrl },
+			updatedAt: Date.now(),
+		};
+		await this.repo.save(updated);
+	}
+
 	/** Merge patch into a single object's metadata without creating a version snapshot.
 	 * Used for bulletin board messages and similar low-frequency object state updates.
 	 */

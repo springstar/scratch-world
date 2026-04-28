@@ -357,14 +357,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         // Orient upright before measuring height
         orientUpright(rawGroup);
         rawGroup.updateMatrixWorld(true);
-        const scaledBbox = new Box3().setFromObject(rawGroup);
+        const scaledBbox = meshOnlyBoundingBox(rawGroup as Group);
         const mh = scaledBbox.max.y - scaledBbox.min.y;
         const effectiveScale = mh > 0.01 ? Math.min(1.7 / mh, 10) * trigger.scale : trigger.scale;
         rawGroup.scale.setScalar(effectiveScale);
         // Compute ground offset: after all transforms, how far to lift so feet are at y=0
         rawGroup.position.set(0, 0, 0);
         rawGroup.updateMatrixWorld(true);
-        const finalBbox = new Box3().setFromObject(rawGroup);
+        const finalBbox = meshOnlyBoundingBox(rawGroup as Group);
         const groundOffset = finalBbox.isEmpty() ? 0 : -finalBbox.min.y;
         rawGroup.traverse((c) => {
           if (c instanceof Mesh) {
@@ -445,10 +445,91 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     fillLight.position.set(-8, 5, -5);
     scene.add(fillLight);
 
-    // Register worldTime lighting callback — called by App when world_time_update arrives
+    // Register worldTime lighting callback — called by App when world_time_update arrives.
+    // Transitions linearly to the new time over WT_TRANSITION_MS real milliseconds.
+    const WT_TRANSITION_MS = 30_000;
+    let wtCurrent = -1;      // -1 = no initial time set yet
+    let wtFrom = 0;
+    let wtTarget = 0;
+    let wtTransitionStart = 0;
+
+    function tickWorldTimeInterp(nowMs: number): void {
+      if (wtCurrent < 0) return;
+      if (wtCurrent === wtTarget) return;
+      const progress = Math.min((nowMs - wtTransitionStart) / WT_TRANSITION_MS, 1);
+      wtCurrent = wtFrom + (wtTarget - wtFrom) * progress;
+      applyWorldTimeLighting(wtCurrent, hemiLight, sunLight);
+    }
+
     (window as unknown as Record<string, unknown>).__setWorldTime = (t: number) => {
-      applyWorldTimeLighting(t, hemiLight, sunLight);
+      if (wtCurrent < 0) {
+        // First call — apply immediately, no transition.
+        wtCurrent = t;
+        wtFrom = t;
+        wtTarget = t;
+        applyWorldTimeLighting(t, hemiLight, sunLight);
+      } else {
+        wtFrom = wtCurrent;
+        wtTarget = t;
+        wtTransitionStart = performance.now();
+      }
     };
+
+    // ── Weather overlay sandbox ──────────────────────────────────────────────
+    const weatherAnimCallbacks: Array<(dt: number) => void> = [];
+    const weatherObjects: import("three").Object3D[] = [];
+    let weatherFogBackup: import("three").FogBase | null = null;
+
+    const applyWeatherOverlay = (code: string) => {
+      // Clear previous overlay
+      weatherAnimCallbacks.length = 0;
+      for (const obj of weatherObjects) scene.remove(obj);
+      weatherObjects.length = 0;
+      if (weatherFogBackup !== undefined) {
+        scene.fog = weatherFogBackup;
+        weatherFogBackup = null;
+      }
+
+      // Proxy scene.add to track weather-spawned objects; also intercept fog setter
+      const trackedScene = new Proxy(scene, {
+        get(target, key) {
+          if (key === "add") {
+            return (...args: import("three").Object3D[]) => {
+              for (const obj of args) weatherObjects.push(obj);
+              return target.add(...args);
+            };
+          }
+          return Reflect.get(target, key, target);
+        },
+        set(target, key, value) {
+          if (key === "fog") {
+            weatherFogBackup = target.fog;
+          }
+          return Reflect.set(target, key, value);
+        },
+      });
+
+      const weatherWorld = { THREE, scene: trackedScene, animate: (cb: (dt: number) => void) => { weatherAnimCallbacks.push(cb); } };
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function("world", code)(weatherWorld);
+      } catch (err) {
+        console.warn("[weather-overlay] exec failed:", err);
+      }
+    };
+
+    const clearWeatherOverlay = () => {
+      weatherAnimCallbacks.length = 0;
+      for (const obj of weatherObjects) scene.remove(obj);
+      weatherObjects.length = 0;
+      if (weatherFogBackup !== undefined) {
+        scene.fog = weatherFogBackup;
+        weatherFogBackup = null;
+      }
+    };
+
+    (window as unknown as Record<string, unknown>).__applyWeatherOverlay = applyWeatherOverlay;
+    (window as unknown as Record<string, unknown>).__clearWeatherOverlay = clearWeatherOverlay;
 
     // IBL env map — loaded async from Polyhaven; applied to GLTF props once ready.
     let sceneEnvMap: import("three").Texture | null = null;
@@ -1310,6 +1391,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       }
       portalMgr.tickPortals();
       tickScriptMeshes();
+      tickWorldTimeInterp(performance.now());
       renderer.render(scene, camera);
       // Update NPC animation mixers and script animate callbacks.
       // Both need a delta — compute once and share.
@@ -1320,6 +1402,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       }
       if (scriptAnimCallbacks.length > 0) {
         for (const cb of scriptAnimCallbacks) { try { cb(ffDelta); } catch { /* ignore */ } }
+      }
+      if (weatherAnimCallbacks.length > 0) {
+        for (const cb of weatherAnimCallbacks) { try { cb(ffDelta); } catch { /* ignore */ } }
       }
       if (splatInitialized && freeFlyFrameCount % 10 === 0) {
         const cx = camera.position.x;
@@ -1408,7 +1493,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
 
       if (!isIndoor) {
         // Outdoor scenes: load the full collision mesh (terrain, slopes, etc.).
-        await buildWorldColliders(world, colliderMeshUrl!);
+        // Locally-generated colliders (from sceneData.objects) are already in Three.js Y-up
+        // space and must NOT get the COLMAP→Three.js PI flip that Marble CDN colliders need.
+        const skipFlip = !splatUrl || colliderMeshUrl!.includes("/uploads/colliders/");
+        await buildWorldColliders(world, colliderMeshUrl!, { skipFlip });
         if (cancelled) { world.free(); return; }
       } else {
         // Indoor scenes: skip the collision mesh entirely.
@@ -1545,7 +1633,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         scene.add(group);
         group.userData.shadowPlane = createContactShadow(group, resolvedPos.y);
         // Animation setup — plays idle loop when the GLB contains skeletal clips
-        const clips = (group.userData._animations ?? []) as import("three").AnimationClip[];
+        const rawClips = (group.userData._animations ?? []) as import("three").AnimationClip[];
+        // Guard: skip clips whose tracks are plain objects (not KeyframeTrack instances).
+        // Some GLBs produce unrecognized track types that Three.js falls back to plain
+        // objects; calling clipAction() on them throws "createInterpolant is not a function".
+        type MaybeTrack = { createInterpolant?: unknown };
+        const clips = rawClips.filter((c) =>
+          c.tracks.every((t) => typeof (t as MaybeTrack).createInterpolant === "function"),
+        );
         if (clips.length > 0) {
           const mixer = new AnimationMixer(group);
           const idleClip = clips.find((c) => /idle/i.test(c.name)) ?? clips[0];
@@ -1986,6 +2081,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         if (scriptAnimCallbacks.length > 0) {
           for (const cb of scriptAnimCallbacks) { try { cb(delta); } catch { /* ignore */ } }
         }
+        if (weatherAnimCallbacks.length > 0) {
+          for (const cb of weatherAnimCallbacks) { try { cb(delta); } catch { /* ignore */ } }
+        }
 
         portalMgr.tickPortals();
         tickScriptMeshes();
@@ -2002,6 +2100,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             bodyPos.z - fwd.z * 2.5,
           );
         }
+        tickWorldTimeInterp(performance.now());
         renderer.render(scene, camera);
       }
 
@@ -2312,7 +2411,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             g.rotation.set(0, 0, 0);
             g.scale.setScalar(1);
             g.updateMatrixWorld(true);
-            const rawBboxNp = new Box3().setFromObject(g);
+            const rawBboxNp = meshOnlyBoundingBox(g);
             const npExtX = rawBboxNp.max.x - rawBboxNp.min.x;
             const npExtY = rawBboxNp.max.y - rawBboxNp.min.y;
             const npExtZ = rawBboxNp.max.z - rawBboxNp.min.z;
@@ -2328,13 +2427,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             const npTargetHeight = typeof obj.metadata.targetHeight === "number" ? obj.metadata.targetHeight : undefined;
             if (npTargetHeight !== undefined && scale === 1) {
               g.updateMatrixWorld(true);
-              const sbbox = new Box3().setFromObject(g);
+              const sbbox = meshOnlyBoundingBox(g);
               const mh = sbbox.max.y - sbbox.min.y;
               if (mh > 0.01) effectiveScaleNp = Math.min(npTargetHeight / mh, 10);
             }
             g.scale.setScalar(effectiveScaleNp);
             g.updateMatrixWorld(true);
-            const npBbox = new Box3().setFromObject(g);
+            const npBbox = meshOnlyBoundingBox(g);
             const npGroundOffset = -npBbox.min.y;
             g.position.set(pos.x, pos.y + npGroundOffset, pos.z);
             g.traverse((c) => {
@@ -2410,6 +2509,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       for (const obj of scriptSpawnedObjects.values()) scene.remove(obj);
       scriptSpawnedObjects.clear();
       scriptAnimCallbacks.length = 0;
+      // Clean up weather overlay.
+      clearWeatherOverlay();
+      delete (window as unknown as Record<string, unknown>).__applyWeatherOverlay;
+      delete (window as unknown as Record<string, unknown>).__clearWeatherOverlay;
       onPropLeaveRef.current?.();
       delete (window as unknown as Record<string, unknown>).__loadSceneNpc;
       delete (window as unknown as Record<string, unknown>).__removeSceneNpc;

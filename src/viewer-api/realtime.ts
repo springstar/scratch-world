@@ -52,7 +52,9 @@ export type RealtimeEvent =
 			eventType: string;
 			headline: string;
 			body: string;
-	  };
+			worldNarrative?: string;
+	  }
+	| { type: "weather_overlay"; sceneId: string; overlayType: string; code?: string };
 
 export class RealtimeBus {
 	// sessionId → set of connected WebSocket clients

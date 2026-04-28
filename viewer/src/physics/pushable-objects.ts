@@ -1,6 +1,7 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as skeletonClone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { SceneObject, Viewpoint } from "../types.js";
 import { type PlacementHint, resolvePosition } from "./prop-placement.js";
 
@@ -12,6 +13,11 @@ export interface PhysicsProp {
   /** Set to true when the physics body has been removed from the world. */
   removed?: boolean;
 }
+
+// Module-level GLTF cache: URL → parsed Group (canonical copy, never added to scene)
+const gltfCache = new Map<string, THREE.Group>();
+// In-flight dedup: URL → pending promise (prevents duplicate simultaneous fetches)
+const gltfPending = new Map<string, Promise<THREE.Group>>();
 
 const loader = new GLTFLoader();
 
@@ -27,19 +33,30 @@ export function resolveModelUrl(url: string): string {
 }
 
 export function loadGltf(url: string, timeoutMs = 15000): Promise<THREE.Group> {
-  return new Promise((resolve, reject) => {
+  const cached = gltfCache.get(url);
+  if (cached) return Promise.resolve(skeletonClone(cached) as THREE.Group);
+
+  const pending = gltfPending.get(url);
+  if (pending) return pending.then((g) => skeletonClone(g) as THREE.Group);
+
+  const promise = new Promise<THREE.Group>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`loadGltf timeout: ${url}`)), timeoutMs);
     loader.load(
       url,
       (gltf) => {
         clearTimeout(timer);
         gltf.scene.userData._animations = gltf.animations ?? [];
+        gltfCache.set(url, gltf.scene);
         resolve(gltf.scene);
       },
       undefined,
       (err) => { clearTimeout(timer); reject(err); },
     );
   });
+
+  const deduped = promise.finally(() => gltfPending.delete(url));
+  gltfPending.set(url, deduped as Promise<THREE.Group>);
+  return deduped.then((g) => skeletonClone(g) as THREE.Group);
 }
 
 /**

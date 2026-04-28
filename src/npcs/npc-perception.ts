@@ -112,11 +112,17 @@ export function extractSceneCaption(objects: SceneObject[]): string | undefined 
 	return world?.description || undefined;
 }
 
+function worldTimeToHHMM(t: number): string {
+	const h = Math.floor(t / 3600) % 24;
+	const m = Math.floor((t % 3600) / 60);
+	return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
+}
+
 export function buildPerceptionContext(
 	npcObj: SceneObject,
 	allObjects: SceneObject[],
 	playerPosition: Vec3 | undefined,
-	environment: { timeOfDay?: string; weather?: string },
+	environment: { timeOfDay?: string; weather?: string; worldTime?: number },
 	sceneCaption?: string,
 	recentWorldEvents?: string[],
 ): string {
@@ -127,7 +133,11 @@ export function buildPerceptionContext(
 
 	// ── Environment ──────────────────────────────────────────────────────────
 	const envParts: string[] = [];
-	if (environment.timeOfDay) envParts.push(`时间：${environment.timeOfDay}`);
+	if (environment.worldTime != null) {
+		envParts.push(`游戏时间：${worldTimeToHHMM(environment.worldTime)}`);
+	} else if (environment.timeOfDay) {
+		envParts.push(`时间：${environment.timeOfDay}`);
+	}
 	if (environment.weather) envParts.push(`天气：${environment.weather}`);
 	if (envParts.length > 0) lines.push(envParts.join("　"));
 

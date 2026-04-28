@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { normalizeMemory } from "../../npcs/memory.js";
 import { buildPerceptionContext, extractSceneCaption } from "../../npcs/npc-perception.js";
 import { greetAsNpc } from "../../npcs/npc-runner.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
@@ -34,11 +35,7 @@ export function npcGreetRoute(sceneManager: SceneManager, bus: RealtimeBus): Hon
 		if (!npcObj) return c.json({ error: "NPC not found in scene" }, 404);
 
 		const personality = (npcObj.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
-		const memory: string[] = (() => {
-			const raw = npcObj.metadata.npcMemory;
-			if (!Array.isArray(raw)) return [];
-			return raw.filter((x): x is string => typeof x === "string");
-		})();
+		const memory = normalizeMemory(npcObj.metadata.npcMemory);
 
 		const perceptionContext = buildPerceptionContext(
 			npcObj,

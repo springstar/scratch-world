@@ -7,7 +7,8 @@ import { fixGeneratedCode } from "../../behaviors/skills/code-gen.js";
 import { applyEvolutionDelta, type EvolutionLogEntry } from "../../npcs/npc-evolution.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import type { SessionManager } from "../../session/session-manager.js";
-import type { WorldEventRepository } from "../../storage/types.js";
+import type { NpcEvolutionRepository, WorldEventRepository } from "../../storage/types.js";
+import { generateSceneCollider } from "../../world/collider-builder.js";
 import type { RealtimeBus } from "../realtime.js";
 import { generatePropRoute } from "./generate-prop.js";
 
@@ -25,6 +26,8 @@ export function scenesRoute(
 	bus?: RealtimeBus,
 	sessionManager?: SessionManager,
 	worldEventRepo?: WorldEventRepository,
+	publicUploadsUrl?: string,
+	npcEvolutionRepo?: NpcEvolutionRepository,
 ): Hono {
 	const app = new Hono();
 
@@ -46,13 +49,15 @@ export function scenesRoute(
 					thumbnailUrl,
 					provider: s.providerRef.provider,
 					splatUrl: s.sceneData.splatUrl ?? null,
+					visitCount: s.sceneData.environment?.visitCount ?? 0,
+					worldTime: s.sceneData.environment?.worldTime ?? null,
+					livingEnabled: s.sceneData.environment?.livingEnabled ?? false,
 				};
 			}),
 		});
 	});
 
 	// GET /scenes/:sceneId — viewer fetches scene data on mount.
-	// Access requires a valid share token (?token=) or owner session (?session=web:<userId>).
 	app.get("/:sceneId", async (c) => {
 		const { sceneId } = c.req.param();
 		const tokenParam = c.req.query("token");
@@ -68,17 +73,17 @@ export function scenesRoute(
 
 		if (scene.sceneId !== sceneId) return c.json({ error: "Scene not found" }, 404);
 
-		// Auth check: require token or owner session
-		const sessionUserId = sessionParam?.startsWith("web:") ? sessionParam.slice(4) : null;
-		const isOwner = sessionUserId !== null && scene.ownerId === sessionUserId;
-		const hasToken = tokenParam !== undefined && tokenParam !== null && tokenParam !== "";
-		if (!hasToken && !isOwner) {
-			return c.json({ error: "Forbidden" }, 403);
-		}
-
 		// Sync active scene for the session so the agent always operates on the scene the viewer is showing.
 		if (sessionParam && sessionManager) {
 			sessionManager.setActiveScene(sessionParam, sceneId).catch(() => {});
+		}
+
+		// Lazy backfill: generate collider GLB for sceneCode scenes that predate this feature.
+		if (!scene.sceneData.splatUrl && !scene.sceneData.colliderMeshUrl && publicUploadsUrl) {
+			const uploadsDir = join(projectRoot, "uploads");
+			generateSceneCollider(scene.sceneId, scene.sceneData.objects, uploadsDir, publicUploadsUrl)
+				.then((url) => sceneManager.patchColliderUrl(scene.sceneId, url))
+				.catch(() => {}); // non-critical — viewer falls back to free-fly
 		}
 
 		return c.json({
@@ -427,17 +432,22 @@ export function scenesRoute(
 		if (!scene) return c.json({ error: "Scene not found" }, 404);
 		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
 		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
+
+		const interactionCount =
+			typeof npcObj.metadata.npcInteractionCount === "number" ? npcObj.metadata.npcInteractionCount : 0;
+
+		if (npcEvolutionRepo) {
+			const log = await npcEvolutionRepo.listByNpc(npcId);
+			return c.json({ npcId, interactionCount, log });
+		}
+
+		// Fallback: read from legacy metadata array
 		const log: EvolutionLogEntry[] = (() => {
 			const raw = npcObj.metadata.npcEvolutionLog;
 			if (!Array.isArray(raw)) return [];
 			return raw as EvolutionLogEntry[];
 		})();
-		return c.json({
-			npcId,
-			interactionCount:
-				typeof npcObj.metadata.npcInteractionCount === "number" ? npcObj.metadata.npcInteractionCount : 0,
-			log,
-		});
+		return c.json({ npcId, interactionCount, log });
 	});
 
 	// POST /scenes/:sceneId/npcs/:npcId/evolution/:entryId/approve — apply a pending evolution
@@ -450,6 +460,28 @@ export function scenesRoute(
 		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
 		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
 
+		if (npcEvolutionRepo) {
+			const pending = await npcEvolutionRepo.listPending(npcId);
+			const evt = pending.find((e) => e.eventId === entryId);
+			if (!evt) return c.json({ error: "Evolution entry not found" }, 404);
+
+			const currentPersonality = (npcObj.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
+			const newPersonality = await applyEvolutionDelta(npcObj.name, currentPersonality, evt.suggestedDelta);
+			const appliedAt = Date.now();
+			await npcEvolutionRepo.updateStatus(entryId, "approved", appliedAt);
+			try {
+				const updated = await sceneManager.updateSceneObject(sceneId, npcId, {
+					metadata: { npcPersonality: newPersonality },
+				});
+				return c.json({ ok: true, newPersonality, version: updated.version });
+			} catch (err) {
+				const status = (err as { status?: number }).status ?? 500;
+				if (status === 500) console.error("[scenes] apply evolution error:", err);
+				return c.json({ error: apiError(err, "Failed to apply evolution") }, status as 404 | 500);
+			}
+		}
+
+		// Fallback: legacy metadata approach
 		const log: EvolutionLogEntry[] = (() => {
 			const raw = npcObj.metadata.npcEvolutionLog;
 			if (!Array.isArray(raw)) return [];
@@ -487,6 +519,14 @@ export function scenesRoute(
 		const npcObj = scene.sceneData.objects.find((o) => o.objectId === npcId && o.type === "npc");
 		if (!npcObj) return c.json({ error: "NPC not found" }, 404);
 
+		if (npcEvolutionRepo) {
+			const pending = await npcEvolutionRepo.listPending(npcId);
+			if (!pending.find((e) => e.eventId === entryId)) return c.json({ error: "Evolution entry not found" }, 404);
+			await npcEvolutionRepo.updateStatus(entryId, "rejected");
+			return c.json({ ok: true });
+		}
+
+		// Fallback: legacy metadata approach
 		const log: EvolutionLogEntry[] = (() => {
 			const raw = npcObj.metadata.npcEvolutionLog;
 			if (!Array.isArray(raw)) return [];

@@ -9,11 +9,12 @@ import { trimContext } from "../agent/context-trimmer.js";
 import { isRejectionSignal, logFeedback } from "../agent/feedback-logger.js";
 import type { ChannelGateway } from "../channels/gateway.js";
 import type { ChatMessage } from "../channels/types.js";
-import type { GenerationQueue } from "../generation/generation-queue.js";
+import type { GenerationQueue, JobCallbacks } from "../generation/generation-queue.js";
 import type { SceneManager } from "../scene/scene-manager.js";
 import type { SkillLoader } from "../skills/skill-loader.js";
 import type { SessionRepository } from "../storage/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
+import { detectSignals, type SignalEntry } from "./chat-signals.js";
 
 const DEFAULT_AGENT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 60 * 1000; // sweep at most once per minute
@@ -44,6 +45,30 @@ export class SessionManager {
 
 	dispatch(msg: ChatMessage): Promise<void> {
 		return this.enqueue(msg.sessionId, () => this._dispatch(msg));
+	}
+
+	/** Returns all sessions with detected signals, most recent first. For ops queries. */
+	async listSignals(): Promise<
+		Array<{ sessionId: string; userId: string; channelId: string; updatedAt: number; signals: SignalEntry[] }>
+	> {
+		const sessions = await this.sessionRepo.listAll();
+		return sessions
+			.map((s) => {
+				let signals: SignalEntry[] = [];
+				try {
+					signals = JSON.parse(s.signals ?? "[]") as SignalEntry[];
+				} catch {
+					/* ignore */
+				}
+				return {
+					sessionId: s.sessionId,
+					userId: s.userId,
+					channelId: s.channelId,
+					updatedAt: s.updatedAt,
+					signals,
+				};
+			})
+			.filter((s) => s.signals.length > 0);
 	}
 
 	dispatchViewerInteraction(sessionId: string, sceneId: string, text: string, bus: RealtimeBus): Promise<void> {
@@ -106,17 +131,24 @@ export class SessionManager {
 		let activeSceneId: string | null = record?.activeSceneId ?? null;
 
 		let reply = "";
-		const updatedScenes: Array<{ sceneId: string; title: string }> = [];
+		const updatedScenes: Array<{ sceneId: string; title: string; generating: boolean }> = [];
 
 		const unsub = agent.subscribe((event) => {
 			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 				reply += event.assistantMessageEvent.delta;
 			} else if (event.type === "tool_execution_end" && !event.isError) {
-				const details = event.result?.details as { sceneId?: string; title?: string } | undefined;
+				const details = event.result?.details as
+					| { sceneId?: string; title?: string; generating?: boolean }
+					| undefined;
 				if (details?.sceneId) {
 					activeSceneId = details.sceneId;
 					if (event.toolName === "create_scene" || event.toolName === "update_scene") {
-						if (details.title) updatedScenes.push({ sceneId: details.sceneId, title: details.title });
+						if (details.title)
+							updatedScenes.push({
+								sceneId: details.sceneId,
+								title: details.title,
+								generating: details.generating ?? false,
+							});
 					}
 				}
 			}
@@ -157,9 +189,27 @@ export class SessionManager {
 			await this.gateway.sendText(msg.channelId, msg.userId, reply);
 		}
 
-		for (const { sceneId, title } of updatedScenes) {
+		for (const { sceneId, title, generating } of updatedScenes) {
 			const viewerUrl = `${this.viewerBaseUrl}/scene/${sceneId}?session=${msg.sessionId}`;
-			await this.gateway.presentScene(msg.channelId, msg.userId, title, viewerUrl);
+			if (generating) {
+				// Register progress callbacks — Telegram user gets updates every 15s and a link on completion.
+				const { channelId, userId } = msg;
+				const callbacks: JobCallbacks = {
+					onProgress: (elapsedMs) => {
+						const mins = Math.round(elapsedMs / 60_000);
+						void this.gateway.sendText(channelId, userId, `生成中... 已等待 ${mins} 分钟`).catch(console.error);
+					},
+					onComplete: (url) => {
+						void this.gateway.presentScene(channelId, userId, title, url).catch(console.error);
+					},
+					onError: (message) => {
+						void this.gateway.sendText(channelId, userId, `场景生成失败: ${message}`).catch(console.error);
+					},
+				};
+				this.generationQueue.subscribeJob(sceneId, callbacks);
+			} else {
+				await this.gateway.presentScene(msg.channelId, msg.userId, title, viewerUrl);
+			}
 		}
 
 		await this.saveSession(msg, agent, activeSceneId);
@@ -514,6 +564,30 @@ export class SessionManager {
 			}
 			return m;
 		});
+
+		// Detect chat signals from the user message and append to session history
+		const newSignals = detectSignals(msg.text);
+		let mergedSignals: SignalEntry[] = [];
+		if (newSignals.length > 0) {
+			const record = await this.sessionRepo.findById(msg.sessionId);
+			const existing: SignalEntry[] = (() => {
+				try {
+					return JSON.parse(record?.signals ?? "[]") as SignalEntry[];
+				} catch {
+					return [];
+				}
+			})();
+			// Keep last 100 signals to cap storage
+			mergedSignals = [...existing, ...newSignals].slice(-100);
+		} else {
+			const record = await this.sessionRepo.findById(msg.sessionId);
+			try {
+				mergedSignals = JSON.parse(record?.signals ?? "[]") as SignalEntry[];
+			} catch {
+				mergedSignals = [];
+			}
+		}
+
 		await this.sessionRepo.save({
 			sessionId: msg.sessionId,
 			userId: msg.userId,
@@ -521,6 +595,7 @@ export class SessionManager {
 			activeSceneId,
 			agentMessages: JSON.stringify(stripped),
 			updatedAt: Date.now(),
+			signals: JSON.stringify(mergedSignals),
 		});
 	}
 }

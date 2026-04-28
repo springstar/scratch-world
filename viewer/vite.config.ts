@@ -18,6 +18,9 @@ export default defineConfig({
       "/collider": "http://localhost:3001",
       "/gltf-proxy": "http://localhost:3001",
       "/confirm-position": "http://localhost:3001",
+      "/admin": "http://localhost:3001",
+      "/debug": "http://localhost:3001",
+      "/health": "http://localhost:3001",
       // Proxy WebSocket connections for the realtime bus
       "/realtime": { target: "ws://localhost:3001", ws: true },
     },

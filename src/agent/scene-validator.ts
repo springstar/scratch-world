@@ -309,6 +309,50 @@ function checkAssetPrescan(code: string): SceneViolation[] {
 	return [];
 }
 
+// ── Sandbox safety checks ─────────────────────────────────────────────────────
+
+const BANNED_APIS: Array<{ pattern: RegExp; label: string }> = [
+	{ pattern: /\beval\s*\(/, label: "eval()" },
+	{ pattern: /\bnew\s+Function\s*\(/, label: "new Function()" },
+	{ pattern: /\bfetch\s*\(/, label: "fetch()" },
+	{ pattern: /\bXMLHttpRequest\b/, label: "XMLHttpRequest" },
+	{ pattern: /\bnew\s+Worker\s*\(/, label: "new Worker()" },
+	{ pattern: /\bnew\s+SharedWorker\s*\(/, label: "new SharedWorker()" },
+	{ pattern: /\bimport\s*\(/, label: "dynamic import()" },
+	{ pattern: /\brequire\s*\(/, label: "require()" },
+	{ pattern: /\bprocess\.env\b/, label: "process.env" },
+];
+
+function checkSyntax(code: string): SceneViolation[] {
+	try {
+		// new Function() parses code as a function body — throws SyntaxError on invalid syntax.
+		// eslint-disable-next-line no-new-func
+		new Function(code);
+		return [];
+	} catch (err) {
+		const msg = err instanceof SyntaxError ? err.message : String(err);
+		return [
+			{
+				rule: "syntax-error",
+				message: `JavaScript syntax error: ${msg}. Fix the syntax before the scene can be saved.`,
+				severity: "error",
+			},
+		];
+	}
+}
+
+function checkBannedApis(code: string): SceneViolation[] {
+	const found = BANNED_APIS.filter(({ pattern }) => pattern.test(code)).map(({ label }) => label);
+	if (found.length === 0) return [];
+	return [
+		{
+			rule: "banned-api",
+			message: `Sandbox violation — the following APIs are not allowed in sceneCode: ${found.join(", ")}. Remove all uses and rely only on THREE, stdlib, scene, camera, renderer, controls, and animate().`,
+			severity: "error",
+		},
+	];
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export interface ValidateOptions {
@@ -318,6 +362,8 @@ export interface ValidateOptions {
 
 export function validateSceneCode(code: string, opts: ValidateOptions = {}): ValidationResult {
 	const violations: SceneViolation[] = [
+		...checkSyntax(code),
+		...checkBannedApis(code),
 		...checkSetupLighting(code),
 		...checkShadowLights(code),
 		...checkDirectAssignment(code),

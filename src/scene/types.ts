@@ -30,6 +30,8 @@ export interface EnvironmentConfig {
 	timeOfDay?: string;
 	worldTime?: number; // 0–86400 seconds since midnight; undefined = static scene
 	livingEnabled?: boolean; // opt-in: enables WorldHeartbeat autonomous evolution
+	lastHeartbeatAt?: number; // Unix ms of last WorldHeartbeat tick — used for startup catchup
+	worldNarrative?: string; // rolling story arc (100-200 chars), updated by Haiku after each world event
 	visitCount?: number; // cumulative visitor count (incremented on scene view)
 	lastVisitedAt?: number; // Unix ms of most recent visit
 	effects?: {

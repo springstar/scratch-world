@@ -1,5 +1,6 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { createLogger } from "../logger.js";
+import { type MemoryEntry, memoryToPrompt } from "./memory.js";
 
 const COOLDOWN_MS = 10_000;
 // npcId → timestamp of last reaction (in-memory, resets on process restart)
@@ -9,6 +10,13 @@ function haiku() {
 	const model = getModel("anthropic", "claude-haiku-4-5-20251001");
 	if (process.env.ANTHROPIC_BASE_URL) model.baseUrl = process.env.ANTHROPIC_BASE_URL;
 	return model;
+}
+
+function stripActions(text: string): string {
+	return text
+		.replace(/\*[^*]+\*/g, "")
+		.replace(/\s{2,}/g, " ")
+		.trim();
 }
 
 function extractText(response: Awaited<ReturnType<typeof completeSimple>>): string {
@@ -35,7 +43,7 @@ export async function reactAsNpc(
 	npcName: string,
 	personality: string,
 	userText: string,
-	memory: string[] = [],
+	memory: MemoryEntry[] = [],
 	perceptionContext?: string,
 	conversationHistory?: { role: "user" | "npc"; text: string }[],
 ): Promise<string | null> {
@@ -46,7 +54,7 @@ export async function reactAsNpc(
 	const log = createLogger({ tool: "npc_react", npc: npcId });
 	const t = log.timer("react");
 
-	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
+	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memoryToPrompt(memory)}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
 	// Inject recent conversation history into the system prompt so the NPC can
@@ -58,15 +66,16 @@ export async function reactAsNpc(
 			: "";
 
 	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}${historySection}
+当前真实时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
 
-以符合角色的方式自然回应玩家。根据对话内容决定回应长短，不要重复之前说过的话，不讨论游戏机制或角色无关话题。`;
+以符合角色的方式自然回应玩家。根据对话内容决定回应长短，不要重复之前说过的话，不讨论游戏机制或角色无关话题。只用对话回应，不要用*动作描写*格式。`;
 
 	const response = await completeSimple(haiku(), {
 		systemPrompt,
 		messages: [{ role: "user", content: userText, timestamp: now }],
 	});
 
-	const reply = extractText(response) || null;
+	const reply = stripActions(extractText(response)) || null;
 	t.end({ npcName, tokens: response.usage?.output });
 	return reply;
 }
@@ -80,23 +89,23 @@ export async function reactAsNpcNoCD(
 	npcName: string,
 	personality: string,
 	userText: string,
-	memory: string[] = [],
+	memory: MemoryEntry[] = [],
 	perceptionContext?: string,
 ): Promise<string | null> {
 	const log = createLogger({ tool: "npc_react", npc: npcId });
 	const t = log.timer("react_nocd");
 
-	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
+	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memoryToPrompt(memory)}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
-	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n用1-2句话回应，保持角色，不讨论角色无关话题。`;
+	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n用1-2句话回应，保持角色，不讨论角色无关话题，只用对话，不要用*动作描写*格式。`;
 
 	const response = await completeSimple(haiku(), {
 		systemPrompt,
 		messages: [{ role: "user", content: userText, timestamp: Date.now() }],
 	});
 
-	const reply = extractText(response) || null;
+	const reply = stripActions(extractText(response)) || null;
 	t.end({ npcName, tokens: response.usage?.output });
 	return reply;
 }
@@ -118,7 +127,7 @@ export async function spontaneousNpcLine(
 	npcId: string,
 	npcName: string,
 	personality: string,
-	memory: string[] = [],
+	memory: MemoryEntry[] = [],
 	perceptionContext?: string,
 ): Promise<string | null> {
 	const now = Date.now();
@@ -128,17 +137,17 @@ export async function spontaneousNpcLine(
 	const log = createLogger({ tool: "npc_heartbeat", npc: npcId });
 	const t = log.timer("spontaneous");
 
-	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
+	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memoryToPrompt(memory)}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
-	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n此刻场景中没有人跟你说话，你自然地说出一句独白或感慨（1句，保持角色，口语化）。`;
+	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n此刻场景中没有人跟你说话，你自然地说出一句独白或感慨（1句，保持角色，口语化，只用对话，不要用*动作描写*格式）。`;
 
 	const response = await completeSimple(haiku(), {
 		systemPrompt,
 		messages: [{ role: "user", content: "（心跳触发）", timestamp: Date.now() }],
 	});
 
-	const reply = extractText(response) || null;
+	const reply = stripActions(extractText(response)) || null;
 	t.end({ npcName });
 	return reply;
 }
@@ -152,7 +161,7 @@ export async function greetAsNpc(
 	npcId: string,
 	npcName: string,
 	personality: string,
-	memory: string[] = [],
+	memory: MemoryEntry[] = [],
 	perceptionContext?: string,
 ): Promise<string | null> {
 	const now = Date.now();
@@ -162,17 +171,17 @@ export async function greetAsNpc(
 	const log = createLogger({ tool: "npc_greet", npc: npcId });
 	const t = log.timer("greet");
 
-	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memory.map((m) => `- ${m}`).join("\n")}` : "";
+	const memorySection = memory.length > 0 ? `\n\n[你记得的事情]\n${memoryToPrompt(memory)}` : "";
 	const perceptionSection = perceptionContext ? `\n\n[当前感知]\n${perceptionContext}` : "";
 
-	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n玩家刚走近你，主动打一句招呼（1句，热情自然，符合角色）。`;
+	const systemPrompt = `你是${npcName}。${personality}${memorySection}${perceptionSection}\n\n玩家刚走近你，主动打一句招呼（1句，热情自然，符合角色，只用对话，不要用*动作描写*格式）。`;
 
 	const response = await completeSimple(haiku(), {
 		systemPrompt,
 		messages: [{ role: "user", content: "（玩家走近了）", timestamp: Date.now() }],
 	});
 
-	const reply = extractText(response) || null;
+	const reply = stripActions(extractText(response)) || null;
 	t.end({ npcName });
 	return reply;
 }
@@ -189,10 +198,10 @@ const MEMORY_CAP = 20;
  */
 export async function updateMemory(
 	npcName: string,
-	existingMemory: string[],
+	existingMemory: MemoryEntry[],
 	userText: string,
 	npcReply: string,
-): Promise<string[]> {
+): Promise<MemoryEntry[]> {
 	const log = createLogger({ tool: "npc_memory" });
 	const t = log.timer("update", { npcName, existing: existingMemory.length });
 
@@ -209,39 +218,52 @@ export async function updateMemory(
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		});
 		const raw = extractText(response);
-		const parsed: unknown = JSON.parse(raw);
+		const cleaned = raw
+			.replace(/^```(?:json)?\s*/i, "")
+			.replace(/\s*```\s*$/i, "")
+			.trim();
+		const parsed: unknown = JSON.parse(cleaned);
 		if (Array.isArray(parsed)) {
 			newFacts = parsed.filter((x): x is string => typeof x === "string").slice(0, 3);
 		}
 	} catch {
-		// Compression failed — don't update memory this round
 		log.warn("extract facts failed", { npcName });
 		return existingMemory;
 	}
 
-	const merged = [...existingMemory, ...newFacts];
+	const now = Date.now();
+	const newEntries: MemoryEntry[] = newFacts.map((fact) => ({ fact, source: "interaction", timestamp: now }));
+	const merged = [...existingMemory, ...newEntries];
+
 	if (merged.length <= MEMORY_CAP) {
 		t.end({ added: newFacts.length, total: merged.length });
 		return merged;
 	}
 
-	// Cap exceeded: compress the oldest half down to a few summary lines
+	// Cap exceeded: compress the oldest half
 	const toCompress = merged.slice(0, Math.floor(MEMORY_CAP / 2));
 	const keep = merged.slice(Math.floor(MEMORY_CAP / 2));
 	try {
-		const compressPrompt = `将以下记忆条目压缩成不超过5条最重要的事实，以JSON数组返回：\n${JSON.stringify(toCompress)}`;
+		const compressPrompt = `将以下记忆条目压缩成不超过5条最重要的事实，以JSON数组返回：\n${JSON.stringify(toCompress.map((e) => e.fact))}`;
 		const r2 = await completeSimple(haiku(), {
 			systemPrompt: "你是记忆压缩助手，只输出JSON数组。",
 			messages: [{ role: "user", content: compressPrompt, timestamp: Date.now() }],
 		});
-		const compressed: unknown = JSON.parse(extractText(r2));
-		if (Array.isArray(compressed)) {
-			const compressedFacts = compressed.filter((x): x is string => typeof x === "string").slice(0, 5);
-			t.end({ added: newFacts.length, compressed: true, total: compressedFacts.length + keep.length });
-			return [...compressedFacts, ...keep];
+		const compressedRaw: unknown = JSON.parse(
+			extractText(r2)
+				.replace(/^```(?:json)?\s*/i, "")
+				.replace(/\s*```\s*$/i, "")
+				.trim(),
+		);
+		if (Array.isArray(compressedRaw)) {
+			const compressedEntries: MemoryEntry[] = compressedRaw
+				.filter((x): x is string => typeof x === "string")
+				.slice(0, 5)
+				.map((fact) => ({ fact, source: "compressed" as const, timestamp: now }));
+			t.end({ added: newFacts.length, compressed: true, total: compressedEntries.length + keep.length });
+			return [...compressedEntries, ...keep];
 		}
 	} catch {
-		// Compression failed — just truncate from the front
 		log.warn("memory compression failed, truncating", { npcName });
 	}
 	t.end({ added: newFacts.length, truncated: true });

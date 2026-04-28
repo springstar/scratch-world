@@ -3,6 +3,7 @@ import type { SceneManager } from "../scene/scene-manager.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
 
 const POLL_INTERVAL_MS = 3_000;
+const PROGRESS_INTERVAL_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 600_000; // 10 minutes
 const MAX_CONSECUTIVE_ERRORS = 5; // tolerate this many network blips before giving up
 
@@ -15,24 +16,37 @@ interface PendingJob {
 	provider: SceneRenderProvider;
 	operationId: string;
 	startedAt: number;
+	lastProgressAt: number;
 	timeoutMs: number;
 	consecutiveErrors: number;
+}
+
+export interface JobCallbacks {
+	onProgress: (elapsedMs: number) => void;
+	onComplete: (viewUrl: string) => void;
+	onError: (message: string) => void;
 }
 
 export class GenerationQueue {
 	private jobs: PendingJob[] = [];
 	private timer: ReturnType<typeof setInterval> | null = null;
+	private listeners = new Map<string, JobCallbacks>();
 
 	constructor(
 		private bus: RealtimeBus,
 		private sceneManager: SceneManager,
 	) {}
 
-	enqueue(job: Omit<PendingJob, "startedAt" | "consecutiveErrors">): void {
-		this.jobs.push({ ...job, startedAt: Date.now(), consecutiveErrors: 0 });
+	enqueue(job: Omit<PendingJob, "startedAt" | "consecutiveErrors" | "lastProgressAt">): void {
+		this.jobs.push({ ...job, startedAt: Date.now(), lastProgressAt: Date.now(), consecutiveErrors: 0 });
 		if (!this.timer) {
 			this.timer = setInterval(() => this.tick(), POLL_INTERVAL_MS);
 		}
+	}
+
+	/** Register progress/complete/error callbacks for a specific scene's generation job. */
+	subscribeJob(sceneId: string, callbacks: JobCallbacks): void {
+		this.listeners.set(sceneId, callbacks);
 	}
 
 	private async tick(): Promise<void> {
@@ -55,7 +69,18 @@ export class GenerationQueue {
 					type: "error",
 					message: "Scene generation timed out. Please try again.",
 				});
+				const cb = this.listeners.get(job.sceneId);
+				if (cb) {
+					cb.onError("Scene generation timed out. Please try again.");
+					this.listeners.delete(job.sceneId);
+				}
 				continue;
+			}
+
+			// Fire progress notification every PROGRESS_INTERVAL_MS
+			if (Date.now() - job.lastProgressAt >= PROGRESS_INTERVAL_MS) {
+				job.lastProgressAt = Date.now();
+				this.listeners.get(job.sceneId)?.onProgress(elapsed);
 			}
 
 			try {
@@ -82,6 +107,11 @@ export class GenerationQueue {
 						viewUrl: job.viewerUrl,
 					});
 				}
+				const cb = this.listeners.get(job.sceneId);
+				if (cb) {
+					cb.onComplete(job.viewerUrl);
+					this.listeners.delete(job.sceneId);
+				}
 			} catch (err: unknown) {
 				job.consecutiveErrors += 1;
 				const isTransient = isTransientError(err);
@@ -97,6 +127,11 @@ export class GenerationQueue {
 				console.error(`[GenerationQueue] job ${job.operationId} failed permanently:`, err);
 				await this.sceneManager.failScene(job.sceneId).catch(console.error);
 				this.bus.publish(job.sessionId, { type: "error", message });
+				const cb = this.listeners.get(job.sceneId);
+				if (cb) {
+					cb.onError(message);
+					this.listeners.delete(job.sceneId);
+				}
 			}
 		}
 
@@ -115,6 +150,7 @@ export class GenerationQueue {
 			this.timer = null;
 		}
 		this.jobs = [];
+		this.listeners.clear();
 	}
 }
 

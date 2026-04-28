@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { configureGeneAutoGrow } from "./behaviors/skills/code-gen.js";
 import { ChannelGateway } from "./channels/gateway.js";
 import { StdinAdapter } from "./channels/stdin/adapter.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
@@ -13,10 +14,18 @@ import type { SceneRenderProvider } from "./providers/types.js";
 import { SceneManager } from "./scene/scene-manager.js";
 import { SessionManager } from "./session/session-manager.js";
 import { SkillLoader } from "./skills/skill-loader.js";
+import { SqliteGeneCandidateRepo } from "./storage/sqlite/gene-candidate-repo.js";
+import { SqliteNpcEvolutionRepo } from "./storage/sqlite/npc-evolution-repo.js";
 import { SqliteSceneRepo } from "./storage/sqlite/scene-repo.js";
 import { SqliteSessionRepo } from "./storage/sqlite/session-repo.js";
 import { SqliteWorldEventRepo } from "./storage/sqlite/world-event-repo.js";
-import type { SceneRepository, SessionRepository, WorldEventRepository } from "./storage/types.js";
+import type {
+	GeneCandidateRepository,
+	NpcEvolutionRepository,
+	SceneRepository,
+	SessionRepository,
+	WorldEventRepository,
+} from "./storage/types.js";
 import { RealtimeBus } from "./viewer-api/realtime.js";
 import { startViewerApi } from "./viewer-api/server.js";
 
@@ -26,21 +35,31 @@ async function main() {
 	let sceneRepo: SceneRepository;
 	let sessionRepo: SessionRepository;
 	let worldEventRepo: WorldEventRepository;
+	let npcEvolutionRepo: NpcEvolutionRepository;
+	let geneCandidateRepo: GeneCandidateRepository;
 	let sqliteDb: import("better-sqlite3").Database | null = null;
 
 	if (dbUrl.startsWith("postgres")) {
 		const { PgSceneRepo } = await import("./storage/postgres/scene-repo.js");
 		const { PgSessionRepo } = await import("./storage/postgres/session-repo.js");
 		const { PgWorldEventRepo } = await import("./storage/postgres/world-event-repo.js");
+		const { PgNpcEvolutionRepo } = await import("./storage/postgres/npc-evolution-repo.js");
+		const { PgGeneCandidateRepo } = await import("./storage/postgres/gene-candidate-repo.js");
 		const sr = new PgSceneRepo(dbUrl);
 		const sess = new PgSessionRepo(dbUrl);
 		const wer = new PgWorldEventRepo(dbUrl);
+		const ner = new PgNpcEvolutionRepo(dbUrl);
+		const gcr = new PgGeneCandidateRepo(dbUrl);
 		await sr.init();
 		await sess.init();
 		await wer.init();
+		await ner.init();
+		await gcr.init();
 		sceneRepo = sr;
 		sessionRepo = sess;
 		worldEventRepo = wer;
+		npcEvolutionRepo = ner;
+		geneCandidateRepo = gcr;
 	} else {
 		const Database = (await import("better-sqlite3")).default;
 		const dbPath = dbUrl.replace(/^sqlite:/, "");
@@ -52,6 +71,12 @@ async function main() {
 		const wer = new SqliteWorldEventRepo(db);
 		await wer.init();
 		worldEventRepo = wer;
+		const ner = new SqliteNpcEvolutionRepo(db);
+		await ner.init();
+		npcEvolutionRepo = ner;
+		const gcr = new SqliteGeneCandidateRepo(db);
+		await gcr.init();
+		geneCandidateRepo = gcr;
 	}
 
 	// ── Project root ───────────────────────────────────────────────────────
@@ -127,6 +152,9 @@ async function main() {
 		await sessionManager.dispatch(msg);
 	});
 
+	// ── Gene auto-grow ─────────────────────────────────────────────────────
+	configureGeneAutoGrow(geneCandidateRepo);
+
 	startViewerApi({
 		port: viewerPort,
 		db: sqliteDb,
@@ -140,6 +168,8 @@ async function main() {
 		publicUploadsUrl,
 		bus,
 		worldEventRepo,
+		npcEvolutionRepo,
+		geneCandidateRepo,
 	});
 
 	// ── Start ──────────────────────────────────────────────────────────────

@@ -1,12 +1,19 @@
 import type { SceneManager } from "../scene/scene-manager.js";
-import type { WorldEventRepository } from "../storage/types.js";
+import type { NpcEvolutionRepository, WorldEventRepository } from "../storage/types.js";
 import type { RealtimeBus } from "../viewer-api/realtime.js";
+import { generateWorldEvent, makeWorldEventId } from "../world/event-generator.js";
+import { normalizeMemory } from "./memory.js";
+import { applyEvolutionDelta, createNpcEvolutionEvent, generateEvolutionDiff } from "./npc-evolution.js";
 import { buildPerceptionContext, extractSceneCaption } from "./npc-perception.js";
 import { reactAsNpcNoCD, spontaneousNpcLine } from "./npc-runner.js";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const SPONTANEOUS_CHANCE = 0.15; // 15% per NPC per tick
 const DIALOGUE_CHANCE = 0.4; // 40% chance of NPC-to-NPC exchange when 2+ NPCs present
+
+const STAGNATION_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const STAGNATION_REPAIR_MS = 7 * 24 * 60 * 60 * 1000; // 7 days → repair evolution
+const STAGNATION_FAREWELL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days → farewell world_event
 
 /**
  * Start the NPC world heartbeat.
@@ -75,12 +82,8 @@ async function tickSession(
 
 		const personalityA = (npcA.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
 		const personalityB = (npcB.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
-		const memoryA: string[] = Array.isArray(npcA.metadata.npcMemory)
-			? (npcA.metadata.npcMemory as string[]).filter((x): x is string => typeof x === "string")
-			: [];
-		const memoryB: string[] = Array.isArray(npcB.metadata.npcMemory)
-			? (npcB.metadata.npcMemory as string[]).filter((x): x is string => typeof x === "string")
-			: [];
+		const memoryA = normalizeMemory(npcA.metadata.npcMemory);
+		const memoryB = normalizeMemory(npcB.metadata.npcMemory);
 
 		const perceptionA = buildPerceptionContext(
 			npcA,
@@ -149,11 +152,7 @@ async function tickSession(
 	if (Math.random() > SPONTANEOUS_CHANCE) return;
 
 	const personality = (candidate.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
-	const memory: string[] = (() => {
-		const raw = candidate.metadata.npcMemory;
-		if (!Array.isArray(raw)) return [];
-		return raw.filter((x): x is string => typeof x === "string");
-	})();
+	const memory = normalizeMemory(candidate.metadata.npcMemory);
 
 	const perceptionContext = buildPerceptionContext(
 		candidate,
@@ -177,5 +176,121 @@ async function tickSession(
 		});
 	} catch (err) {
 		console.error("[npc-heartbeat] spontaneous line failed:", err);
+	}
+}
+
+/**
+ * Start the NPC stagnation checker. Runs every hour.
+ * - 7+ days no interaction: auto-apply "repair" evolution to make NPC more engaging.
+ * - 14+ days no interaction: publish a farewell world_event and mark NPC as departed.
+ */
+export function startNpcStagnationChecker(
+	sceneManager: SceneManager,
+	bus: RealtimeBus,
+	eventStore?: WorldEventRepository,
+	evolutionRepo?: NpcEvolutionRepository,
+): () => void {
+	const timer = setInterval(() => {
+		void checkStagnation(sceneManager, bus, eventStore, evolutionRepo);
+	}, STAGNATION_CHECK_INTERVAL_MS);
+
+	timer.unref?.();
+	return () => clearInterval(timer);
+}
+
+async function checkStagnation(
+	sceneManager: SceneManager,
+	bus: RealtimeBus,
+	eventStore?: WorldEventRepository,
+	evolutionRepo?: NpcEvolutionRepository,
+): Promise<void> {
+	const now = Date.now();
+	const scenes = await sceneManager.listScenes();
+
+	for (const scene of scenes) {
+		const npcs = scene.sceneData.objects.filter((o) => o.type === "npc");
+
+		for (const npc of npcs) {
+			const lastInteracted =
+				typeof npc.metadata.npcLastInteractedAt === "number" ? npc.metadata.npcLastInteractedAt : null;
+
+			// NPC never interacted with — skip (they haven't been introduced yet)
+			if (lastInteracted === null) continue;
+
+			const idleMs = now - lastInteracted;
+
+			// 14+ days: farewell world_event (only once — gate on npcDeparted flag)
+			if (idleMs >= STAGNATION_FAREWELL_MS && !npc.metadata.npcDeparted) {
+				try {
+					if (eventStore) {
+						const recentEvents = await eventStore.getRecentEvents(scene.sceneId, 3);
+						const eventData = await generateWorldEvent(scene, recentEvents);
+						if (eventData) {
+							const worldEvent = {
+								eventId: makeWorldEventId(),
+								sceneId: scene.sceneId,
+								createdAt: now,
+								...eventData,
+								eventType: "npc_departure",
+								headline: `${npc.name}已悄然离开这片土地`,
+							};
+							await eventStore.addEvent(worldEvent);
+							for (const sessionId of bus.activeSessions()) {
+								bus.publish(sessionId, {
+									type: "world_event",
+									sceneId: scene.sceneId,
+									eventId: worldEvent.eventId,
+									worldTime: worldEvent.worldTime,
+									eventType: worldEvent.eventType,
+									headline: worldEvent.headline,
+									body: worldEvent.body,
+								});
+							}
+						}
+					}
+					await sceneManager.patchObjectMetadata(scene.sceneId, npc.objectId, { npcDeparted: true });
+					console.log(`[npc-heartbeat] stagnation farewell: ${npc.name} in ${scene.sceneId}`);
+				} catch (err) {
+					console.error("[npc-heartbeat] farewell event failed:", npc.name, err);
+				}
+				continue;
+			}
+
+			// 7+ days but < 14 days: repair evolution (only once per stagnation cycle)
+			if (idleMs >= STAGNATION_REPAIR_MS && !npc.metadata.npcRepairAppliedAt) {
+				try {
+					const personality = (npc.metadata.npcPersonality as string | undefined) ?? "一个普通的村民";
+					const memory = normalizeMemory(npc.metadata.npcMemory);
+
+					const diff = await generateEvolutionDiff(npc.name, personality, memory, "repair");
+					if (diff) {
+						const newPersonality = await applyEvolutionDelta(npc.name, personality, diff);
+						await sceneManager.patchObjectMetadata(scene.sceneId, npc.objectId, {
+							npcPersonality: newPersonality,
+							npcRepairAppliedAt: now,
+						});
+						if (evolutionRepo) {
+							const interactionCount =
+								typeof npc.metadata.npcInteractionCount === "number" ? npc.metadata.npcInteractionCount : 0;
+							const evt = createNpcEvolutionEvent(
+								npc.objectId,
+								scene.sceneId,
+								"stagnation",
+								"repair",
+								interactionCount,
+								personality,
+								diff,
+							);
+							await evolutionRepo.addEvent(evt).catch((err: unknown) => {
+								console.error("[npc-heartbeat] evolution repo write failed:", err);
+							});
+						}
+						console.log(`[npc-heartbeat] stagnation repair applied: ${npc.name} in ${scene.sceneId}`);
+					}
+				} catch (err) {
+					console.error("[npc-heartbeat] repair evolution failed:", npc.name, err);
+				}
+			}
+		}
 	}
 }

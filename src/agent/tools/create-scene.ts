@@ -5,6 +5,8 @@ import type { GenerationQueue } from "../../generation/generation-queue.js";
 import { DEFAULT_TIMEOUT_MS } from "../../generation/generation-queue.js";
 import type { SceneManager } from "../../scene/scene-manager.js";
 import { SceneDataSchema } from "../../scene/schema.js";
+import { generateSceneCollider } from "../../world/collider-builder.js";
+import { composeScenePrompt } from "../scene-gene.js";
 import { formatViolations, validateSceneCode } from "../scene-validator.js";
 
 const parameters = Type.Object({
@@ -55,6 +57,38 @@ const parameters = Type.Object({
 				"If find_gltf_assets returned no results for a category, set this to true and use stdlib fallbacks (makeNpc, makeTree, makeBuilding).",
 		}),
 	),
+	sceneGene: Type.Optional(
+		Type.Object(
+			{
+				styleSignals: Type.Array(Type.String(), {
+					description:
+						'Style, mood, and atmosphere keywords — e.g. ["cyberpunk", "neon", "rainy", "night", "foggy"]',
+				}),
+				required: Type.Array(Type.String(), {
+					description:
+						'Specific spatial elements that MUST appear — e.g. ["central water feature", "market stalls", "3 NPCs"]',
+				}),
+				constraints: Type.Optional(
+					Type.Array(Type.String(), {
+						description:
+							'Hard limits on the scene — e.g. ["no red colors", "compact 30×30 m footprint", "indoor only"]',
+					}),
+				),
+				avoidRepeat: Type.Optional(
+					Type.Array(Type.String(), {
+						description:
+							'Elements from previous scenes in this conversation to avoid repeating — e.g. ["beach", "palm trees", "red lanterns"]',
+					}),
+				),
+			},
+			{
+				description:
+					"Structured scene decomposition. When provided, create_scene composes a richer provider prompt " +
+					"from these signal fields. Prefer this over a single free-text prompt for new scene creation — " +
+					"it forces intentional thinking about style, content, and constraints.",
+			},
+		),
+	),
 });
 
 export function createSceneTool(
@@ -63,6 +97,8 @@ export function createSceneTool(
 	viewerUrl: (sceneId: string) => string,
 	generationQueue: GenerationQueue,
 	sessionId: string,
+	uploadsDir?: string,
+	publicBaseUrl?: string,
 ): AgentTool<typeof parameters> {
 	const providerHandlesGeneration = !!sceneManager.getActiveProvider().providesOwnRendering;
 	return {
@@ -74,8 +110,10 @@ export function createSceneTool(
 		parameters,
 		execute: async (_id, params: Static<typeof parameters>) => {
 			console.log(
-				`[create_scene] called params=${JSON.stringify({ prompt: params.prompt?.slice(0, 80), imagePath: params.imagePath, imagePaths: params.imagePaths, videoPath: params.videoPath, imageUrl: params.imageUrl, hasSceneData: !!params.sceneData, hasSceneCode: !!params.sceneCode })}`,
+				`[create_scene] called params=${JSON.stringify({ prompt: params.prompt?.slice(0, 80), imagePath: params.imagePath, imagePaths: params.imagePaths, videoPath: params.videoPath, imageUrl: params.imageUrl, hasSceneData: !!params.sceneData, hasSceneCode: !!params.sceneCode, hasGene: !!params.sceneGene })}`,
 			);
+			// Compose enriched prompt from structured sceneGene fields when provided
+			const effectivePrompt = composeScenePrompt(params.prompt, params.sceneGene);
 			// When provider handles its own rendering (e.g. Marble), sceneData is metadata only
 			// (spawn points, interaction objects). Do NOT take the skill path for metadata-only sceneData —
 			// only take it when sceneCode is present (custom Three.js rendering).
@@ -92,28 +130,49 @@ export function createSceneTool(
 				// Validate before saving — ERROR violations block scene creation entirely.
 				// Exception: assetPrescanDone=true means agent confirmed it called find_gltf_assets
 				// and got no results — procedural fallback is then legitimate.
+				let effectiveSceneData = mergedSceneData;
 				if (params.sceneCode) {
 					const prescanBypassed = params.assetPrescanDone === true;
 					const preCheck = validateSceneCode(params.sceneCode, { skipAssetPrescan: prescanBypassed });
 					const errors = preCheck.violations.filter((v) => v.severity === "error");
 					if (errors.length > 0) {
-						const msg = formatViolations(preCheck);
-						return {
-							content: [
-								{
-									type: "text",
-									text: JSON.stringify({
-										error: "Scene not created — validation errors must be fixed first.",
-										violations: msg,
-									}),
-								},
-							],
-							details: { error: "validation_failed" },
-						};
+						const syntaxOrBanned = errors.some((v) => v.rule === "syntax-error" || v.rule === "banned-api");
+						const hasFallbackData = (params.sceneData?.objects?.length ?? 0) > 0;
+						if (syntaxOrBanned && hasFallbackData) {
+							// Syntax/security errors with structured data available — strip sceneCode and
+							// fall back to JSON rendering so the scene is still usable.
+							const { sceneCode: _dropped, ...jsonOnly } = mergedSceneData;
+							effectiveSceneData = jsonOnly;
+							const msg = formatViolations(preCheck);
+							console.warn(
+								`[create_scene] sceneCode has unrecoverable errors — falling back to JSON render. ${msg}`,
+							);
+						} else {
+							const msg = formatViolations(preCheck);
+							return {
+								content: [
+									{
+										type: "text",
+										text: JSON.stringify({
+											error: "Scene not created — validation errors must be fixed first.",
+											violations: msg,
+										}),
+									},
+								],
+								details: { error: "validation_failed" },
+							};
+						}
 					}
 				}
 
-				const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title, mergedSceneData);
+				const scene = await sceneManager.createScene(ownerId(), effectivePrompt, params.title, effectiveSceneData);
+
+				// Auto-generate physics collider for sceneCode/stub scenes (no Marble splat)
+				if (!scene.sceneData.splatUrl && uploadsDir && publicBaseUrl) {
+					generateSceneCollider(scene.sceneId, scene.sceneData.objects, uploadsDir, publicBaseUrl)
+						.then((url) => sceneManager.patchColliderUrl(scene.sceneId, url))
+						.catch((err: unknown) => console.warn(`[create_scene] collider generation failed: ${String(err)}`));
+				}
 				const validationMsg = params.sceneCode
 					? formatViolations(validateSceneCode(params.sceneCode, { skipAssetPrescan: true }))
 					: "";
@@ -140,7 +199,7 @@ export function createSceneTool(
 			const provider = sceneManager.getActiveProvider();
 			console.log(`[create_scene] taking provider path, provider=${provider.name}`);
 			if (provider.startGeneration) {
-				const title = params.title ?? params.prompt.slice(0, 60);
+				const title = params.title ?? effectivePrompt.slice(0, 60);
 				// Priority: multi-image paths > single path > URL
 				const genOptions =
 					params.imagePaths && params.imagePaths.length > 0
@@ -154,7 +213,7 @@ export function createSceneTool(
 									: undefined;
 				let operationId: string;
 				try {
-					({ operationId } = await provider.startGeneration(params.prompt, genOptions));
+					({ operationId } = await provider.startGeneration(effectivePrompt, genOptions));
 				} catch (err) {
 					const msg = err instanceof Error ? err.message : String(err);
 					console.error(`[create_scene] provider.startGeneration failed: ${msg}`);
@@ -165,7 +224,7 @@ export function createSceneTool(
 				}
 				const scene = await sceneManager.createSceneAsync(
 					ownerId(),
-					params.prompt,
+					effectivePrompt,
 					title,
 					operationId,
 					provider.name,
@@ -200,7 +259,7 @@ export function createSceneTool(
 			}
 
 			// Synchronous fallback (e.g. StubProvider)
-			const scene = await sceneManager.createScene(ownerId(), params.prompt, params.title);
+			const scene = await sceneManager.createScene(ownerId(), effectivePrompt, params.title);
 			return {
 				content: [
 					{

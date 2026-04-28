@@ -9,38 +9,38 @@
 
 ### 🔴 P0 — 立刻（每项 ≤ 半天，零破坏性）
 
-- [ ] **sceneCode 沙箱预验证** — acorn 语法检查 + banned API 白名单，Agent 写 DB 前验证，失败重试一次再回退 JSON 渲染模式。来源：Evolver solidify.js。
+- [x] **sceneCode 沙箱预验证** — acorn 语法检查 + banned API 白名单，Agent 写 DB 前验证，失败重试一次再回退 JSON 渲染模式。来源：Evolver solidify.js。
 - [ ] **sceneCode 内容哈希缓存** — `executeCode()` 前 SHA-256 对比，命中跳过 WebGL 重建，重复访问节省 100-300ms。
-- [ ] **场景编辑修复循环检测** — 同 session 3 次 `update_scene` 且 sceneData hash 无明显变化 → Agent system prompt 注入"建议重新生成"提示。来源：Evolver repair_loop_detector。
-- [ ] **Admin tick 调试接口** — `POST /admin/scenes/:id/tick`（server secret 鉴权），立即触发一次 heartbeat，无需改常量等 10 分钟。来源：living-worlds.md §8。
-- [ ] **worldTime 平滑插值** — 收到 `world_time_update` 后在 viewer 用 `requestAnimationFrame` 线性过渡 30s，替代当前跳变。来源：living-worlds.md §9。
+- [x] **场景编辑修复循环检测** — 同 session 3 次 `update_scene` 且 sceneData hash 无明显变化 → Agent system prompt 注入"建议重新生成"提示。来源：Evolver repair_loop_detector。
+- [x] **Admin tick 调试接口** — `POST /admin/scenes/:id/tick`（server secret 鉴权），立即触发一次 heartbeat，无需改常量等 10 分钟。来源：living-worlds.md §8。
+- [x] **worldTime 平滑插值** — 收到 `world_time_update` 后在 viewer 用 `requestAnimationFrame` 线性过渡 30s，替代当前跳变。来源：living-worlds.md §9。
 - [ ] **Agent 自动生成碰撞体 GLB** — 根据 `sceneData.objects` 的 position + 推断尺寸，程序化构建 `BoxGeometry` Group，用 `GLTFExporter` 导出 `.glb`，上传到 `/uploads/`，写入 `colliderMeshUrl`。解决无 Marble 场景（stub/sceneCode）物理穿透问题，完全自动化无需手工。来源：splat-collider-builder.netlify.app 调研。
 
 ---
 
 ### 🟡 P1 — 短期（1-2 周）
 
-- [ ] **聊天信号提取** — session 消息路径加 Regex 层（中英文），检测 `scene_dissatisfaction` / `feature_request` / `repair_loop` 信号，写入 session metadata，暴露给运营查询。来源：Evolver signals.js。
-- [ ] **GLTF 模型 URL 哈希缓存** — `GltfObjectRenderer` 按 URL hash 缓存已加载 `Group`，同 URL 复用，跳过重新下载和解析。
-- [ ] **NPC 停滞检测 + 唤醒进化** — NPC heartbeat 查询 7 天无互动的 NPC → 触发 `repair` 策略进化；14 天无互动 → 发布"NPC 离开"world_event。来源：Evolver stagnation detection。
-- [ ] **NPC 进化审计日志** — 独立 `npc_evolution_events` 表（event_id, npc_id, trigger, delta, outcome, created_at），替代 metadata 里可变数组，支持跨 NPC 分析进化策略效果。
-- [ ] **NPC 进化策略预设注入** — 按 `interactionCount` 自动选 `innovate` / `balanced` / `harden` / `repair` 策略，注入进化 prompt。`count<5`=innovate，`5-50`=balanced，`>50`=harden，7d停滞=repair。来源：Evolver strategy presets。
-- [ ] **可变 heartbeat tick 率** — 有活跃 session 的场景 10min/tick；超过 24h 无访客的场景 60min/tick，非活跃场景 API 调用降至 1/6。来源：living-worlds.md §3。
-- [ ] **worldTime 重启快进** — server 启动时读 `lastHeartbeatAt`，计算停机期间应补的 game-time，一次性追赶（上限 2 个 game-day）。来源：living-worlds.md §5。
-- [ ] **Telegram 生成进度反馈** — 异步 Marble 任务期间每 15s 推送进度消息，完成时更新为场景链接。
-- [ ] **玩家触发世界事件** — NPC 深度交互（`interactionCount` 达阈值或关键词命中）→ 立即生成并广播一条 `world_event`，关闭玩家行为→世界叙事闭环。来源：living-worlds.md §4。
+- [x] **聊天信号提取** — session 消息路径加 Regex 层（中英文），检测 `scene_dissatisfaction` / `feature_request` / `repair_loop` 信号，写入 session metadata，暴露给运营查询。来源：Evolver signals.js。
+- [x] **GLTF 模型 URL 哈希缓存** — `GltfObjectRenderer` 按 URL hash 缓存已加载 `Group`，同 URL 复用，跳过重新下载和解析。
+- [x] **NPC 停滞检测 + 唤醒进化** — NPC heartbeat 查询 7 天无互动的 NPC → 触发 `repair` 策略进化；14 天无互动 → 发布"NPC 离开"world_event。来源：Evolver stagnation detection。
+- [x] **NPC 进化审计日志** — 独立 `npc_evolution_events` 表（event_id, npc_id, trigger, delta, outcome, created_at），替代 metadata 里可变数组，支持跨 NPC 分析进化策略效果。
+- [x] **NPC 进化策略预设注入** — 按 `interactionCount` 自动选 `innovate` / `balanced` / `harden` / `repair` 策略，注入进化 prompt。`count<5`=innovate，`5-50`=balanced，`>50`=harden，7d停滞=repair。来源：Evolver strategy presets。
+- [x] **可变 heartbeat tick 率** — 有活跃 session 的场景 10min/tick；超过 24h 无访客的场景 60min/tick，非活跃场景 API 调用降至 1/6。来源：living-worlds.md §3。
+- [x] **worldTime 重启快进** — server 启动时读 `lastHeartbeatAt`，计算停机期间应补的 game-time，一次性追赶（上限 2 个 game-day）。来源：living-worlds.md §5。
+- [x] **Telegram 生成进度反馈** — 异步 Marble 任务期间每 15s 推送进度消息，完成时更新为场景链接。
+- [x] **玩家触发世界事件** — NPC 深度交互（`interactionCount` 达阈值或关键词命中）→ 立即生成并广播一条 `world_event`，关闭玩家行为→世界叙事闭环。来源：living-worlds.md §4。
 
 ---
 
 ### 🟢 P2 — 中期（1 个月）
 
-- [ ] **sceneCode Gene 库初版** — `src/skills/renderer-threejs/genes/` 存 ~30 个常用效果 JSON（`{ signals, code, validated }`）；code-gen 先关键词匹配，命中直接返回，不调 Haiku。来源：Evolver selector.js，实测命中率 92%。
-- [ ] **场景生成 prompt Gene 化** — `create-scene` 工具改用结构化信号字段（`style_signals`, `required`, `constraints`, `avoid_repeat`）替代自由文本。论文证明结构化 Gene 比自由文本控制信号强 2x。
-- [ ] **滚动世界叙事（World Narrative）** — `EnvironmentConfig` 加 `worldNarrative?: string`；每次事件生成后 Haiku 将其更新为 100-200 字摘要；下次事件生成注入为背景，形成故事弧。来源：living-worlds.md §1。
-- [ ] **天气视觉效果** — `world_event` type=weather 时解析 headline 关键词（暴雨/大雾/晴）→ 注入 sceneCode overlay（粒子雨/fog density/清除效果）。来源：living-worlds.md §10。
+- [x] **sceneCode Gene 库初版** — `src/skills/renderer-threejs/genes/` 存 ~30 个常用效果 JSON（`{ signals, code, validated }`）；code-gen 先关键词匹配，命中直接返回，不调 Haiku。来源：Evolver selector.js，实测命中率 92%。
+- [x] **场景生成 prompt Gene 化** — `create-scene` 工具改用结构化信号字段（`style_signals`, `required`, `constraints`, `avoid_repeat`）替代自由文本。论文证明结构化 Gene 比自由文本控制信号强 2x。
+- [x] **滚动世界叙事（World Narrative）** — `EnvironmentConfig` 加 `worldNarrative?: string`；每次事件生成后 Haiku 将其更新为 100-200 字摘要；下次事件生成注入为背景，形成故事弧。来源：living-worlds.md §1。
+- [x] **天气视觉效果** — `world_event` type=weather 时解析 headline 关键词（暴雨/大雾/晴）→ 注入 sceneCode overlay（粒子雨/fog density/清除效果）。来源：living-worlds.md §10。
 - [ ] **世界事件归档 + 传说系统** — 超过 30 天的 `world_events` 定期聚合为 `world_lore` 条目（Haiku 生成历史摘要）；World Journal 增加"传说"标签页。来源：living-worlds.md §7。
-- [ ] **NPC 因果记忆（Memory Graph 轻版）** — memory 条目从 `string[]` 改为 `{ fact, source, timestamp, linkedFacts[] }`；NPC 对话时能追溯记忆来源，产生连贯叙事。来源：Evolver memoryGraph.js。
-- [ ] **Gene 库自动增长** — 新生成的 sceneCode 通过沙箱验证后自动候选入库，CI 或人工审核后标记 `validated: true`。
+- [x] **NPC 因果记忆（Memory Graph 轻版）** — memory 条目从 `string[]` 改为 `{ fact, source, timestamp, linkedFacts[] }`；NPC 对话时能追溯记忆来源，产生连贯叙事。来源：Evolver memoryGraph.js。
+- [x] **Gene 库自动增长** — 新生成的 sceneCode 通过沙箱验证后自动候选入库，CI 或人工审核后标记 `validated: true`。
 - [ ] **场景访问控制** — viewer API 强制校验 shareToken / session，无权访问返回 403，不再静默失败。
 - [ ] **移动端触控** — SplatViewer 虚拟摇杆 + 双指缩放；UniverseView 触控卡片滑动。
 - [ ] **Universe 空状态引导** — 新用户无场景时显示引导卡（3 步：发消息 → 选风格 → 进入世界）。

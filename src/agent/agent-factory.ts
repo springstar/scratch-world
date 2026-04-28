@@ -27,7 +27,13 @@ import { webSearchTool } from "./tools/web-search.js";
 export const BASE_SYSTEM_PROMPT = `\
 You are a world-building companion. You help users create, explore, and evolve persistent 3D worlds through conversation.
 
-When a user describes a place, scene, or environment they want to create, call create_scene.
+When a user describes a place, scene, or environment they want to create, call create_scene. Always include a sceneGene object to decompose the request:
+- styleSignals: style/mood/atmosphere keywords
+- required: spatial elements that MUST appear
+- constraints: hard limits if any
+- avoidRepeat: elements from earlier scenes in this conversation
+
+Example: user says "帮我生成一个赛博朋克夜市" → sceneGene = { styleSignals: ["cyberpunk","neon","rainy","night"], required: ["food stalls","holographic signs","alley crowd","puddle reflections"], constraints: [] }
 When a user wants a city, town, village, settlement, or commercial district, call create_city THEN immediately call create_scene (see settlement workflow below).
 When a user wants to change or add something to an existing scene, call update_scene.
 When a user asks what scenes they have, call list_scenes.
@@ -310,7 +316,16 @@ Before writing any sceneCode for a natural scene, look up the biome in SKILL.md 
 export const PROVIDER_BASE_PROMPT = `\
 You are a world-building companion. You help users create and explore persistent 3D worlds through conversation.
 
-When a user describes a place or scene they want to create, call create_scene with ONLY the prompt and optional title.
+When a user describes a place or scene they want to create, call create_scene with the prompt, optional title, and a sceneGene object. Always decompose the request into sceneGene fields before calling create_scene:
+- styleSignals: style/mood/atmosphere keywords (e.g. ["cyberpunk","rainy","night","foggy"])
+- required: specific spatial elements that MUST appear (e.g. ["central fountain","3 market stalls","stone bridge"])
+- constraints: hard limits if any (e.g. ["indoor only","no vehicles","compact 20×20 m"])
+- avoidRepeat: elements from previous scenes in this conversation to avoid repeating
+
+Example: user says "来一个神秘的水下神庙场景" → sceneGene = { styleSignals: ["underwater","mysterious","ancient","dim blue light"], required: ["submerged stone pillars","kelp forests","coral","ruined altar"], constraints: [] }
+
+Do NOT skip sceneGene. Every create_scene call (text-only path) must include it. Image/video paths are passed alongside sceneGene as usual.
+
 ONLY call update_scene when the user explicitly asks to regenerate the base scene (e.g. "重新生成场景", "change the lighting/weather/layout", "rebuild this scene"). This triggers a full Marble re-generation and takes several minutes. For everything else — adding objects, displaying content, animations, interactive elements — use place_prop / attach_skill / code-gen instead.
 When a user asks what scenes they have, call list_scenes.
 When a user wants to load, open, switch to, or revisit a scene by name (e.g. "加载阶梯教室", "open my classroom", "切换到森林场景"), call list_scenes first, find the best title match, then share its view link — do NOT create a new scene.
@@ -481,9 +496,24 @@ export function createAgent(
 			systemPrompt,
 			model,
 			tools: [
-				createSceneTool(sceneManager, ownerId, viewerUrl, generationQueue, sessionId),
+				createSceneTool(
+					sceneManager,
+					ownerId,
+					viewerUrl,
+					generationQueue,
+					sessionId,
+					join(projectRoot, "uploads"),
+					viewerBaseUrl,
+				),
 				createCityTool(),
-				updateSceneTool(sceneManager, viewerUrl, generationQueue, sessionId),
+				updateSceneTool(
+					sceneManager,
+					viewerUrl,
+					generationQueue,
+					sessionId,
+					join(projectRoot, "uploads"),
+					viewerBaseUrl,
+				),
 				getSceneTool(sceneManager, viewerUrl),
 				listScenesTool(sceneManager),
 				shareSceneTool(sceneManager, viewerBaseUrl, sessionId),

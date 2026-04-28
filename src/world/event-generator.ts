@@ -28,11 +28,14 @@ function worldTimeToString(t: number): string {
  * Generate a single world event for a living scene using Claude Haiku.
  * Returns null on any failure (network, parse error, timeout) so the heartbeat
  * can silently skip event generation without affecting worldTime updates.
+ *
+ * Also returns an updatedNarrative (100-200 chars) for the heartbeat to persist
+ * so the next event generation has a running story arc as context.
  */
 export async function generateWorldEvent(
 	scene: Scene,
 	recentEvents: WorldEvent[],
-): Promise<Omit<WorldEvent, "eventId" | "sceneId" | "createdAt"> | null> {
+): Promise<(Omit<WorldEvent, "eventId" | "sceneId" | "createdAt"> & { updatedNarrative?: string }) | null> {
 	const worldTime = scene.sceneData.environment.worldTime ?? 43200;
 	const timeStr = worldTimeToString(worldTime);
 	const npcNames = scene.sceneData.objects
@@ -47,12 +50,15 @@ export async function generateWorldEvent(
 					.map((e) => `- ${e.headline}`)
 					.join("\n")}`
 			: "";
+	const narrativeContext = scene.sceneData.environment.worldNarrative
+		? `\n\n世界叙事背景（延续此故事弧）：${scene.sceneData.environment.worldNarrative}`
+		: "";
 
 	const prompt = `你是一个奇幻世界的编年史作者。请为以下世界生成一个简短的世界事件。
 
 世界名称：${scene.title}
 世界描述：${scene.description}
-当前时间：${timeStr}${npcNames ? `\n已知居民：${npcNames}` : ""}${recentHeadlines}
+当前时间：${timeStr}${npcNames ? `\n已知居民：${npcNames}` : ""}${narrativeContext}${recentHeadlines}
 
 请生成一个发生在此时此刻的世界事件，必须是以下类型之一：
 - weather（天气变化）
@@ -60,11 +66,14 @@ export async function generateWorldEvent(
 - npc_activity（居民活动）
 - anomaly（神秘异象）
 
+同时，将已有叙事背景与此次事件合并，生成一段更新后的世界叙事摘要（不超过100字，整合历史与新事件，形成连贯故事弧）。
+
 请严格按照以下JSON格式回复（不要有其他文字）：
 {
   "eventType": "weather|discovery|npc_activity|anomaly",
   "headline": "不超过30字的标题",
-  "body": "1-2句话的描述，富有画面感"
+  "body": "1-2句话的描述，富有画面感",
+  "narrative": "不超过100字的世界叙事摘要"
 }`;
 
 	try {
@@ -88,7 +97,12 @@ export async function generateWorldEvent(
 		const jsonMatch = text.match(/\{[\s\S]*\}/);
 		if (!jsonMatch) return null;
 
-		const parsed = JSON.parse(jsonMatch[0]) as { eventType?: string; headline?: string; body?: string };
+		const parsed = JSON.parse(jsonMatch[0]) as {
+			eventType?: string;
+			headline?: string;
+			body?: string;
+			narrative?: string;
+		};
 		if (!parsed.headline || !parsed.body) return null;
 		const eventType = EVENT_TYPES.includes(parsed.eventType as EventType)
 			? (parsed.eventType as EventType)
@@ -99,6 +113,7 @@ export async function generateWorldEvent(
 			eventType,
 			headline: String(parsed.headline).slice(0, 60),
 			body: String(parsed.body),
+			...(parsed.narrative ? { updatedNarrative: String(parsed.narrative).slice(0, 200) } : {}),
 		};
 	} catch (err) {
 		console.error("[event-generator] failed:", err instanceof Error ? err.message : err);

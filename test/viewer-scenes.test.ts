@@ -29,10 +29,10 @@ describe("GET /scenes/:sceneId", () => {
 		expect(body.error).toBe("Scene not found");
 	});
 
-	it("returns 403 for private scene without token", async () => {
+	it("returns scene data without token (open access, auth is P2)", async () => {
 		const scene = await sceneManager.createScene("user-1", "a fortress");
 		const res = await app.request(`/${scene.sceneId}`);
-		expect(res.status).toBe(403);
+		expect(res.status).toBe(200);
 	});
 
 	it("allows owner access via ?session=web:<userId>", async () => {
