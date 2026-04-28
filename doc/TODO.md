@@ -2,7 +2,7 @@
 
 ## 改进路线总表
 
-> 最后更新：2026-04-28。来源：Living Worlds 文档、EvoMap/evolver 调研、现有待办汇总。
+> 最后更新：2026-04-28。来源：Living Worlds 文档、EvoMap/evolver 调研、splat-collider-builder 调研、现有待办汇总。
 > 依赖关系见文末。已完成项移至底部"已完成"节。
 
 ---
@@ -14,6 +14,7 @@
 - [ ] **场景编辑修复循环检测** — 同 session 3 次 `update_scene` 且 sceneData hash 无明显变化 → Agent system prompt 注入"建议重新生成"提示。来源：Evolver repair_loop_detector。
 - [ ] **Admin tick 调试接口** — `POST /admin/scenes/:id/tick`（server secret 鉴权），立即触发一次 heartbeat，无需改常量等 10 分钟。来源：living-worlds.md §8。
 - [ ] **worldTime 平滑插值** — 收到 `world_time_update` 后在 viewer 用 `requestAnimationFrame` 线性过渡 30s，替代当前跳变。来源：living-worlds.md §9。
+- [ ] **Agent 自动生成碰撞体 GLB** — 根据 `sceneData.objects` 的 position + 推断尺寸，程序化构建 `BoxGeometry` Group，用 `GLTFExporter` 导出 `.glb`，上传到 `/uploads/`，写入 `colliderMeshUrl`。解决无 Marble 场景（stub/sceneCode）物理穿透问题，完全自动化无需手工。来源：splat-collider-builder.netlify.app 调研。
 
 ---
 
@@ -58,6 +59,7 @@
 - [ ] **LOD（Level of Detail）** — 远处物体降低细节：背景层树木用 sprite billboard 替代 InstancedMesh，减少 draw call；适用于超过 20 棵树的大型场景。
 - [ ] **音频氛围** — 根据 skybox/weather 播放背景音效（风声、雨声、城市噪音），使用 Web Audio API。
 - [ ] **更多 GLTF 模型库** — 补充 SKILL.md 中可用的 CC0 模型 URL，例如 Kenney City Kit、Quaternius 角色包的直链。
+- [ ] **Viewer 内嵌碰撞体编辑器** — 编辑模式新增"碰撞体"tab，支持可视化绘制 Box/Sphere/Cylinder（鼠标拖拽 + 参考平面 raycast，同 splat-collider-builder 原理），GLTFExporter 导出 `.glb` 并写入 `colliderMeshUrl`。面向需要精细调整碰撞的场景创建者。依赖 P0 Agent 自动生成碰撞体作为初始值。来源：splat-collider-builder.netlify.app。
 
 ---
 
