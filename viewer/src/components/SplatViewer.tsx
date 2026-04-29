@@ -1691,7 +1691,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           clips[0];
         const prev = group.userData.activeAction as import("three").AnimationAction | undefined;
         const next = mixer.clipAction(clip);
-        if (prev && prev !== next) { next.reset().fadeIn(0.3); prev.fadeOut(0.3); }
+        if (prev && prev !== next) { next.reset().play().fadeIn(0.3); prev.fadeOut(0.3); }
         else { next.reset().play(); }
         group.userData.activeAction = next;
       };
