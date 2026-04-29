@@ -1643,11 +1643,20 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         );
         if (clips.length > 0) {
           const mixer = new AnimationMixer(group);
-          const idleClip = clips.find((c) => /idle/i.test(c.name)) ?? clips[0];
+          // Strip root bone position tracks from locomotion clips — prevents root motion
+          // from conflicting with manual position control in __moveNpc
+          const inPlaceClips = clips.map((c) => {
+            if (!/walk|run|jog|sprint/i.test(c.name)) return c;
+            const stripped = c.tracks.filter((t) => !/^root\.position$/i.test(t.name));
+            return stripped.length < c.tracks.length
+              ? new THREE.AnimationClip(c.name, c.duration, stripped, c.blendMode)
+              : c;
+          });
+          const idleClip = inPlaceClips.find((c) => /idle/i.test(c.name)) ?? inPlaceClips[0];
           const idleAction = mixer.clipAction(idleClip);
           idleAction.play();
           group.userData.mixer = mixer;
-          group.userData.animClips = clips;
+          group.userData.animClips = inPlaceClips;
           group.userData.activeAction = idleAction;
         }
         npcGroups.set(obj.objectId, group);
@@ -2444,20 +2453,29 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
                 npcMeshList.push(c);
               }
             });
-            // Animation setup — mirrors physics path (lines ~1635-1652)
+            // Animation setup — mirrors physics path (lines ~1635-1662)
             {
               const rawClips = (g.userData._animations ?? []) as import("three").AnimationClip[];
               type MaybeTrack = { createInterpolant?: unknown };
-              const npClips = rawClips.filter((c) =>
+              const validClips = rawClips.filter((c) =>
                 c.tracks.every((t) => typeof (t as MaybeTrack).createInterpolant === "function"),
               );
-              if (npClips.length > 0) {
+              if (validClips.length > 0) {
                 const mixer = new AnimationMixer(g);
-                const idleClip = npClips.find((c) => /idle/i.test(c.name)) ?? npClips[0];
+                // Strip root bone position tracks from locomotion clips — prevents root motion
+                // from conflicting with manual position control in __moveNpc
+                const inPlaceClips = validClips.map((c) => {
+                  if (!/walk|run|jog|sprint/i.test(c.name)) return c;
+                  const stripped = c.tracks.filter((t) => !/^root\.position$/i.test(t.name));
+                  return stripped.length < c.tracks.length
+                    ? new THREE.AnimationClip(c.name, c.duration, stripped, c.blendMode)
+                    : c;
+                });
+                const idleClip = inPlaceClips.find((c) => /idle/i.test(c.name)) ?? inPlaceClips[0];
                 const idleAction = mixer.clipAction(idleClip);
                 idleAction.play();
                 g.userData.mixer = mixer;
-                g.userData.animClips = npClips;
+                g.userData.animClips = inPlaceClips;
                 g.userData.activeAction = idleAction;
               }
             }
