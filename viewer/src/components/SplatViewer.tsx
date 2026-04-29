@@ -663,13 +663,18 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
     // ── Contact shadow helpers ────────────────────────────────────────────────
     // Creates a soft radial blob shadow under an NPC/prop group.
     // The plane is added to the scene (NOT the group) so it stays flat on terrain.
-    function createContactShadow(group: import("three").Group, groundY: number): Mesh {
-      const shadowBbox = new Box3().setFromObject(group);
-      const xzSpan = Math.max(
-        shadowBbox.max.x - shadowBbox.min.x,
-        shadowBbox.max.z - shadowBbox.min.z,
-      );
-      const diameter = Math.max(xzSpan * 1.5, 0.4);
+    function createContactShadow(group: import("three").Group, groundY: number, diameterOverride?: number): Mesh {
+      let diameter: number;
+      if (diameterOverride !== undefined) {
+        diameter = diameterOverride;
+      } else {
+        const shadowBbox = new Box3().setFromObject(group);
+        const xzSpan = Math.max(
+          shadowBbox.max.x - shadowBbox.min.x,
+          shadowBbox.max.z - shadowBbox.min.z,
+        );
+        diameter = Math.max(xzSpan * 1.5, 0.4);
+      }
 
       const SIZE = 128;
       const canvas2d = document.createElement("canvas");
@@ -695,8 +700,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       });
       const shadowMesh = new Mesh(new PlaneGeometry(diameter, diameter), shadowMat);
       shadowMesh.rotation.x = -Math.PI / 2;
-      shadowMesh.position.set(group.position.x, groundY + 0.01, group.position.z);
-      shadowMesh.renderOrder = -1;
+      // 0.002 instead of 0.01 — minimises the plane clipping through shoe soles when
+      // feet land exactly on groundY (e.g. SkinnedMesh with groundOffset=0).
+      shadowMesh.position.set(group.position.x, groundY + 0.002, group.position.z);
+      shadowMesh.renderOrder = 1;
       scene.add(shadowMesh);
       return shadowMesh;
     }
@@ -1595,16 +1602,19 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           return;
         }
         // Orient the model upright: if the Y extent is less than 75 % of the max extent,
-        // the model is lying flat. Threshold 0.75 is calibrated in the placement skill
-        // to catch Joyce (ratio ≈ 0.66) without triggering on upright models.
-        // Reset ALL transforms: GLTF root scene may have baked-in position/rotation that
         // Reset all transforms before measuring — GLTF root may have baked-in offsets
         // that corrupt bbox measurements if not cleared first.
         group.position.set(0, 0, 0);
         group.rotation.set(0, 0, 0);
         group.scale.setScalar(1);
-        // Orient upright: try all 90° candidates, keep whichever maximises Y/horizontal ratio
-        orientUpright(group);
+        // Rigged characters (SkinnedMesh) have their Blender Z-up → Y-up correction baked
+        // into the root bone rotation. Applying orientUpright to the GROUP contaminates all
+        // bone matrixWorld values and causes the character to lean backward.
+        let hasSkinnedMesh = false;
+        group.traverse((child) => { if (child instanceof SkinnedMesh) hasSkinnedMesh = true; });
+        if (!hasSkinnedMesh) {
+          orientUpright(group);
+        }
         // Scale to targetHeight when provided — purely data-driven, no type inference.
         // Cap at 10× to guard against orientation-detection misfires on tiny models.
         let effectiveScale = scale;
@@ -1618,10 +1628,12 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         }
         group.scale.setScalar(effectiveScale);
         group.updateMatrixWorld(true);
-        // Use mesh-only bbox so skeleton Bone nodes don't push min.y below ground
+        // Use mesh-only bbox so skeleton Bone nodes don't push min.y below ground.
+        // For rigged characters the root bone handles Y positioning — groundOffset = 0.
         const bbox = meshOnlyBoundingBox(group);
-        // bbox is in world space — negate min.y directly to sit model on ground.
-        const groundOffset = -bbox.min.y;
+        const groundOffset = hasSkinnedMesh ? 0 : -bbox.min.y;
+        // DEBUG
+        console.log(`[NPC physics] ${obj.name} hasSkinnedMesh=${hasSkinnedMesh} scale=${effectiveScale.toFixed(3)} groundOffset=${groundOffset.toFixed(3)} bbox Y=[${bbox.min.y.toFixed(3)},${bbox.max.y.toFixed(3)}] Z=[${bbox.min.z.toFixed(3)},${bbox.max.z.toFixed(3)}] resolvedPos.y=${resolvedPos.y.toFixed(3)}`);
         group.position.set(resolvedPos.x, resolvedPos.y + groundOffset, resolvedPos.z);
         group.traverse((c) => {
           c.userData.objectId = obj.objectId;
@@ -1632,7 +1644,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           }
         });
         scene.add(group);
-        group.userData.shadowPlane = createContactShadow(group, resolvedPos.y);
+        group.userData.shadowPlane = createContactShadow(
+          group,
+          resolvedPos.y,
+          hasSkinnedMesh
+            ? Math.max(bbox.max.x - bbox.min.x, bbox.max.z - bbox.min.z) * 1.5
+            : undefined,
+        );
         // Animation setup — plays idle loop when the GLB contains skeletal clips
         const rawClips = (group.userData._animations ?? []) as import("three").AnimationClip[];
         // Guard: skip clips whose tracks are plain objects (not KeyframeTrack instances).
@@ -1642,26 +1660,36 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         const clips = rawClips.filter((c) =>
           c.tracks.every((t) => typeof (t as MaybeTrack).createInterpolant === "function"),
         );
-        if (clips.length > 0) {
+        // URL param ?noanim disables all NPC animation (shows bind pose for comparison)
+        // URL param ?npcanim=ClipName overrides which clip plays (e.g. ?npcanim=A_TPose)
+        const _urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+        const DISABLE_NPC_ANIM = _urlParams.has("noanim");
+        const NPC_ANIM_OVERRIDE = _urlParams.get("npcanim");
+        if (clips.length > 0 && !DISABLE_NPC_ANIM) {
           const mixer = new AnimationMixer(group);
-          // Strip root bone position tracks (prevent root motion conflicting with __moveNpc)
-          // and strip foot/toe bone rotation tracks from ALL clips to prevent shoe deformation
-          // artifacts — ankle/toe articulation exposes the shoe sole from typical camera angles.
-          const FOOT_ROT_RE = /^(foot_[lr]|ball_leaf_[lr]|ball_[lr])\.(?:rotation|quaternion)$/i;
-          const inPlaceClips = clips.map((c) => {
-            const stripped = c.tracks.filter(
-              (t) => !/^root\.position$/i.test(t.name) && !FOOT_ROT_RE.test(t.name),
-            );
-            return stripped.length < c.tracks.length
-              ? new THREE.AnimationClip(c.name, c.duration, stripped, c.blendMode)
-              : c;
-          });
-          const idleClip = inPlaceClips.find((c) => /idle/i.test(c.name)) ?? inPlaceClips[0];
-          const idleAction = mixer.clipAction(idleClip);
-          idleAction.play();
-          group.userData.mixer = mixer;
-          group.userData.animClips = inPlaceClips;
-          group.userData.activeAction = idleAction;
+          const idleClip = NPC_ANIM_OVERRIDE
+            ? (clips.find((c) => c.name === NPC_ANIM_OVERRIDE) ?? clips.find((c) => /idle/i.test(c.name)) ?? clips[0])
+            : (clips.find((c) => /idle/i.test(c.name)) ?? clips[0]);
+          // Heuristic: detect animations incompatible with this skeleton's bind pose.
+          // A properly retargeted Mixamo standing-idle has pelvis barely deviating from
+          // bind pose (|w| ≈ 0.99). This model's pelvis w=0.644 (≈100° deviation), which
+          // causes arms to collapse into the chest and feet to rotate sole-forward.
+          // If |pelvis w| < 0.8, skip animation and hold the bind pose instead.
+          const pelvisQt = idleClip.tracks.find((t) => t.name === "pelvis.quaternion");
+          const pelvisW0 = pelvisQt && pelvisQt.values.length >= 4 ? pelvisQt.values[3] : 1;
+          const animCompatible = Math.abs(pelvisW0) >= 0.8;
+          if (animCompatible) {
+            console.log(`[NPC anim physics] ${obj.name} playing="${idleClip.name}" pelvisW=${pelvisW0.toFixed(3)}`);
+            const idleAction = mixer.clipAction(idleClip);
+            idleAction.play();
+            group.userData.mixer = mixer;
+            group.userData.animClips = clips;
+            group.userData.activeAction = idleAction;
+          } else {
+            console.warn(`[NPC anim physics] ${obj.name} animation skipped — pelvis w=${pelvisW0.toFixed(3)} < 0.8 (rig/animation mismatch). Re-rig model via Mixamo to fix.`);
+          }
+        } else if (clips.length > 0) {
+          console.log(`[NPC anim physics] ${obj.name} animation DISABLED (add &npcanim=ClipName to URL to test a clip)`);
         }
         npcGroups.set(obj.objectId, group);
         npcGroupsRef.current.set(obj.objectId, group);
@@ -1751,7 +1779,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             const tw = Math.min((performance.now() - walkStart) / walkDurationMs, 1);
             const newX = startPos.x + dx * tw;
             const newZ = startPos.z + dz * tw;
-            group.position.set(newX, pos.y !== undefined ? pos.y : startPos.y, newZ);
+            group.position.set(newX, startPos.y, newZ);
             const shadow = group.userData.shadowPlane as Mesh | undefined;
             if (shadow) { shadow.position.x = newX; shadow.position.z = newZ; }
             if (tw < 1) { requestAnimationFrame(step); return; }
@@ -2429,7 +2457,9 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             const npExtY = rawBboxNp.max.y - rawBboxNp.min.y;
             const npExtZ = rawBboxNp.max.z - rawBboxNp.min.z;
             const npMaxExt = Math.max(npExtX, npExtY, npExtZ);
-            if (npMaxExt > 0.01 && npExtY < npMaxExt * 0.75) {
+            let npHasSkinnedMesh = false;
+            g.traverse((child) => { if (child instanceof SkinnedMesh) npHasSkinnedMesh = true; });
+            if (!npHasSkinnedMesh && npMaxExt > 0.01 && npExtY < npMaxExt * 0.75) {
               if (npExtX >= npExtZ) {
                 g.rotation.z = -Math.PI / 2;
               } else {
@@ -2447,7 +2477,7 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
             g.scale.setScalar(effectiveScaleNp);
             g.updateMatrixWorld(true);
             const npBbox = meshOnlyBoundingBox(g);
-            const npGroundOffset = -npBbox.min.y;
+            const npGroundOffset = npHasSkinnedMesh ? 0 : -npBbox.min.y;
             g.position.set(pos.x, pos.y + npGroundOffset, pos.z);
             g.traverse((c) => {
               c.userData.objectId = obj.objectId;
@@ -2464,29 +2494,40 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               const validClips = rawClips.filter((c) =>
                 c.tracks.every((t) => typeof (t as MaybeTrack).createInterpolant === "function"),
               );
-              if (validClips.length > 0) {
+              // URL param ?noanim disables all NPC animation; ?npcanim=ClipName overrides clip
+              const _npUrlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+              const DISABLE_NPC_ANIM_NP = _npUrlParams.has("noanim");
+              const NPC_ANIM_OVERRIDE_NP = _npUrlParams.get("npcanim");
+              if (validClips.length > 0 && !DISABLE_NPC_ANIM_NP) {
                 const mixer = new AnimationMixer(g);
-                // Strip root bone position tracks (root motion) and foot/toe rotation tracks
-                // (ankle articulation exposes shoe sole from typical camera angles)
-                const FOOT_ROT_RE_NP = /^(foot_[lr]|ball_leaf_[lr]|ball_[lr])\.(?:rotation|quaternion)$/i;
-                const inPlaceClips = validClips.map((c) => {
-                  const stripped = c.tracks.filter(
-                    (t) => !/^root\.position$/i.test(t.name) && !FOOT_ROT_RE_NP.test(t.name),
-                  );
-                  return stripped.length < c.tracks.length
-                    ? new THREE.AnimationClip(c.name, c.duration, stripped, c.blendMode)
-                    : c;
-                });
-                const idleClip = inPlaceClips.find((c) => /idle/i.test(c.name)) ?? inPlaceClips[0];
-                const idleAction = mixer.clipAction(idleClip);
-                idleAction.play();
-                g.userData.mixer = mixer;
-                g.userData.animClips = inPlaceClips;
-                g.userData.activeAction = idleAction;
+                const idleClip = NPC_ANIM_OVERRIDE_NP
+                  ? (validClips.find((c) => c.name === NPC_ANIM_OVERRIDE_NP) ?? validClips.find((c) => /idle/i.test(c.name)) ?? validClips[0])
+                  : (validClips.find((c) => /idle/i.test(c.name)) ?? validClips[0]);
+                const pelvisQt = idleClip.tracks.find((t) => t.name === "pelvis.quaternion");
+                const pelvisW0 = pelvisQt && pelvisQt.values.length >= 4 ? pelvisQt.values[3] : 1;
+                const animCompatible = Math.abs(pelvisW0) >= 0.8;
+                if (animCompatible) {
+                  console.log(`[NPC anim no-phys] ${obj.name} playing="${idleClip.name}" pelvisW=${pelvisW0.toFixed(3)}`);
+                  const idleAction = mixer.clipAction(idleClip);
+                  idleAction.play();
+                  g.userData.mixer = mixer;
+                  g.userData.animClips = validClips;
+                  g.userData.activeAction = idleAction;
+                } else {
+                  console.warn(`[NPC anim no-phys] ${obj.name} animation skipped — pelvis w=${pelvisW0.toFixed(3)} < 0.8 (rig/animation mismatch)`);
+                }
+              } else if (validClips.length > 0) {
+                console.log(`[NPC anim no-phys] ${obj.name} animation DISABLED`);
               }
             }
             scene.add(g);
-            g.userData.shadowPlane = createContactShadow(g, pos.y);
+            g.userData.shadowPlane = createContactShadow(
+              g,
+              pos.y,
+              npHasSkinnedMesh
+                ? Math.max(npBbox.max.x - npBbox.min.x, npBbox.max.z - npBbox.min.z) * 1.5
+                : undefined,
+            );
             noPhysicsNpcGroups.set(obj.objectId, g);
           })
           .catch((err: unknown) => {
