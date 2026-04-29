@@ -2444,6 +2444,23 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
                 npcMeshList.push(c);
               }
             });
+            // Animation setup — mirrors physics path (lines ~1635-1652)
+            {
+              const rawClips = (g.userData._animations ?? []) as import("three").AnimationClip[];
+              type MaybeTrack = { createInterpolant?: unknown };
+              const npClips = rawClips.filter((c) =>
+                c.tracks.every((t) => typeof (t as MaybeTrack).createInterpolant === "function"),
+              );
+              if (npClips.length > 0) {
+                const mixer = new AnimationMixer(g);
+                const idleClip = npClips.find((c) => /idle/i.test(c.name)) ?? npClips[0];
+                const idleAction = mixer.clipAction(idleClip);
+                idleAction.play();
+                g.userData.mixer = mixer;
+                g.userData.animClips = npClips;
+                g.userData.activeAction = idleAction;
+              }
+            }
             scene.add(g);
             g.userData.shadowPlane = createContactShadow(g, pos.y);
             noPhysicsNpcGroups.set(obj.objectId, g);

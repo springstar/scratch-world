@@ -32,12 +32,21 @@ export function resolveModelUrl(url: string): string {
   return url;
 }
 
+// SkeletonUtils.clone rebinds SkinnedMesh to cloned bones, but Object3D.clone
+// deep-copies userData via JSON which strips AnimationClip methods. Restore them.
+function cloneWithAnimations(src: THREE.Group): THREE.Group {
+  const cloned = skeletonClone(src) as THREE.Group;
+  const anims = src.userData._animations as THREE.AnimationClip[] | undefined;
+  if (anims) cloned.userData._animations = anims;
+  return cloned;
+}
+
 export function loadGltf(url: string, timeoutMs = 15000): Promise<THREE.Group> {
   const cached = gltfCache.get(url);
-  if (cached) return Promise.resolve(skeletonClone(cached) as THREE.Group);
+  if (cached) return Promise.resolve(cloneWithAnimations(cached));
 
   const pending = gltfPending.get(url);
-  if (pending) return pending.then((g) => skeletonClone(g) as THREE.Group);
+  if (pending) return pending.then((g) => cloneWithAnimations(g));
 
   const promise = new Promise<THREE.Group>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`loadGltf timeout: ${url}`)), timeoutMs);
@@ -56,7 +65,7 @@ export function loadGltf(url: string, timeoutMs = 15000): Promise<THREE.Group> {
 
   const deduped = promise.finally(() => gltfPending.delete(url));
   gltfPending.set(url, deduped as Promise<THREE.Group>);
-  return deduped.then((g) => skeletonClone(g) as THREE.Group);
+  return deduped.then((g) => cloneWithAnimations(g));
 }
 
 /**
