@@ -1389,13 +1389,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           if (freeFlyMove.lengthSq() > 0) camera.position.add(freeFlyMove);
         }
       }
-      portalMgr.tickPortals();
-      tickScriptMeshes();
-      tickWorldTimeInterp(performance.now());
-      renderer.render(scene, camera);
-      // Update NPC animation mixers and script animate callbacks.
-      // Both need a delta — compute once and share.
-      const ffDelta = clock.getDelta();
+      // Update animation mixers before rendering so the renderer sees current pose.
+      // Clamp to 1/30 s to prevent a large accumulated delta on the first frame
+      // (the clock starts at component mount; loading can take several seconds).
+      const ffDelta = Math.min(clock.getDelta(), 1 / 30);
       for (const [, grp] of npcGroupsRef.current) {
         const m = grp.userData.mixer as AnimationMixer | undefined;
         if (m) m.update(ffDelta);
@@ -1406,6 +1403,10 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
       if (weatherAnimCallbacks.length > 0) {
         for (const cb of weatherAnimCallbacks) { try { cb(ffDelta); } catch { /* ignore */ } }
       }
+      portalMgr.tickPortals();
+      tickScriptMeshes();
+      tickWorldTimeInterp(performance.now());
+      renderer.render(scene, camera);
       if (splatInitialized && freeFlyFrameCount % 10 === 0) {
         const cx = camera.position.x;
         const cz = camera.position.z;
@@ -1643,11 +1644,14 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         );
         if (clips.length > 0) {
           const mixer = new AnimationMixer(group);
-          // Strip root bone position tracks from locomotion clips — prevents root motion
-          // from conflicting with manual position control in __moveNpc
+          // Strip root bone position tracks (prevent root motion conflicting with __moveNpc)
+          // and strip foot/toe bone rotation tracks from ALL clips to prevent shoe deformation
+          // artifacts — ankle/toe articulation exposes the shoe sole from typical camera angles.
+          const FOOT_ROT_RE = /^(foot_[lr]|ball_leaf_[lr]|ball_[lr])\.(?:rotation|quaternion)$/i;
           const inPlaceClips = clips.map((c) => {
-            if (!/walk|run|jog|sprint/i.test(c.name)) return c;
-            const stripped = c.tracks.filter((t) => !/^root\.position$/i.test(t.name));
+            const stripped = c.tracks.filter(
+              (t) => !/^root\.position$/i.test(t.name) && !FOOT_ROT_RE.test(t.name),
+            );
             return stripped.length < c.tracks.length
               ? new THREE.AnimationClip(c.name, c.duration, stripped, c.blendMode)
               : c;
@@ -2462,11 +2466,13 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
               );
               if (validClips.length > 0) {
                 const mixer = new AnimationMixer(g);
-                // Strip root bone position tracks from locomotion clips — prevents root motion
-                // from conflicting with manual position control in __moveNpc
+                // Strip root bone position tracks (root motion) and foot/toe rotation tracks
+                // (ankle articulation exposes shoe sole from typical camera angles)
+                const FOOT_ROT_RE_NP = /^(foot_[lr]|ball_leaf_[lr]|ball_[lr])\.(?:rotation|quaternion)$/i;
                 const inPlaceClips = validClips.map((c) => {
-                  if (!/walk|run|jog|sprint/i.test(c.name)) return c;
-                  const stripped = c.tracks.filter((t) => !/^root\.position$/i.test(t.name));
+                  const stripped = c.tracks.filter(
+                    (t) => !/^root\.position$/i.test(t.name) && !FOOT_ROT_RE_NP.test(t.name),
+                  );
                   return stripped.length < c.tracks.length
                     ? new THREE.AnimationClip(c.name, c.duration, stripped, c.blendMode)
                     : c;
