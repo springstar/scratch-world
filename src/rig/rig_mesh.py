@@ -1,6 +1,6 @@
 """
 Auto-rig a static humanoid GLB by parenting it to a template armature using
-Blender Envelope Weights.
+Blender Automatic Weights (heat-map).
 
 Usage (invoked by auto-rig.ts):
   blender --background --python rig_mesh.py -- \
@@ -11,10 +11,8 @@ Usage (invoked by auto-rig.ts):
 The template must be a GLB containing an Armature with animation actions.
 UAL2_Standard.glb (Quaternius Universal Animation Library 2) is the default.
 
-Note: ARMATURE_ENVELOPE is used instead of ARMATURE_AUTO because Blender's
-heat weighting algorithm (ARMATURE_AUTO) requires a 3D viewport context that
-is unavailable in headless --background mode. Envelope weighting works
-correctly headless and produces valid skin data for all vertices.
+Requires Blender 4.x: ARMATURE_AUTO (heat weighting) was rewritten in 4.0 to
+not require a 3D viewport context, so it works correctly in --background mode.
 """
 
 import sys
@@ -116,21 +114,42 @@ def scale_and_center(mesh_objects: list, target_height: float = 1.8) -> None:
     bpy.ops.object.transform_apply(location=True)
 
 
-def envelope_weight_parent(armature, mesh_objects: list) -> None:
-    """Parent mesh objects to armature using bone envelope weights.
+def clean_mesh(mesh_objects: list) -> None:
+    """Remove duplicate vertices and fix non-manifold geometry.
 
-    Uses ARMATURE_ENVELOPE instead of ARMATURE_AUTO because the heat-weighting
-    algorithm used by ARMATURE_AUTO requires a 3D viewport context, which is
-    unavailable when Blender runs in --background (headless) mode. Envelope
-    weighting computes per-bone influence based on bone distance/radius and
-    works correctly without a display context.
+    ARMATURE_AUTO heat-weighting silently assigns 0 weights if the mesh has
+    duplicate vertices, degenerate faces, or non-manifold edges. Running a
+    basic cleanup pass makes the mesh valid for heat weighting.
+    """
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in mesh_objects:
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+        bpy.ops.object.mode_set(mode="OBJECT")
+        obj.select_set(False)
+
+
+def envelope_weight_parent(armature, mesh_objects: list) -> None:
+    """Parent mesh objects to armature using heat-map automatic weights.
+
+    ARMATURE_AUTO (heat weighting) traces geodesic distance on the mesh surface
+    to assign per-bone influence — significantly more accurate than envelope
+    weighting for meshes whose proportions differ from the template.
+
+    Requires Blender 4.x: the heat-weighting algorithm was rewritten in 4.0 to
+    no longer require a 3D viewport / GPU context, so it works correctly in
+    headless --background mode.
     """
     bpy.ops.object.select_all(action="DESELECT")
     for obj in mesh_objects:
         obj.select_set(True)
     armature.select_set(True)
     bpy.context.view_layer.objects.active = armature
-    bpy.ops.object.parent_set(type="ARMATURE_ENVELOPE")
+    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
 
 
 def export_glb(output_path: str) -> None:
@@ -180,7 +199,10 @@ def main() -> None:
     # ── Step 3: normalise mesh (1.8 m, feet at origin, centred) ──────────────
     scale_and_center(mesh_objects, target_height=1.8)
 
-    # ── Step 4: envelope-weight parent to armature ────────────────────────────
+    # ── Step 4: clean mesh before weight assignment ───────────────────────────
+    clean_mesh(mesh_objects)
+
+    # ── Step 5: heat-weight parent to armature ────────────────────────────────
     envelope_weight_parent(armature, mesh_objects)
 
     # Verify weights were assigned
@@ -188,7 +210,7 @@ def main() -> None:
         weighted = sum(1 for v in m.data.vertices if len(v.groups) > 0)
         print(f"[rig_mesh] {m.name}: {len(m.data.vertices)} verts, {weighted} weighted")
 
-    # ── Step 5: export ────────────────────────────────────────────────────────
+    # ── Step 6: export ────────────────────────────────────────────────────────
     export_glb(args.output)
     print(f"[rig_mesh] exported rigged GLB to {args.output}")
 
