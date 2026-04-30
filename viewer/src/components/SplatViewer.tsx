@@ -1678,15 +1678,16 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
           const pelvisQt = idleClip.tracks.find((t) => t.name === "pelvis.quaternion");
           const pelvisW0 = pelvisQt && pelvisQt.values.length >= 4 ? pelvisQt.values[3] : 1;
           const animCompatible = Math.abs(pelvisW0) >= 0.8;
+          group.userData.mixer = mixer;
+          group.userData.animClips = clips;
+          console.log(`[NPC anim physics] ${obj.name} clips=[${clips.map((c) => c.name).join(",")}]`);
           if (animCompatible) {
             console.log(`[NPC anim physics] ${obj.name} playing="${idleClip.name}" pelvisW=${pelvisW0.toFixed(3)}`);
             const idleAction = mixer.clipAction(idleClip);
             idleAction.play();
-            group.userData.mixer = mixer;
-            group.userData.animClips = clips;
             group.userData.activeAction = idleAction;
           } else {
-            console.warn(`[NPC anim physics] ${obj.name} animation skipped — pelvis w=${pelvisW0.toFixed(3)} < 0.8 (rig/animation mismatch). Re-rig model via Mixamo to fix.`);
+            console.warn(`[NPC anim physics] ${obj.name} idle skipped — pelvis w=${pelvisW0.toFixed(3)} < 0.8 (rig/animation mismatch). Walk/emote still available.`);
           }
         } else if (clips.length > 0) {
           console.log(`[NPC anim physics] ${obj.name} animation DISABLED (add &npcanim=ClipName to URL to test a clip)`);
@@ -1721,17 +1722,28 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
         // First try exact match via NAME_MAP, then fuzzy substring match on clip names.
         const NAME_MAP: Record<string, string> = {
           idle: "Idle_FoldArms_Loop",
-          walk: "Walk_Carry_Loop",
+          walk: "Walk_Formal_Loop",
+          jog: "Jog_Fwd_Loop",
+          run: "Jog_Fwd_Loop",
           wave: "Yes",
           bow: "LayToIdle",
         };
         const mapped = (NAME_MAP[key] ?? animation).toLowerCase();
+        // For walk: prefer Walk_Formal_Loop (upright gait, less knee bend), avoid carry/zombie/sneak.
         const clip =
-          clips.find((c) => c.name.toLowerCase() === mapped) ??
-          clips.find((c) => c.name.toLowerCase().includes(key)) ??
-          clips[0];
+          key === "walk"
+            ? (clips.find((c) => c.name.toLowerCase() === mapped) ??
+               clips.find((c) => /walk_formal/i.test(c.name)) ??
+               clips.find((c) => /^walk_loop$/i.test(c.name)) ??
+               clips.find((c) => /walk.*loop/i.test(c.name) && !/carry|sneak|zombie/i.test(c.name)) ??
+               clips.find((c) => /walk/i.test(c.name) && !/carry|sneak|zombie/i.test(c.name)) ??
+               clips[0])
+            : (clips.find((c) => c.name.toLowerCase() === mapped) ??
+               clips.find((c) => c.name.toLowerCase().includes(key)) ??
+               clips[0]);
         const prev = group.userData.activeAction as import("three").AnimationAction | undefined;
         const next = mixer.clipAction(clip);
+        console.log(`[NPC anim] ${animation} → "${clip.name}"`);
         if (prev && prev !== next) { next.reset().play().fadeIn(0.3); prev.fadeOut(0.3); }
         else { next.reset().play(); }
         group.userData.activeAction = next;
@@ -2506,15 +2518,15 @@ export function SplatViewer({ splatUrl, colliderMeshUrl, sceneObjects, viewpoint
                 const pelvisQt = idleClip.tracks.find((t) => t.name === "pelvis.quaternion");
                 const pelvisW0 = pelvisQt && pelvisQt.values.length >= 4 ? pelvisQt.values[3] : 1;
                 const animCompatible = Math.abs(pelvisW0) >= 0.8;
+                g.userData.mixer = mixer;
+                g.userData.animClips = validClips;
                 if (animCompatible) {
                   console.log(`[NPC anim no-phys] ${obj.name} playing="${idleClip.name}" pelvisW=${pelvisW0.toFixed(3)}`);
                   const idleAction = mixer.clipAction(idleClip);
                   idleAction.play();
-                  g.userData.mixer = mixer;
-                  g.userData.animClips = validClips;
                   g.userData.activeAction = idleAction;
                 } else {
-                  console.warn(`[NPC anim no-phys] ${obj.name} animation skipped — pelvis w=${pelvisW0.toFixed(3)} < 0.8 (rig/animation mismatch)`);
+                  console.warn(`[NPC anim no-phys] ${obj.name} idle skipped — pelvis w=${pelvisW0.toFixed(3)} < 0.8 (rig/animation mismatch). Walk/emote still available.`);
                 }
               } else if (validClips.length > 0) {
                 console.log(`[NPC anim no-phys] ${obj.name} animation DISABLED`);

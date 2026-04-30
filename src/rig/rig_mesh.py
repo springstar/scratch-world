@@ -152,6 +152,97 @@ def envelope_weight_parent(armature, mesh_objects: list) -> None:
     bpy.ops.object.parent_set(type="ARMATURE_AUTO")
 
 
+def transfer_leaf_weights(mesh_objects: list) -> None:
+    """Transfer weights from _leaf end-effector bones to their parent bones.
+
+    Leaf bones (names ending in _leaf) are IK chain end-points and should not
+    deform the mesh. ARMATURE_AUTO may assign weights to them; those weights
+    are transferred to the nearest non-leaf ancestor to prevent mesh artifacts
+    (e.g. shoe deformation during walk animation caused by ball_leaf_l/r).
+    """
+    for obj in mesh_objects:
+        if obj.type != "MESH":
+            continue
+        leaf_groups = [vg for vg in obj.vertex_groups if vg.name.endswith("_leaf")]
+        transferred = 0
+        for leaf_vg in leaf_groups:
+            parent_name = leaf_vg.name[: -len("_leaf")]
+            parent_vg = obj.vertex_groups.get(parent_name)
+            for v in obj.data.vertices:
+                leaf_w = 0.0
+                for g in v.groups:
+                    if g.group == leaf_vg.index:
+                        leaf_w = g.weight
+                        break
+                if leaf_w < 0.001:
+                    continue
+                # Zero the leaf weight
+                leaf_vg.add([v.index], 0.0, "REPLACE")
+                if parent_vg is not None:
+                    # Add to parent (clamped)
+                    cur = 0.0
+                    for g in v.groups:
+                        if g.group == parent_vg.index:
+                            cur = g.weight
+                            break
+                    parent_vg.add([v.index], min(1.0, cur + leaf_w), "REPLACE")
+                transferred += 1
+        if transferred:
+            print(f"[rig_mesh] {obj.name}: transferred {transferred} leaf-bone weights")
+
+
+def lock_foot_region_weights(mesh_objects: list, foot_height_fraction: float = 0.12) -> None:
+    """In the lowest N% of mesh height, zero non-foot-family bones and renormalize.
+
+    Keeps foot_l, foot_r, ball_l, ball_r (the four natural foot-family bones) and
+    zeros everything else (calf, shin, thigh, etc.).  Preserving ball_l/ball_r
+    allows correct plantar-flexion (toe-down during toe-off) without the calf bone
+    stretching the shoe.  Renormalizes the four kept weights to sum = 1.0.
+    """
+    FOOT_FAMILY = {"foot_l", "foot_r", "ball_l", "ball_r"}
+
+    for obj in mesh_objects:
+        if obj.type != "MESH":
+            continue
+        zvals = [v.co.z for v in obj.data.vertices]
+        z_min, z_max = min(zvals), max(zvals)
+        z_thresh = z_min + (z_max - z_min) * foot_height_fraction
+
+        foot_vgs = {name: obj.vertex_groups.get(name) for name in FOOT_FAMILY}
+        missing = [n for n, vg in foot_vgs.items() if vg is None]
+        if missing:
+            print(f"[rig_mesh] WARNING: {obj.name} missing {missing}, skipping foot lock")
+            continue
+
+        other_vgs = [vg for vg in obj.vertex_groups if vg.name not in FOOT_FAMILY]
+        locked = 0
+        for v in obj.data.vertices:
+            if v.co.z > z_thresh:
+                continue
+            # Read foot-family weights from ARMATURE_AUTO
+            fw: dict[str, float] = {name: 0.0 for name in FOOT_FAMILY}
+            for g in v.groups:
+                name = obj.vertex_groups[g.group].name
+                if name in FOOT_FAMILY:
+                    fw[name] = g.weight
+            # Zero all non-foot-family bones
+            for vg in other_vgs:
+                vg.add([v.index], 0.0, "REPLACE")
+            # Renormalize foot family to sum = 1.0
+            total = sum(fw.values())
+            if total < 0.001:
+                # Fallback: UAL2 facing +Y → character left = +X (foot_l), right = -X (foot_r)
+                if v.co.x >= 0:
+                    foot_vgs["foot_l"].add([v.index], 1.0, "REPLACE")  # type: ignore[union-attr]
+                else:
+                    foot_vgs["foot_r"].add([v.index], 1.0, "REPLACE")  # type: ignore[union-attr]
+            else:
+                for name, vg in foot_vgs.items():
+                    vg.add([v.index], fw[name] / total, "REPLACE")  # type: ignore[union-attr]
+            locked += 1
+        print(f"[rig_mesh] {obj.name}: locked {locked} foot-region vertices (foot+ball family, calf zeroed)")
+
+
 def export_glb(output_path: str) -> None:
     bpy.ops.export_scene.gltf(
         filepath=output_path,
@@ -204,6 +295,13 @@ def main() -> None:
 
     # ── Step 5: heat-weight parent to armature ────────────────────────────────
     envelope_weight_parent(armature, mesh_objects)
+
+    # ── Step 5b: transfer _leaf end-effector weights to parent bones ──────────
+    transfer_leaf_weights(mesh_objects)
+
+    # ── Step 5c: force foot-region vertices to foot+ball family only ─────────
+    # Keeps foot_l/r + ball_l/r, zeros calf/shin/thigh bleed-in.
+    lock_foot_region_weights(mesh_objects, foot_height_fraction=0.12)
 
     # Verify weights were assigned
     for m in mesh_objects:
